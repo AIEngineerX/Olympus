@@ -40,6 +40,9 @@ TOOL_HEAVY_THRESHOLD = 20
 LONG_THREAD_THRESHOLD = 40
 OVERLOADED_OPEN_THRESHOLD = 5
 OVERLOADED_RUNNING_THRESHOLD = 2
+CONTEXT_PRESSURE_TOKENS = 50000   # ~40% quality degradation reported past this input size
+RUNAWAY_TOOLS_THRESHOLD = 40      # tool calls in one run that suggest looping/thrash
+EXPENSIVE_RUN_USD = 1.0           # single-run cost worth surfacing as a tuning signal
 OPEN_KANBAN_STATUSES = {"triage", "todo", "scheduled", "ready", "running", "blocked", "review"}
 KANBAN_COLUMNS = ["triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"]
 EXPOSE_LOCAL_LABELS = os.environ.get("OLYMPUS_EXPOSE_LOCAL_LABELS", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -471,6 +474,8 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
         wanted = [
             "id", "source", "started_at", "ended_at", "end_reason", "message_count",
             "tool_call_count", "model", "title", "handoff_platform", "handoff_error",
+            "input_tokens", "output_tokens", "reasoning_tokens",
+            "estimated_cost_usd", "actual_cost_usd",
         ]
         select = [c for c in wanted if c in cols]
         if "id" not in select:
@@ -513,6 +518,16 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
             duration_seconds = None
         session_id = row_value(r, "id")
         model = row_value(r, "model")
+        input_tokens = int(row_value(r, "input_tokens", 0) or 0)
+        output_tokens = int(row_value(r, "output_tokens", 0) or 0)
+        reasoning_tokens = int(row_value(r, "reasoning_tokens", 0) or 0)
+        actual_cost = row_value(r, "actual_cost_usd")
+        estimated_cost = row_value(r, "estimated_cost_usd")
+        cost_source = actual_cost if actual_cost not in (None, "") else estimated_cost
+        try:
+            cost_usd = float(cost_source) if cost_source not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            cost_usd = 0.0
         out.append({
             "id": f"session:{session_id}",
             "kind": "session",
@@ -525,6 +540,11 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
             "message_count": row_value(r, "message_count"),
             "tool_call_count": row_value(r, "tool_call_count"),
             "duration_seconds": duration_seconds,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens + reasoning_tokens,
+            "cost_usd": round(cost_usd, 4),
+            "cost_estimated": actual_cost in (None, ""),
             "model": model if EXPOSE_LOCAL_LABELS else ("configured" if model else None),
             "handoff_platform": row_value(r, "handoff_platform"),
             "handoff_error": redact_text(handoff_error) if handoff_error else None,
@@ -879,6 +899,81 @@ def _opportunity(kind: str, severity: str, title: str, detail: str, evidence: st
     }
 
 
+def _session_cost(s: Dict[str, Any]) -> float:
+    try:
+        return float(s.get("cost_usd") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def build_metrics(sessions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Window rollup of the cost/token/latency signals Hermes already records."""
+    durations = sorted(float(s["duration_seconds"]) for s in sessions if isinstance(s.get("duration_seconds"), (int, float)))
+    median_duration = durations[len(durations) // 2] if durations else None
+    return {
+        "window_sessions": len(sessions),
+        "total_cost_usd": round(sum(_session_cost(s) for s in sessions), 4),
+        "total_tokens": sum(int(s.get("total_tokens") or 0) for s in sessions),
+        "total_tool_calls": sum(int(s.get("tool_call_count") or 0) for s in sessions),
+        "median_duration_seconds": median_duration,
+        "looping_sessions": sum(1 for s in sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD),
+        "expensive_sessions": sum(1 for s in sessions if _session_cost(s) >= EXPENSIVE_RUN_USD),
+        "context_pressure_sessions": sum(1 for s in sessions if int(s.get("input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS),
+    }
+
+
+def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Silent-failure detectors over data Hermes already stores, emitted as tuning
+    opportunities: looping/tool-thrash, runaway cost, and context pressure. These are
+    the unattended failures that burn tokens while a run still 'looks' successful."""
+    findings: List[Dict[str, Any]] = []
+    looping = [s for s in sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD]
+    expensive = sorted((s for s in sessions if _session_cost(s) >= EXPENSIVE_RUN_USD), key=_session_cost, reverse=True)
+    context_pressure = [s for s in sessions if int(s.get("input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS]
+
+    if looping:
+        findings.append(_opportunity(
+            "skill",
+            "warning",
+            "An agent is looping or tool-thrashing",
+            "One or more runs spent an unusually high number of tool calls. Step-repetition/looping is the most common agent failure mode and silently burns tokens. Add a recap or checklist skill, lower max turns, or split the task.",
+            ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in looping[:3]),
+            "/sessions",
+            "Open Sessions",
+            "Hephaestus",
+            "Hermes records tool_call_count per session; runaway tool use without termination is a known failure signature.",
+            f">= {RUNAWAY_TOOLS_THRESHOLD} tool calls in one run",
+        ))
+    if expensive:
+        total = sum(_session_cost(s) for s in expensive)
+        findings.append(_opportunity(
+            "model",
+            "warning",
+            "Expensive runs are driving cost",
+            f"{len(expensive)} recent run(s) each cost over ${EXPENSIVE_RUN_USD:.2f} (~${total:.2f} total). Consider a cheaper model/route for routine work, tighter prompts, or task decomposition.",
+            ", ".join(f"{s.get('label')}: ${_session_cost(s):.2f}" for s in expensive[:3]),
+            "/analytics",
+            "Open Analytics",
+            "Athena",
+            "Hermes records per-session token cost (estimated/actual_cost_usd); cost concentration is a routing signal.",
+            f"single-run cost >= ${EXPENSIVE_RUN_USD:.2f}",
+        ))
+    if context_pressure:
+        findings.append(_opportunity(
+            "memory",
+            "info",
+            "Runs are crossing the context-pressure threshold",
+            "Some runs carried very large input context. Agent quality degrades materially past ~50k tokens; add summarization/recap, prune stale memory, or split the task.",
+            ", ".join(f"{s.get('label')}: {int(s.get('input_tokens') or 0):,} in-tokens" for s in context_pressure[:3]),
+            "/sessions",
+            "Open Sessions",
+            "Mnemosyne",
+            "Hermes records input token counts per session; oversized context correlates with quality, latency, and cost degradation.",
+            f">= {CONTEXT_PRESSURE_TOKENS:,} input tokens in one run",
+        ))
+    return findings
+
+
 def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]], cron: List[Dict[str, Any]], sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     kanban = kanban or {}
     assignee_load = {
@@ -1070,12 +1165,16 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Hermes sessions without an end time and recent activity are stale.",
             "session has no end time and is older than the freshness window",
         ))
+    # Silent-failure detectors (cost/looping/context) lead the queue; they use data
+    # Hermes already records and are the unattended failures that quietly burn tokens.
+    metrics = build_metrics(sessions)
+    opportunities = detect_friction(sessions, kanban) + opportunities
     if not opportunities:
         opportunities.append(_opportunity(
             "review",
             "ok",
             "No current agent tuning gap",
-            "Olympus did not find overloaded assignees, failed worker runs, blocked tasks, missing routes, or heavy recent sessions.",
+            "Olympus did not find overloaded assignees, failed worker runs, blocked tasks, missing routes, looping, runaway cost, or context pressure.",
             "Current cross-surface scan is clean.",
             "/analytics",
             "Open Analytics",
@@ -1091,9 +1190,15 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "tool_heavy_sessions": len(tool_heavy),
             "long_threads": len(message_heavy),
             "kanban_open": int(kanban.get("open") or 0),
+            "total_cost_usd": metrics["total_cost_usd"],
+            "total_tokens": metrics["total_tokens"],
+            "looping_sessions": metrics["looping_sessions"],
+            "expensive_sessions": metrics["expensive_sessions"],
+            "context_pressure_sessions": metrics["context_pressure_sessions"],
         },
         "agents": agents,
         "opportunities": opportunities[:8],
+        "metrics": metrics,
     }
 
 
@@ -1409,6 +1514,7 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
         "pantheon": pantheon,
         "profiles": profile_rows,
         "agent_hq": agent_hq,
+        "metrics": agent_hq.get("metrics", {}),
     }
 
 
