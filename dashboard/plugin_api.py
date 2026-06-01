@@ -825,7 +825,11 @@ def build_attention(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any
     if health.get("status") == "error":
         items.append({"severity": "critical", "label": "Health check reports errors", "detail": ", ".join(health.get("recent_error_terms") or []) or "Cron/log error detected"})
     elif health.get("status") == "warning":
-        items.append({"severity": "warning", "label": "No running gateway process detected", "detail": "Gateway may be intentionally stopped or not visible to Olympus."})
+        if not health.get("gateway_running"):
+            items.append({"severity": "warning", "label": "No running gateway process detected", "detail": "Gateway may be intentionally stopped or not visible to Olympus."})
+        else:
+            terms = ", ".join(health.get("recent_error_terms") or [])
+            items.append({"severity": "warning", "label": "Recent log warnings detected", "detail": f"Hermes logs contain failure terms: {terms}." if terms else (health.get("summary") or "Recent Hermes logs contain failure terms.")})
     for job in cron:
         if job.get("state") == "error":
             items.append({"severity": "critical", "label": f"Cron failed: {job.get('label')}", "detail": str(job.get("last_error") or "last_status=error")[:240]})
