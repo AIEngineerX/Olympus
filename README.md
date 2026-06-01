@@ -92,7 +92,6 @@ See [`SECURITY.md`](SECURITY.md) for the full security and privacy posture.
 │   ├── docs/BUILD_PLAN.md       # implementation plan
 │   └── README.md                # package notes
 ├── scripts/install-dashboard-link.sh
-├── docs/reference/              # vendored HermesOS docs (reference only; not part of the plugin)
 ├── OLYMPUS_GOAL.md              # product boundary
 ├── TODO.md                      # active backlog
 ├── SECURITY.md                  # security and privacy notes
@@ -122,6 +121,11 @@ verification commands, and commit/PR conventions.
 
 Found a security or privacy issue? See [`SECURITY.md`](SECURITY.md) for the
 posture and how to report.
+
+## References
+
+- [HermesOS / Hermes Agent](https://github.com/NousResearch/hermes-agent)
+- [HermesOS documentation](https://hermes-agent.nousresearch.com/docs)
 
 ## License
 

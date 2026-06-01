@@ -3,6 +3,3 @@
 
 # Shell scripts must stay LF — they run on the *nix Hermes host
 *.sh text eol=lf
-
-# Vendored reference dump: keep out of language stats and diffs
-docs/reference/hermes-agent-llms-full.md linguist-vendored -diff

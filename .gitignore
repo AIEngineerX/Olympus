@@ -26,6 +26,9 @@ gateway.lock
 gateway_state.json
 processes.json
 
+# Vendored reference docs: kept locally, not committed (link to official docs instead)
+docs/reference/
+
 # Install-script backups (scripts/install-dashboard-link.sh)
 *.backup.*
 

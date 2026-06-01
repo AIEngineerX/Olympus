@@ -24,7 +24,6 @@ controls). Changes that blur that boundary will be sent back.
 | `dashboard/manifest.json` | Plugin metadata (tab path, assets, api module, icon). |
 | `dashboard/docs/BUILD_PLAN.md` | Implementation plan. |
 | `scripts/install-dashboard-link.sh` | Symlinks the plugin into `$HERMES_HOME`. |
-| `docs/reference/` | Vendored HermesOS docs for reference. Not shipped with the plugin. |
 
 ## Local development loop
 
