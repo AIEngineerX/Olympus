@@ -1,0 +1,20 @@
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Install-script backups (scripts/install-dashboard-link.sh)
+*.backup.*
+
+# Local Hermes runtime / databases (never commit local state)
+*.db
+
+# Editors
+.vscode/
+.idea/

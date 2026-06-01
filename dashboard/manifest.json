@@ -1,0 +1,11 @@
+{
+  "name": "olympus",
+  "label": "Olympus",
+  "description": "Read-only HermesOS Agent HQ: profiles, routes, skills, Kanban, gateways, sessions, and health.",
+  "icon": "Landmark",
+  "version": "0.1.0",
+  "tab": { "path": "/olympus", "position": "end" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}
