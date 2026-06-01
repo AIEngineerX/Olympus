@@ -474,7 +474,7 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
         wanted = [
             "id", "source", "started_at", "ended_at", "end_reason", "message_count",
             "tool_call_count", "model", "title", "handoff_platform", "handoff_error",
-            "input_tokens", "output_tokens", "reasoning_tokens",
+            "input_tokens", "output_tokens", "reasoning_tokens", "api_call_count",
             "estimated_cost_usd", "actual_cost_usd",
         ]
         select = [c for c in wanted if c in cols]
@@ -521,6 +521,11 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
         input_tokens = int(row_value(r, "input_tokens", 0) or 0)
         output_tokens = int(row_value(r, "output_tokens", 0) or 0)
         reasoning_tokens = int(row_value(r, "reasoning_tokens", 0) or 0)
+        api_calls = int(row_value(r, "api_call_count", 0) or 0)
+        # input_tokens is the cumulative session total; the average per API call
+        # estimates the typical context-window size, which is the real
+        # context-pressure signal (cumulative alone over-counts chatty sessions).
+        avg_input_tokens = int(input_tokens / api_calls) if api_calls > 0 else 0
         actual_cost = row_value(r, "actual_cost_usd")
         estimated_cost = row_value(r, "estimated_cost_usd")
         cost_source = actual_cost if actual_cost not in (None, "") else estimated_cost
@@ -528,6 +533,7 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
             cost_usd = float(cost_source) if cost_source not in (None, "") else 0.0
         except (TypeError, ValueError):
             cost_usd = 0.0
+        cost_estimated = actual_cost in (None, "") and estimated_cost not in (None, "")
         out.append({
             "id": f"session:{session_id}",
             "kind": "session",
@@ -543,8 +549,10 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "total_tokens": input_tokens + output_tokens + reasoning_tokens,
+            "avg_input_tokens": avg_input_tokens,
+            "api_call_count": api_calls,
             "cost_usd": round(cost_usd, 4),
-            "cost_estimated": actual_cost in (None, ""),
+            "cost_estimated": cost_estimated,
             "model": model if EXPOSE_LOCAL_LABELS else ("configured" if model else None),
             "handoff_platform": row_value(r, "handoff_platform"),
             "handoff_error": redact_text(handoff_error) if handoff_error else None,
@@ -918,7 +926,7 @@ def build_metrics(sessions: List[Dict[str, Any]]) -> Dict[str, Any]:
         "median_duration_seconds": median_duration,
         "looping_sessions": sum(1 for s in sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD),
         "expensive_sessions": sum(1 for s in sessions if _session_cost(s) >= EXPENSIVE_RUN_USD),
-        "context_pressure_sessions": sum(1 for s in sessions if int(s.get("input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS),
+        "context_pressure_sessions": sum(1 for s in sessions if int(s.get("avg_input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS),
     }
 
 
@@ -929,7 +937,7 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
     findings: List[Dict[str, Any]] = []
     looping = [s for s in sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD]
     expensive = sorted((s for s in sessions if _session_cost(s) >= EXPENSIVE_RUN_USD), key=_session_cost, reverse=True)
-    context_pressure = [s for s in sessions if int(s.get("input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS]
+    context_pressure = [s for s in sessions if int(s.get("avg_input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS]
 
     if looping:
         findings.append(_opportunity(
@@ -962,14 +970,14 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
         findings.append(_opportunity(
             "memory",
             "info",
-            "Runs are crossing the context-pressure threshold",
-            "Some runs carried very large input context. Agent quality degrades materially past ~50k tokens; add summarization/recap, prune stale memory, or split the task.",
-            ", ".join(f"{s.get('label')}: {int(s.get('input_tokens') or 0):,} in-tokens" for s in context_pressure[:3]),
+            "Runs are averaging a very large context per call",
+            "Some runs sent a large prompt on every model call (full history re-sent each turn). Agent quality, latency, and cost degrade as the per-call context grows; add summarization/recap, prune stale memory, or split the task.",
+            ", ".join(f"{s.get('label')}: {int(s.get('avg_input_tokens') or 0):,} avg in-tokens/call" for s in context_pressure[:3]),
             "/sessions",
             "Open Sessions",
             "Mnemosyne",
-            "Hermes records input token counts per session; oversized context correlates with quality, latency, and cost degradation.",
-            f">= {CONTEXT_PRESSURE_TOKENS:,} input tokens in one run",
+            "Hermes records cumulative input_tokens and api_call_count per session; their ratio estimates the per-call context size.",
+            f">= {CONTEXT_PRESSURE_TOKENS:,} average input tokens per API call",
         ))
     return findings
 
@@ -986,6 +994,11 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
         cron_by_profile[profile] = cron_by_profile.get(profile, 0) + 1
 
     tool_heavy = [s for s in sessions if int(s.get("tool_call_count") or 0) >= TOOL_HEAVY_THRESHOLD]
+    # The >= RUNAWAY_TOOLS_THRESHOLD band is owned by the looping detector in
+    # detect_friction; keep only the moderate band here so the queue never shows
+    # two overlapping cards for the same session.
+    _looping_ids = {s.get("id") for s in sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD}
+    tool_heavy = [s for s in tool_heavy if s.get("id") not in _looping_ids]
     message_heavy = [s for s in sessions if int(s.get("message_count") or 0) >= LONG_THREAD_THRESHOLD]
     active_sessions = [s for s in sessions if s.get("state") in ("active", "recent")]
     stale_sessions = [s for s in sessions if s.get("state") == "stale"]
