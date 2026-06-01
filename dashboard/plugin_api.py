@@ -5,7 +5,6 @@ import json
 import os
 import re
 import sqlite3
-import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,6 +50,16 @@ REDACTION_PATTERNS = [
     re.compile(r"github_pat_[A-Za-z0-9_]+"),
     re.compile(r"ghp_[A-Za-z0-9_]+"),
     re.compile(r"xox[baprs]-[A-Za-z0-9-]+"),
+]
+# Precise log failure signals (avoids false positives like "0 failed" / "failed: false").
+LOG_ERROR_PATTERNS = [
+    ("traceback", re.compile(r"\btraceback\b")),
+    ("exception", re.compile(r"\bexception\b")),
+    ("unauthorized", re.compile(r"\bunauthorized\b|\b401\b")),
+    ("telegram conflict", re.compile(r"terminated by other getupdates")),
+    ("rate limit", re.compile(r"\brate limit(?:ed|ing)?\b|\b429\b")),
+    ("failure", re.compile(r"\bfailed to\b|\bfailure\b")),
+    ("critical", re.compile(r"\bcritical\b")),
 ]
 
 
@@ -293,17 +302,54 @@ def summarize_model(config: Dict[str, Any]) -> Dict[str, Optional[str]]:
     }
 
 
-def gateway_process_state(profile: Optional[str] = None) -> str:
+def _pid_alive(pid: int) -> Optional[bool]:
+    """True/False when liveness is known, None when it cannot be determined."""
     try:
-        out = subprocess.run(["pgrep", "-af", "hermes.*gateway|gateway.*run"], capture_output=True, text=True, timeout=1.5)
-        text = out.stdout.strip()
-        if not text:
-            return "stopped"
-        if profile and profile != "default":
-            return "running" if profile in text else "unknown"
-        return "running"
+        import psutil  # type: ignore
+
+        return bool(psutil.pid_exists(pid))
     except Exception:
+        pass
+    if os.name == "posix":
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except Exception:
+            return None
+    return None
+
+
+def gateway_process_state(profile_home: Path) -> str:
+    """Gateway liveness from Hermes' own PID file at ``<profile_home>/gateway.pid``.
+
+    Hermes tracks the gateway via the per-profile ``gateway.pid`` + ``gateway.lock``
+    files (see hermes-agent ``gateway/status.py``), not a process-name scan. This
+    works for the default profile and on Windows, which a pgrep scan cannot.
+    """
+    pid_path = profile_home / "gateway.pid"
+    if not pid_path.exists():
+        return "stopped"
+    record = read_json(pid_path)
+    pid: Optional[int] = None
+    if isinstance(record, dict):
+        try:
+            pid = int(record.get("pid"))
+        except (TypeError, ValueError):
+            pid = None
+    elif isinstance(record, (int, float)):
+        pid = int(record)
+    if not pid:
         return "unknown"
+    alive = _pid_alive(pid)
+    if alive is True:
+        return "running"
+    if alive is False:
+        return "stopped"
+    return "unknown"
 
 
 def collect_profiles() -> List[Dict[str, Any]]:
@@ -331,7 +377,7 @@ def collect_profiles() -> List[Dict[str, Any]]:
                 skill_count = sum(1 for p in skills_dir.rglob("SKILL.md") if p.is_file())
             except Exception:
                 skill_count = 0
-        gstate = gateway_process_state(name)
+        gstate = gateway_process_state(home)
         trust = "primary" if name == "default" else "isolated"
         profile_number = len(profiles)
         public_name = name if (EXPOSE_LOCAL_LABELS or name == "default") else f"profile_{profile_number}"
@@ -461,19 +507,20 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
 
 
 def collect_gateways(profiles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    # Markers are the real env vars Hermes reads (see hermes-agent gateway/config.py).
     platform_markers = {
-        "telegram": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN"],
-        "discord": ["DISCORD_BOT_TOKEN", "DISCORD_TOKEN"],
-        "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_SIGNING_SECRET"],
-        "whatsapp": ["WHATSAPP", "META_WHATSAPP"],
-        "signal": ["SIGNAL"],
-        "matrix": ["MATRIX"],
-        "email": ["EMAIL_", "IMAP_", "SMTP_"],
-        "sms": ["TWILIO", "VONAGE"],
-        "mattermost": ["MATTERMOST"],
-        "homeassistant": ["HOMEASSISTANT", "HOME_ASSISTANT"],
-        "webhooks": ["WEBHOOK"],
-        "api_server": ["API_SERVER_KEY"],
+        "telegram": ["TELEGRAM_BOT_TOKEN"],
+        "discord": ["DISCORD_BOT_TOKEN"],
+        "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
+        "whatsapp": ["WHATSAPP_ENABLED"],
+        "signal": ["SIGNAL_HTTP_URL", "SIGNAL_ACCOUNT"],
+        "matrix": ["MATRIX_ACCESS_TOKEN", "MATRIX_HOMESERVER"],
+        "email": ["EMAIL_ADDRESS", "EMAIL_IMAP_HOST", "EMAIL_SMTP_HOST"],
+        "sms": ["TWILIO_ACCOUNT_SID"],
+        "mattermost": ["MATTERMOST_TOKEN", "MATTERMOST_URL"],
+        "homeassistant": ["HASS_TOKEN", "HASS_URL"],
+        "webhook": ["WEBHOOK_ENABLED"],
+        "api_server": ["API_SERVER_KEY", "API_SERVER_ENABLED"],
     }
     out: List[Dict[str, Any]] = []
     for prof in profiles:
@@ -481,14 +528,18 @@ def collect_gateways(profiles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         public_name = prof.get("_public_name") or name
         home = Path(prof["_path"])
         cfg = profile_config(home)
+        platforms_block = cfg.get("platforms") if isinstance(cfg.get("platforms"), dict) else {}
         env_text = read_text(home / ".env", 12000).upper()
         gateway_state = prof.get("gateway_state") or "unknown"
         for platform, markers in platform_markers.items():
+            # Hermes accepts both a top-level `<platform>:` block and `platforms.<platform>:`.
             pdata = cfg.get(platform)
+            if not isinstance(pdata, dict):
+                pdata = platforms_block.get(platform)
             explicitly_enabled = bool(pdata.get("enabled", False)) if isinstance(pdata, dict) else False
             configured = any(marker in env_text for marker in markers)
             enabled = explicitly_enabled or configured
-            if not enabled and not configured:
+            if not enabled:
                 continue
             out.append({
                 "id": f"gateway:{public_name}:{platform}",
@@ -706,11 +757,15 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def collect_health(profiles: List[Dict[str, Any]], cron: List[Dict[str, Any]]) -> Dict[str, Any]:
     base = get_hermes_home()
-    gateway_log = base / "logs" / "gateway.log"
-    error_log = base / "logs" / "errors.log"
-    log_tail = (read_text(gateway_log, 8000) + "\n" + read_text(error_log, 8000)).lower()
-    recent_error_terms = ["traceback", "exception", "failed", "unauthorized", "terminated by other getupdates", "rate limit"]
-    recent_errors = [term for term in recent_error_terms if term in log_tail]
+    logs_dir = base / "logs"
+    agent_log = logs_dir / "agent.log"
+    gateway_log = logs_dir / "gateway.log"
+    error_log = logs_dir / "errors.log"
+    # agent.log is written on every run; gateway.log only exists once the gateway runs.
+    log_tail = "\n".join(
+        read_text(p, 8000) for p in (agent_log, gateway_log, error_log) if p.exists()
+    ).lower()
+    recent_errors = [label for label, pattern in LOG_ERROR_PATTERNS if pattern.search(log_tail)]
     failed_cron = [j for j in cron if j.get("state") == "error"]
     gateway_running = any(p.get("gateway_state") == "running" for p in profiles)
     status = "error" if failed_cron else ("warning" if recent_errors or not gateway_running else "ok")
@@ -733,6 +788,7 @@ def collect_health(profiles: List[Dict[str, Any]], cron: List[Dict[str, Any]]) -
         "gateway_running": gateway_running,
         "recent_error_terms": recent_errors[:5],
         "failed_cron_count": len(failed_cron),
+        "agent_log_mtime": ts_to_iso(agent_log.stat().st_mtime) if agent_log.exists() else None,
         "gateway_log_mtime": ts_to_iso(gateway_log.stat().st_mtime) if gateway_log.exists() else None,
         "errors_log_mtime": ts_to_iso(error_log.stat().st_mtime) if error_log.exists() else None,
     }
