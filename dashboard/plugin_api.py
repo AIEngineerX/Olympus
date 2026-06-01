@@ -323,19 +323,41 @@ def _pid_alive(pid: int) -> Optional[bool]:
     return None
 
 
-def gateway_process_state(profile_home: Path) -> str:
-    """Gateway liveness from Hermes' own PID file at ``<profile_home>/gateway.pid``.
+def _process_cmdline(pid: int) -> Optional[str]:
+    """Lowercased command line of ``pid`` via psutil, or None if unavailable."""
+    try:
+        import psutil  # type: ignore
 
-    Hermes tracks the gateway via the per-profile ``gateway.pid`` + ``gateway.lock``
-    files (see hermes-agent ``gateway/status.py``), not a process-name scan. This
-    works for the default profile and on Windows, which a pgrep scan cannot.
+        return " ".join(psutil.Process(pid).cmdline()).lower()
+    except Exception:
+        return None
+
+
+def gateway_process_state(profile_home: Path) -> str:
+    """Gateway liveness for a profile, keyed on Hermes' per-profile ``gateway.pid``.
+
+    Prefers Hermes' own authoritative check (``gateway.status.get_running_pid``),
+    which validates the runtime lock, process start time, and cmdline -- so a
+    recycled PID is not mistaken for a live gateway. Falls back to a defensive
+    PID-file read that still guards against PID reuse by confirming the live
+    process actually looks like a gateway. Works for the default profile and on
+    Windows, which a pgrep scan cannot.
     """
     pid_path = profile_home / "gateway.pid"
     if not pid_path.exists():
         return "stopped"
+    try:
+        from gateway.status import get_running_pid  # type: ignore
+
+        return "running" if get_running_pid(pid_path, cleanup_stale=False) else "stopped"
+    except Exception:
+        pass
+
     record = read_json(pid_path)
     pid: Optional[int] = None
+    kind: Optional[str] = None
     if isinstance(record, dict):
+        kind = record.get("kind")
         try:
             pid = int(record.get("pid"))
         except (TypeError, ValueError):
@@ -345,11 +367,15 @@ def gateway_process_state(profile_home: Path) -> str:
     if not pid:
         return "unknown"
     alive = _pid_alive(pid)
-    if alive is True:
-        return "running"
     if alive is False:
         return "stopped"
-    return "unknown"
+    if alive is None:
+        return "unknown"
+    # Alive: guard against a recycled PID by confirming the process is a gateway.
+    cmdline = _process_cmdline(pid)
+    if cmdline is not None:
+        return "running" if "gateway" in cmdline else "stopped"
+    return "running" if kind == "hermes-gateway" else "unknown"
 
 
 def collect_profiles() -> List[Dict[str, Any]]:

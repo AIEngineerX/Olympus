@@ -9,11 +9,25 @@ __pycache__/
 .venv/
 venv/
 
+# Secrets & local environment (never commit)
+.env
+.env.*
+!.env.example
+
+# Local Hermes runtime: databases, logs, and gateway state (never commit)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+gateway.pid
+gateway.lock
+gateway_state.json
+processes.json
+
 # Install-script backups (scripts/install-dashboard-link.sh)
 *.backup.*
-
-# Local Hermes runtime / databases (never commit local state)
-*.db
 
 # Editors
 .vscode/
