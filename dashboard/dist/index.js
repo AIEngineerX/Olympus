@@ -601,9 +601,13 @@
     const summary = data.summary || {};
     const agents = asList(data.agents);
     const opportunities = asList(data.opportunities);
+    const cost = Number(summary.total_cost_usd || 0);
     const tiles = [
       { label: "Agents", value: summary.agents || agents.length || 0, state: agents.length ? "active" : "unknown" },
       { label: "Opportunities", value: summary.opportunities || opportunities.length || 0, state: opportunities.length ? "warning" : "ok" },
+      { label: "Spend (window)", value: "$" + cost.toFixed(2), state: cost > 0 ? "active" : "idle" },
+      { label: "Looping", value: summary.looping_sessions || 0, state: summary.looping_sessions ? "warning" : "ok" },
+      { label: "Context Pressure", value: summary.context_pressure_sessions || 0, state: summary.context_pressure_sessions ? "warning" : "ok" },
       { label: "Active Sessions", value: summary.active_sessions || 0, state: summary.active_sessions ? "active" : "idle" },
       { label: "Tool Heavy", value: summary.tool_heavy_sessions || 0, state: summary.tool_heavy_sessions ? "warning" : "ok" },
       { label: "Long Threads", value: summary.long_threads || 0, state: summary.long_threads ? "warning" : "ok" },
@@ -794,7 +798,13 @@
           el("h3", null, "Recent Work"),
           recentSessions.length ? recentSessions.map((s) => el("div", { key: s.id, className: "olympus-mini-row" },
             el("span", null, s.label || s.session_id),
-            el("small", null, [s.model || "route unset", (s.tool_call_count || 0) + " tools", (s.message_count || 0) + " msgs"].join(" / ")),
+            el("small", null, [
+              s.model || "route unset",
+              (s.tool_call_count || 0) + " tools",
+              (s.message_count || 0) + " msgs",
+              s.cost_usd ? "$" + Number(s.cost_usd).toFixed(2) : null,
+              s.total_tokens ? Number(s.total_tokens).toLocaleString() + " tok" : null
+            ].filter(Boolean).join(" / ")),
             el(StatePill, { state: s.state })
           )) : el("p", { className: "olympus-muted" }, "No recent sessions detected.")
         ),
