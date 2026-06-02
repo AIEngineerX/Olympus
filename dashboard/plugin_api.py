@@ -5,7 +5,6 @@ import json
 import os
 import re
 import sqlite3
-import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +40,9 @@ TOOL_HEAVY_THRESHOLD = 20
 LONG_THREAD_THRESHOLD = 40
 OVERLOADED_OPEN_THRESHOLD = 5
 OVERLOADED_RUNNING_THRESHOLD = 2
+CONTEXT_PRESSURE_TOKENS = 50000   # ~40% quality degradation reported past this input size
+RUNAWAY_TOOLS_THRESHOLD = 40      # tool calls in one run that suggest looping/thrash
+EXPENSIVE_RUN_USD = 1.0           # single-run cost worth surfacing as a tuning signal
 OPEN_KANBAN_STATUSES = {"triage", "todo", "scheduled", "ready", "running", "blocked", "review"}
 KANBAN_COLUMNS = ["triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"]
 EXPOSE_LOCAL_LABELS = os.environ.get("OLYMPUS_EXPOSE_LOCAL_LABELS", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -51,6 +53,16 @@ REDACTION_PATTERNS = [
     re.compile(r"github_pat_[A-Za-z0-9_]+"),
     re.compile(r"ghp_[A-Za-z0-9_]+"),
     re.compile(r"xox[baprs]-[A-Za-z0-9-]+"),
+]
+# Precise log failure signals (avoids false positives like "0 failed" / "failed: false").
+LOG_ERROR_PATTERNS = [
+    ("traceback", re.compile(r"\btraceback\b")),
+    ("exception", re.compile(r"\bexception\b")),
+    ("unauthorized", re.compile(r"\bunauthorized\b|\b401\b")),
+    ("telegram conflict", re.compile(r"terminated by other getupdates")),
+    ("rate limit", re.compile(r"\brate limit(?:ed|ing)?\b|\b429\b")),
+    ("failure", re.compile(r"\bfailed to\b|\bfailure\b")),
+    ("critical", re.compile(r"\bcritical\b")),
 ]
 
 
@@ -279,13 +291,6 @@ def _kanban_conn(path: Path) -> Optional[sqlite3.Connection]:
         return None
 
 
-def hermes_home_for_profile(name: str) -> Path:
-    base = get_hermes_home()
-    if name == "default":
-        return base
-    return base / "profiles" / name
-
-
 def profile_config(profile_home: Path) -> Dict[str, Any]:
     return read_yaml(profile_home / "config.yaml")
 
@@ -300,17 +305,80 @@ def summarize_model(config: Dict[str, Any]) -> Dict[str, Optional[str]]:
     }
 
 
-def gateway_process_state(profile: Optional[str] = None) -> str:
+def _pid_alive(pid: int) -> Optional[bool]:
+    """True/False when liveness is known, None when it cannot be determined."""
     try:
-        out = subprocess.run(["pgrep", "-af", "hermes.*gateway|gateway.*run"], capture_output=True, text=True, timeout=1.5)
-        text = out.stdout.strip()
-        if not text:
-            return "stopped"
-        if profile and profile != "default":
-            return "running" if profile in text else "unknown"
-        return "running"
+        import psutil  # type: ignore
+
+        return bool(psutil.pid_exists(pid))
     except Exception:
+        pass
+    if os.name == "posix":
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except Exception:
+            return None
+    return None
+
+
+def _process_cmdline(pid: int) -> Optional[str]:
+    """Lowercased command line of ``pid`` via psutil, or None if unavailable."""
+    try:
+        import psutil  # type: ignore
+
+        return " ".join(psutil.Process(pid).cmdline()).lower()
+    except Exception:
+        return None
+
+
+def gateway_process_state(profile_home: Path) -> str:
+    """Gateway liveness for a profile, keyed on Hermes' per-profile ``gateway.pid``.
+
+    Prefers Hermes' own authoritative check (``gateway.status.get_running_pid``),
+    which validates the runtime lock, process start time, and cmdline -- so a
+    recycled PID is not mistaken for a live gateway. Falls back to a defensive
+    PID-file read that still guards against PID reuse by confirming the live
+    process actually looks like a gateway. Works for the default profile and on
+    Windows, which a pgrep scan cannot.
+    """
+    pid_path = profile_home / "gateway.pid"
+    if not pid_path.exists():
+        return "stopped"
+    try:
+        from gateway.status import get_running_pid  # type: ignore
+
+        return "running" if get_running_pid(pid_path, cleanup_stale=False) else "stopped"
+    except Exception:
+        pass
+
+    record = read_json(pid_path)
+    pid: Optional[int] = None
+    kind: Optional[str] = None
+    if isinstance(record, dict):
+        kind = record.get("kind")
+        try:
+            pid = int(record.get("pid"))
+        except (TypeError, ValueError):
+            pid = None
+    elif isinstance(record, (int, float)):
+        pid = int(record)
+    if not pid:
         return "unknown"
+    alive = _pid_alive(pid)
+    if alive is False:
+        return "stopped"
+    if alive is None:
+        return "unknown"
+    # Alive: guard against a recycled PID by confirming the process is a gateway.
+    cmdline = _process_cmdline(pid)
+    if cmdline is not None:
+        return "running" if "gateway" in cmdline else "stopped"
+    return "running" if kind == "hermes-gateway" else "unknown"
 
 
 def collect_profiles() -> List[Dict[str, Any]]:
@@ -338,7 +406,7 @@ def collect_profiles() -> List[Dict[str, Any]]:
                 skill_count = sum(1 for p in skills_dir.rglob("SKILL.md") if p.is_file())
             except Exception:
                 skill_count = 0
-        gstate = gateway_process_state(name)
+        gstate = gateway_process_state(home)
         trust = "primary" if name == "default" else "isolated"
         profile_number = len(profiles)
         public_name = name if (EXPOSE_LOCAL_LABELS or name == "default") else f"profile_{profile_number}"
@@ -398,75 +466,115 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
     db = get_hermes_home() / "state.db"
     if not db.exists():
         return []
+    con: Optional[sqlite3.Connection] = None
     try:
-        con = sqlite3.connect(str(db))
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
         con.row_factory = sqlite3.Row
+        cols = table_columns(con, "sessions")
+        wanted = [
+            "id", "source", "started_at", "ended_at", "end_reason", "message_count",
+            "tool_call_count", "model", "title", "handoff_platform", "handoff_error",
+            "input_tokens", "output_tokens", "reasoning_tokens", "api_call_count",
+            "estimated_cost_usd", "actual_cost_usd",
+        ]
+        select = [c for c in wanted if c in cols]
+        if "id" not in select:
+            return []
+        if "ended_at" in cols and "started_at" in cols:
+            order = "COALESCE(ended_at, started_at)"
+        elif "started_at" in cols:
+            order = "started_at"
+        else:
+            order = "id"
         rows = con.execute(
-            """
-            SELECT id, source, started_at, ended_at, end_reason, message_count,
-                   tool_call_count, model, title, handoff_platform, handoff_error
-            FROM sessions
-            ORDER BY COALESCE(ended_at, started_at) DESC
-            LIMIT ?
-            """,
+            f"SELECT {', '.join(select)} FROM sessions ORDER BY {order} DESC LIMIT ?",
             (limit,),
         ).fetchall()
     except Exception:
         return []
     finally:
-        try:
-            con.close()  # type: ignore[name-defined]
-        except Exception:
-            pass
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
     out: List[Dict[str, Any]] = []
     for r in rows:
-        ended = r["ended_at"]
-        last_ts = ended or r["started_at"]
+        ended = row_value(r, "ended_at")
+        started = row_value(r, "started_at")
+        last_ts = ended or started
         if ended is None:
-            state = "active" if age_state(r["started_at"]) in ("active", "recent") else "stale"
+            state = "active" if age_state(started) in ("active", "recent") else "stale"
         else:
             state = "recent" if age_state(last_ts) in ("active", "recent") else "completed"
-        if r["handoff_error"]:
+        handoff_error = row_value(r, "handoff_error")
+        if handoff_error:
             state = "error"
         duration_seconds: Optional[float] = None
         try:
-            if r["started_at"] and ended:
-                duration_seconds = max(0.0, float(ended) - float(r["started_at"]))
+            if started and ended:
+                duration_seconds = max(0.0, float(ended) - float(started))
         except Exception:
             duration_seconds = None
+        session_id = row_value(r, "id")
+        model = row_value(r, "model")
+        input_tokens = int(row_value(r, "input_tokens", 0) or 0)
+        output_tokens = int(row_value(r, "output_tokens", 0) or 0)
+        reasoning_tokens = int(row_value(r, "reasoning_tokens", 0) or 0)
+        api_calls = int(row_value(r, "api_call_count", 0) or 0)
+        # input_tokens is the cumulative session total; the average per API call
+        # estimates the typical context-window size, which is the real
+        # context-pressure signal (cumulative alone over-counts chatty sessions).
+        avg_input_tokens = int(input_tokens / api_calls) if api_calls > 0 else 0
+        actual_cost = row_value(r, "actual_cost_usd")
+        estimated_cost = row_value(r, "estimated_cost_usd")
+        cost_source = actual_cost if actual_cost not in (None, "") else estimated_cost
+        try:
+            cost_usd = float(cost_source) if cost_source not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            cost_usd = 0.0
+        cost_estimated = actual_cost in (None, "") and estimated_cost not in (None, "")
         out.append({
-            "id": f"session:{r['id']}",
+            "id": f"session:{session_id}",
             "kind": "session",
-            "session_id": r["id"],
-            "label": public_label(r["title"], str(r["source"] or safe_id(r["id"], "session")), "session"),
+            "session_id": session_id,
+            "label": public_label(row_value(r, "title"), str(row_value(r, "source") or safe_id(session_id, "session")), "session"),
             "state": state,
-            "source": r["source"],
-            "started_at": ts_to_iso(r["started_at"]),
-            "ended_at": ts_to_iso(r["ended_at"]),
-            "message_count": r["message_count"],
-            "tool_call_count": r["tool_call_count"],
+            "source": row_value(r, "source"),
+            "started_at": ts_to_iso(started),
+            "ended_at": ts_to_iso(ended),
+            "message_count": row_value(r, "message_count"),
+            "tool_call_count": row_value(r, "tool_call_count"),
             "duration_seconds": duration_seconds,
-            "model": r["model"] if EXPOSE_LOCAL_LABELS else ("configured" if r["model"] else None),
-            "handoff_platform": r["handoff_platform"],
-            "handoff_error": redact_text(r["handoff_error"]) if r["handoff_error"] else None,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens + reasoning_tokens,
+            "avg_input_tokens": avg_input_tokens,
+            "api_call_count": api_calls,
+            "cost_usd": round(cost_usd, 4),
+            "cost_estimated": cost_estimated,
+            "model": model if EXPOSE_LOCAL_LABELS else ("configured" if model else None),
+            "handoff_platform": row_value(r, "handoff_platform"),
+            "handoff_error": redact_text(handoff_error) if handoff_error else None,
         })
     return out
 
 
 def collect_gateways(profiles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    # Markers are the real env vars Hermes reads (see hermes-agent gateway/config.py).
     platform_markers = {
-        "telegram": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN"],
-        "discord": ["DISCORD_BOT_TOKEN", "DISCORD_TOKEN"],
-        "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_SIGNING_SECRET"],
-        "whatsapp": ["WHATSAPP", "META_WHATSAPP"],
-        "signal": ["SIGNAL"],
-        "matrix": ["MATRIX"],
-        "email": ["EMAIL_", "IMAP_", "SMTP_"],
-        "sms": ["TWILIO", "VONAGE"],
-        "mattermost": ["MATTERMOST"],
-        "homeassistant": ["HOMEASSISTANT", "HOME_ASSISTANT"],
-        "webhooks": ["WEBHOOK"],
-        "api_server": ["API_SERVER_KEY"],
+        "telegram": ["TELEGRAM_BOT_TOKEN"],
+        "discord": ["DISCORD_BOT_TOKEN"],
+        "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
+        "whatsapp": ["WHATSAPP_ENABLED"],
+        "signal": ["SIGNAL_HTTP_URL", "SIGNAL_ACCOUNT"],
+        "matrix": ["MATRIX_ACCESS_TOKEN", "MATRIX_HOMESERVER"],
+        "email": ["EMAIL_ADDRESS", "EMAIL_IMAP_HOST", "EMAIL_SMTP_HOST"],
+        "sms": ["TWILIO_ACCOUNT_SID"],
+        "mattermost": ["MATTERMOST_TOKEN", "MATTERMOST_URL"],
+        "homeassistant": ["HASS_TOKEN", "HASS_URL"],
+        "webhook": ["WEBHOOK_ENABLED"],
+        "api_server": ["API_SERVER_KEY", "API_SERVER_ENABLED"],
     }
     out: List[Dict[str, Any]] = []
     for prof in profiles:
@@ -474,14 +582,18 @@ def collect_gateways(profiles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         public_name = prof.get("_public_name") or name
         home = Path(prof["_path"])
         cfg = profile_config(home)
+        platforms_block = cfg.get("platforms") if isinstance(cfg.get("platforms"), dict) else {}
         env_text = read_text(home / ".env", 12000).upper()
         gateway_state = prof.get("gateway_state") or "unknown"
         for platform, markers in platform_markers.items():
+            # Hermes accepts both a top-level `<platform>:` block and `platforms.<platform>:`.
             pdata = cfg.get(platform)
+            if not isinstance(pdata, dict):
+                pdata = platforms_block.get(platform)
             explicitly_enabled = bool(pdata.get("enabled", False)) if isinstance(pdata, dict) else False
             configured = any(marker in env_text for marker in markers)
             enabled = explicitly_enabled or configured
-            if not enabled and not configured:
+            if not enabled:
                 continue
             out.append({
                 "id": f"gateway:{public_name}:{platform}",
@@ -699,11 +811,15 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def collect_health(profiles: List[Dict[str, Any]], cron: List[Dict[str, Any]]) -> Dict[str, Any]:
     base = get_hermes_home()
-    gateway_log = base / "logs" / "gateway.log"
-    error_log = base / "logs" / "errors.log"
-    log_tail = (read_text(gateway_log, 8000) + "\n" + read_text(error_log, 8000)).lower()
-    recent_error_terms = ["traceback", "exception", "failed", "unauthorized", "terminated by other getupdates", "rate limit"]
-    recent_errors = [term for term in recent_error_terms if term in log_tail]
+    logs_dir = base / "logs"
+    agent_log = logs_dir / "agent.log"
+    gateway_log = logs_dir / "gateway.log"
+    error_log = logs_dir / "errors.log"
+    # agent.log is written on every run; gateway.log only exists once the gateway runs.
+    log_tail = "\n".join(
+        read_text(p, 8000) for p in (agent_log, gateway_log, error_log) if p.exists()
+    ).lower()
+    recent_errors = [label for label, pattern in LOG_ERROR_PATTERNS if pattern.search(log_tail)]
     failed_cron = [j for j in cron if j.get("state") == "error"]
     gateway_running = any(p.get("gateway_state") == "running" for p in profiles)
     status = "error" if failed_cron else ("warning" if recent_errors or not gateway_running else "ok")
@@ -726,6 +842,7 @@ def collect_health(profiles: List[Dict[str, Any]], cron: List[Dict[str, Any]]) -
         "gateway_running": gateway_running,
         "recent_error_terms": recent_errors[:5],
         "failed_cron_count": len(failed_cron),
+        "agent_log_mtime": ts_to_iso(agent_log.stat().st_mtime) if agent_log.exists() else None,
         "gateway_log_mtime": ts_to_iso(gateway_log.stat().st_mtime) if gateway_log.exists() else None,
         "errors_log_mtime": ts_to_iso(error_log.stat().st_mtime) if error_log.exists() else None,
     }
@@ -736,7 +853,11 @@ def build_attention(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any
     if health.get("status") == "error":
         items.append({"severity": "critical", "label": "Health check reports errors", "detail": ", ".join(health.get("recent_error_terms") or []) or "Cron/log error detected"})
     elif health.get("status") == "warning":
-        items.append({"severity": "warning", "label": "No running gateway process detected", "detail": "Gateway may be intentionally stopped or not visible to Olympus."})
+        if not health.get("gateway_running"):
+            items.append({"severity": "warning", "label": "No running gateway process detected", "detail": "Gateway may be intentionally stopped or not visible to Olympus."})
+        else:
+            terms = ", ".join(health.get("recent_error_terms") or [])
+            items.append({"severity": "warning", "label": "Recent log warnings detected", "detail": f"Hermes logs contain failure terms: {terms}." if terms else (health.get("summary") or "Recent Hermes logs contain failure terms.")})
     for job in cron:
         if job.get("state") == "error":
             items.append({"severity": "critical", "label": f"Cron failed: {job.get('label')}", "detail": str(job.get("last_error") or "last_status=error")[:240]})
@@ -786,6 +907,81 @@ def _opportunity(kind: str, severity: str, title: str, detail: str, evidence: st
     }
 
 
+def _session_cost(s: Dict[str, Any]) -> float:
+    try:
+        return float(s.get("cost_usd") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def build_metrics(sessions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Window rollup of the cost/token/latency signals Hermes already records."""
+    durations = sorted(float(s["duration_seconds"]) for s in sessions if isinstance(s.get("duration_seconds"), (int, float)))
+    median_duration = durations[len(durations) // 2] if durations else None
+    return {
+        "window_sessions": len(sessions),
+        "total_cost_usd": round(sum(_session_cost(s) for s in sessions), 4),
+        "total_tokens": sum(int(s.get("total_tokens") or 0) for s in sessions),
+        "total_tool_calls": sum(int(s.get("tool_call_count") or 0) for s in sessions),
+        "median_duration_seconds": median_duration,
+        "looping_sessions": sum(1 for s in sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD),
+        "expensive_sessions": sum(1 for s in sessions if _session_cost(s) >= EXPENSIVE_RUN_USD),
+        "context_pressure_sessions": sum(1 for s in sessions if int(s.get("avg_input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS),
+    }
+
+
+def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Silent-failure detectors over data Hermes already stores, emitted as tuning
+    opportunities: looping/tool-thrash, runaway cost, and context pressure. These are
+    the unattended failures that burn tokens while a run still 'looks' successful."""
+    findings: List[Dict[str, Any]] = []
+    looping = [s for s in sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD]
+    expensive = sorted((s for s in sessions if _session_cost(s) >= EXPENSIVE_RUN_USD), key=_session_cost, reverse=True)
+    context_pressure = [s for s in sessions if int(s.get("avg_input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS]
+
+    if looping:
+        findings.append(_opportunity(
+            "skill",
+            "warning",
+            "An agent is looping or tool-thrashing",
+            "One or more runs spent an unusually high number of tool calls. Step-repetition/looping is the most common agent failure mode and silently burns tokens. Add a recap or checklist skill, lower max turns, or split the task.",
+            ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in looping[:3]),
+            "/sessions",
+            "Open Sessions",
+            "Hephaestus",
+            "Hermes records tool_call_count per session; runaway tool use without termination is a known failure signature.",
+            f">= {RUNAWAY_TOOLS_THRESHOLD} tool calls in one run",
+        ))
+    if expensive:
+        total = sum(_session_cost(s) for s in expensive)
+        findings.append(_opportunity(
+            "model",
+            "warning",
+            "Expensive runs are driving cost",
+            f"{len(expensive)} recent run(s) each cost over ${EXPENSIVE_RUN_USD:.2f} (~${total:.2f} total). Consider a cheaper model/route for routine work, tighter prompts, or task decomposition.",
+            ", ".join(f"{s.get('label')}: ${_session_cost(s):.2f}" for s in expensive[:3]),
+            "/analytics",
+            "Open Analytics",
+            "Athena",
+            "Hermes records per-session token cost (estimated/actual_cost_usd); cost concentration is a routing signal.",
+            f"single-run cost >= ${EXPENSIVE_RUN_USD:.2f}",
+        ))
+    if context_pressure:
+        findings.append(_opportunity(
+            "memory",
+            "info",
+            "Runs are averaging a very large context per call",
+            "Some runs sent a large prompt on every model call (full history re-sent each turn). Agent quality, latency, and cost degrade as the per-call context grows; add summarization/recap, prune stale memory, or split the task.",
+            ", ".join(f"{s.get('label')}: {int(s.get('avg_input_tokens') or 0):,} avg in-tokens/call" for s in context_pressure[:3]),
+            "/sessions",
+            "Open Sessions",
+            "Mnemosyne",
+            "Hermes records cumulative input_tokens and api_call_count per session; their ratio estimates the per-call context size.",
+            f">= {CONTEXT_PRESSURE_TOKENS:,} average input tokens per API call",
+        ))
+    return findings
+
+
 def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]], cron: List[Dict[str, Any]], sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     kanban = kanban or {}
     assignee_load = {
@@ -798,6 +994,11 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
         cron_by_profile[profile] = cron_by_profile.get(profile, 0) + 1
 
     tool_heavy = [s for s in sessions if int(s.get("tool_call_count") or 0) >= TOOL_HEAVY_THRESHOLD]
+    # The >= RUNAWAY_TOOLS_THRESHOLD band is owned by the looping detector in
+    # detect_friction; keep only the moderate band here so the queue never shows
+    # two overlapping cards for the same session.
+    _looping_ids = {s.get("id") for s in sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD}
+    tool_heavy = [s for s in tool_heavy if s.get("id") not in _looping_ids]
     message_heavy = [s for s in sessions if int(s.get("message_count") or 0) >= LONG_THREAD_THRESHOLD]
     active_sessions = [s for s in sessions if s.get("state") in ("active", "recent")]
     stale_sessions = [s for s in sessions if s.get("state") == "stale"]
@@ -977,12 +1178,16 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Hermes sessions without an end time and recent activity are stale.",
             "session has no end time and is older than the freshness window",
         ))
+    # Silent-failure detectors (cost/looping/context) lead the queue; they use data
+    # Hermes already records and are the unattended failures that quietly burn tokens.
+    metrics = build_metrics(sessions)
+    opportunities = detect_friction(sessions, kanban) + opportunities
     if not opportunities:
         opportunities.append(_opportunity(
             "review",
             "ok",
             "No current agent tuning gap",
-            "Olympus did not find overloaded assignees, failed worker runs, blocked tasks, missing routes, or heavy recent sessions.",
+            "Olympus did not find overloaded assignees, failed worker runs, blocked tasks, missing routes, looping, runaway cost, or context pressure.",
             "Current cross-surface scan is clean.",
             "/analytics",
             "Open Analytics",
@@ -998,9 +1203,15 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "tool_heavy_sessions": len(tool_heavy),
             "long_threads": len(message_heavy),
             "kanban_open": int(kanban.get("open") or 0),
+            "total_cost_usd": metrics["total_cost_usd"],
+            "total_tokens": metrics["total_tokens"],
+            "looping_sessions": metrics["looping_sessions"],
+            "expensive_sessions": metrics["expensive_sessions"],
+            "context_pressure_sessions": metrics["context_pressure_sessions"],
         },
         "agents": agents,
         "opportunities": opportunities[:8],
+        "metrics": metrics,
     }
 
 
@@ -1316,6 +1527,7 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
         "pantheon": pantheon,
         "profiles": profile_rows,
         "agent_hq": agent_hq,
+        "metrics": agent_hq.get("metrics", {}),
     }
 
 

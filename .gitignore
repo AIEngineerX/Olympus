@@ -1,16 +1,43 @@
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Python
 __pycache__/
 *.py[cod]
-.DS_Store
+*.egg-info/
+.venv/
+venv/
 
+# Secrets & local environment (never commit)
 .env
 .env.*
+!.env.example
+
+# Local Hermes runtime: databases, logs, and gateway state (never commit)
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 *.log
+gateway.pid
+gateway.lock
+gateway_state.json
+processes.json
 
-screenshots/
-*.png
-*.jpg
-*.jpeg
-*.webp
+# Vendored reference docs: kept locally, not committed (link to official docs instead)
+docs/reference/
+
+# Install-script backups (scripts/install-dashboard-link.sh)
+*.backup.*
+
+# Local preview / render-check artifacts (dashboard/dist/__preview.html, screenshots)
+.playwright-mcp/
+__preview.html
+olympus-*.png
+pantheon*.png
+
+# Editors
+.vscode/
+.idea/
