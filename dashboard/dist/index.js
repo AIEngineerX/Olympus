@@ -122,17 +122,81 @@
     return 2;
   }
 
+  // Fixed sky positions (viewBox 1000x360) so the constellation stays recognizable;
+  // only color/glow change with live state. Keys are lowercased deity names.
+  const DEITY_POS = {
+    apollo: [330, 62], hermes: [712, 70], iris: [860, 158], athena: [792, 274],
+    hephaestus: [560, 320], mnemosyne: [360, 316], chronos: [168, 252], argus: [150, 110],
+  };
+  const CONSTELLATION_EDGES = [
+    ["apollo", "argus"], ["argus", "chronos"], ["chronos", "mnemosyne"],
+    ["hermes", "iris"], ["iris", "athena"], ["athena", "hephaestus"],
+  ];
+  const AMBIENT_STARS = [
+    [60, 40, 1.2], [140, 300, 0.9], [240, 150, 1.3], [300, 250, 0.8], [430, 44, 1.1],
+    [470, 300, 0.9], [600, 50, 1.3], [650, 250, 0.8], [760, 332, 1.0], [820, 44, 1.2],
+    [905, 250, 1.4], [960, 120, 0.9], [200, 64, 0.8], [410, 332, 1.0], [560, 140, 0.7],
+    [705, 160, 0.8], [884, 300, 0.9], [120, 200, 0.7], [988, 205, 0.8], [40, 150, 0.9],
+  ];
+
+  function deityColor(state) {
+    // Hermes semantic theme tokens so colors track the active dashboard theme.
+    const k = String(state || "").toLowerCase();
+    if (["error", "critical", "stale", "failed"].includes(k)) return "var(--color-destructive)";
+    if (["warning", "idle", "checking", "paused"].includes(k)) return "var(--color-warning)";
+    if (["ok", "running", "active", "recent", "scheduled"].includes(k)) return "var(--color-success)";
+    return "var(--midground, #ffe6cb)";
+  }
+  function deityPulse(state) {
+    const k = String(state || "").toLowerCase();
+    if (["error", "critical", "stale", "failed"].includes(k)) return "olympus-star-urgent";
+    if (["warning", "idle", "checking", "paused"].includes(k)) return "olympus-star-watch";
+    return "olympus-star-calm";
+  }
+
+  function ConstellationHero({ pantheon, score }) {
+    const CX = 500, CY = 182, W = 1000, H = 360;
+    const byKey = {};
+    asList(pantheon).forEach((r) => { if (r && r.name) byKey[String(r.name).toLowerCase()] = r; });
+    const placed = Object.keys(DEITY_POS).map((key) => ({ key, pos: DEITY_POS[key], role: byKey[key] })).filter((d) => d.role);
+    const scoreColor = score >= 85 ? "var(--color-success)" : score >= 55 ? "var(--color-warning)" : "var(--color-destructive)";
+    const lines = [];
+    placed.forEach((d, i) => lines.push(el("line", { key: "s" + i, x1: CX, y1: CY, x2: d.pos[0], y2: d.pos[1], className: "olympus-spoke" })));
+    CONSTELLATION_EDGES.forEach((e, i) => {
+      if (byKey[e[0]] && byKey[e[1]]) lines.push(el("line", { key: "e" + i, x1: DEITY_POS[e[0]][0], y1: DEITY_POS[e[0]][1], x2: DEITY_POS[e[1]][0], y2: DEITY_POS[e[1]][1], className: "olympus-edge" }));
+    });
+    return el("div", { className: "olympus-constellation", role: "img", "aria-label": "Olympus constellation. Readiness " + String(score) + ". Live status for " + placed.length + " agent roles." },
+      el("svg", { viewBox: "0 0 " + W + " " + H, preserveAspectRatio: "xMidYMid meet", className: "olympus-constellation-svg" },
+        el("g", { className: "olympus-ambient" }, AMBIENT_STARS.map((s, i) => el("circle", { key: "a" + i, cx: s[0], cy: s[1], r: s[2], className: "olympus-ambient-star" }))),
+        el("g", { className: "olympus-lines" }, lines),
+        el("g", { className: "olympus-lodestar", style: { color: scoreColor } },
+          el("circle", { cx: CX, cy: CY, r: 48, className: "olympus-lodestar-halo" }),
+          el("circle", { cx: CX, cy: CY, r: 30, className: "olympus-lodestar-core" }),
+          el("text", { x: CX, y: CY - 1, textAnchor: "middle", className: "olympus-lodestar-score" }, String(score)),
+          el("text", { x: CX, y: CY + 17, textAnchor: "middle", className: "olympus-lodestar-label" }, "READINESS")
+        ),
+        placed.map((d) => {
+          const x = d.pos[0], y = d.pos[1], above = y < CY;
+          return el("g", { key: d.key, className: cx("olympus-star", deityPulse(d.role.state)), style: { color: deityColor(d.role.state) } },
+            el("circle", { cx: x, cy: y, r: 15, className: "olympus-star-halo" }),
+            el("circle", { cx: x, cy: y, r: 6, className: "olympus-star-core" }),
+            el("text", { x: x, y: above ? y - 22 : y + 30, textAnchor: "middle", className: "olympus-star-name" }, d.role.name || d.key)
+          );
+        })
+      )
+    );
+  }
+
   function PantheonStatus({ pantheon, score }) {
     const roles = asList(pantheon).slice().sort((a, b) => pantheonRank(a && a.state) - pantheonRank(b && b.state));
-    const scoreState = score >= 85 ? "ok" : score >= 55 ? "warning" : "error";
     return el("section", { className: "olympus-section olympus-pantheon" },
       el("div", { className: "olympus-section-head" },
         el("div", null,
           el("h2", null, "Pantheon"),
           el("p", null, "Live operational roles across routing, schedules, tools, memory, gateways, and freshness. Sorted so what needs attention comes first.")
-        ),
-        el(StatePill, { state: scoreState, label: "Readiness " + String(score) })
+        )
       ),
+      el(ConstellationHero, { pantheon, score }),
       roles.length ? el("div", { className: "olympus-pantheon-grid" },
         roles.map((p, idx) => el("div", { key: (p && p.name) || idx, className: cx("olympus-deity", "olympus-deity-" + String((p && p.state) || "unknown").toLowerCase()) },
           el("div", { className: "olympus-deity-head" },
