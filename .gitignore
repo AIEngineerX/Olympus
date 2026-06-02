@@ -32,6 +32,12 @@ docs/reference/
 # Install-script backups (scripts/install-dashboard-link.sh)
 *.backup.*
 
+# Local preview / render-check artifacts (dashboard/dist/__preview.html, screenshots)
+.playwright-mcp/
+__preview.html
+olympus-*.png
+pantheon*.png
+
 # Editors
 .vscode/
 .idea/
