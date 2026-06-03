@@ -8,11 +8,20 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 
 # Secrets & local environment (never commit)
 .env
 .env.*
 !.env.example
+.envrc
+.direnv/
 
 # Local Hermes runtime: databases, logs, and gateway state (never commit)
 *.db
@@ -25,9 +34,19 @@ gateway.pid
 gateway.lock
 gateway_state.json
 processes.json
+state.json
+*.pid
+*.lock
 
 # Vendored reference docs: kept locally, not committed (link to official docs instead)
 docs/reference/
+
+# Node/dev-tool artifacts
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # Install-script backups (scripts/install-dashboard-link.sh)
 *.backup.*
@@ -37,7 +56,16 @@ docs/reference/
 __preview.html
 olympus-*.png
 pantheon*.png
+security-report*.json
+security-report*.sarif
+bandit-report*.json
 
 # Editors
 .vscode/
 .idea/
+
+# Local scratch
+tmp/
+temp/
+*.tmp
+*.swp
