@@ -38,7 +38,7 @@ const privateLabelPhrases = [
   "Browser smoke",
   "Split overloaded visual work"
 ];
-const allowedHermesRoutes = ["/analytics", "/kanban", "/profiles", "/sessions", "/skills"];
+const allowedHermesRoutes = ["/analytics", "/cron", "/kanban", "/logs", "/profiles", "/sessions", "/skills"];
 
 const scenarios = [
   { name: "noisy", expectedSections, minAgentCards: 5 },
