@@ -19,7 +19,7 @@ HTML or otherwise sized independently from the graphic.
 
 ## Current Direction
 
-The current Party View has been reshaped into a command-style Agent View:
+The Agent View is a command-style operational surface:
 
 - Trigger lanes show Kanban, Cron, and Gateway pressure.
 - Agent cards show open, running, ready, and blocked work.
@@ -34,7 +34,7 @@ The current Party View has been reshaped into a command-style Agent View:
 
 ## Better Skill Suggestions
 
-Skill suggestions should be ranked by observed repeatability, not vibes:
+Skill suggestions should be ranked by observed repeatability, not guesses:
 
 | Signal | Suggestion |
 | --- | --- |
@@ -45,23 +45,36 @@ Skill suggestions should be ranked by observed repeatability, not vibes:
 | Forced-skill Kanban work succeeding | Promote the forced-skill pattern. |
 | Same profile repeatedly blocked | Add acceptance-criteria or handoff skills. |
 
-Recommended backend shape:
+Current backend shape:
 
 ```json
 {
-  "skill_suggestions": [
-    {
-      "title": "Bundle visual QA workflow",
-      "severity": "warning",
-      "profile": "Profile 1",
-      "evidence": ["4 tool-heavy sessions", "2 viewport tasks", "1 stale worker"],
-      "confidence": 0.82,
-      "recommended_view": "/skills",
-      "action_label": "Open Skills"
-    }
-  ]
+  "skill_coverage": {
+    "summary": {
+      "total_skills": 48,
+      "zero_skill_profiles": 1,
+      "forced_skill_tasks": 3,
+      "looping_sessions": 2,
+      "tool_heavy_sessions": 4
+    },
+    "suggestions": [
+      {
+        "title": "Bundle visual QA workflow",
+        "severity": "warning",
+        "evidence": "4 tool-heavy sessions / 2 forced-skill tasks",
+        "recommended_view": "/skills",
+        "action_label": "Open Skills"
+      }
+    ]
+  }
 }
 ```
+
+Next skill-hygiene work should add read-only curator and hub evidence: local
+usage/provenance, hub install scan verdicts, trust level, and any stored
+skills.sh security audit status. Olympus should report those signals and link
+to Hermes Skills or Curator surfaces; it should not install, scan, archive, or
+mutate skills in v1.
 
 ## Performance Tracking
 

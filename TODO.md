@@ -6,44 +6,37 @@
 - Removed old office/product-clone framing.
 - Packaged Olympus as a Hermes dashboard plugin.
 - Added read-only `/health`, `/overview`, and `/tuning` routes.
-- Added Agent HQ, Party View, tuning queue, score breakdown, Kanban intelligence, and activity events.
+- Added Agent HQ, Agent View, tuning queue, score breakdown, Kanban intelligence, and activity events.
+- Added Skill Coverage from profile skill counts, forced-skill Kanban work, session tool pressure, long threads, and context pressure.
+- Added Profile Fitness scoring from workload, route metadata, gateway state, skill count, cron load, blocked work, failed runs, and stale workers.
 - Kept actions as links to Hermes-owned pages.
 - Added privacy defaults for local labels, private paths, route labels, and secrets.
 - Kept copy model/provider agnostic and HermesOS-native.
 - Confirmed the Hermes Dashboard already owns agent, profile, skill, cron, session, model, and gateway management.
 
-## Active Backlog
+## Open Phases
 
 Complete each item in order and test before starting the next.
 
-0. Production QA Gate
+0. Production QA Gate (ongoing)
    - Keep `npm run verify`, `npm run test:visual`, and `npm run test:live` passing.
    - Maintain fixture states for noisy, healthy, empty, overloaded, stale/blocked, high-cost, and hidden-label systems.
    - Track production gaps in `dashboard/docs/PRODUCTION_READINESS.md`.
-   - Done when CI runs static checks and visual smoke on every PR.
+   - Static checks and fixture visual smoke now run in CI; live Hermes smoke remains a local release gate.
 
-1. Skill Coverage
-   - Show profile skill counts, forced-skill Kanban work, and missing-skill risk.
-   - Recommend skill bundles when repeated work patterns appear.
-   - Link fixes to Hermes Skills instead of duplicating skill management.
-   - Done when `/overview` returns `skill_coverage` and the UI renders it without mock data.
-
-2. Profile Fitness
-   - Rank profiles by workload, routing metadata, gateway state, cron load, failures, loop pressure, and context pressure.
-   - Show the reason each profile is stable, overloaded, underconfigured, or needs review.
-   - Link fixes to Hermes Profiles, Sessions, Cron, Kanban, or Skills.
-   - Done when `/overview` returns `profile_fitness` and the UI explains the top issue for each profile.
-
-3. Kanban Worker Inspector
+1. Kanban Worker Inspector
    - Correlate Kanban `session_id`, `task_runs`, worker heartbeat, retry, stale, and model override data.
    - Show stuck or risky work only when there is real evidence.
    - Link to Hermes Kanban and Sessions.
+   - Remaining: add dispatcher/orchestration settings evidence and deeper task-to-session correlation.
 
-4. Curator and Skill Hygiene
-   - Surface unused, heavily used, stale, or recently changed skills if Hermes exposes the evidence locally.
+2. Curator and Skill Hygiene
+   - Read Hermes skill usage/provenance from `~/.hermes/skills/.usage.json` and hub install metadata from `~/.hermes/skills/.hub/lock.json`.
+   - Surface unused, heavily used, stale, archived, or recently changed skills if the evidence exists locally.
+   - Surface hub trust level, install scan verdict, and stored skills.sh security audit status when available.
    - Keep the panel read-only and link to Hermes Skills or Curator surfaces.
 
-5. Auxiliary Cost Watch
+3. Auxiliary Cost Watch
    - Detect background or auxiliary work causing token pressure.
    - Show when expensive routes are being used for background tasks.
 

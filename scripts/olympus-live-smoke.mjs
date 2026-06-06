@@ -43,7 +43,7 @@ const bannedCopyPhrases = [
   "next-generation",
   "cutting-edge",
 ];
-const allowedHermesRoutes = ["/analytics", "/kanban", "/profiles", "/sessions", "/skills"];
+const allowedHermesRoutes = ["/analytics", "/cron", "/kanban", "/logs", "/profiles", "/sessions", "/skills"];
 
 function requestText(url, timeoutMs = 3000) {
   return new Promise((resolve) => {
