@@ -16,7 +16,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - name: Install visual test dependencies
+        run: npm ci
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
       - name: Backend compiles
         run: python -m py_compile dashboard/plugin_api.py
       - name: Frontend parses
         run: node --check dashboard/dist/index.js
+      - name: Whitespace check
+        run: git diff --check
+      - name: Visual smoke
+        run: npm run test:visual
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: visual-smoke-artifacts
+          path: |
+            test-results/
+            playwright-report/

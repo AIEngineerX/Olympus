@@ -13,9 +13,8 @@
 
 ## Verification
 
-- [ ] `python3 -m py_compile dashboard/plugin_api.py`
-- [ ] `node --check dashboard/dist/index.js`
-- [ ] `git diff --check`
+- [ ] `npm run verify`
+- [ ] `npm run test:visual`
 - [ ] Exercised any changed data path against a real `$HERMES_HOME` (or fixture) — no mocks
 
 ## Read-only & privacy checklist

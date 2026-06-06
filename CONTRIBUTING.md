@@ -10,7 +10,9 @@ controls). Changes that blur that boundary will be sent back.
 ## Prerequisites
 
 - A working [HermesOS / Hermes Agent](https://github.com/NousResearch/hermes-agent) install (`$HERMES_HOME`, default `~/.hermes`).
-- Python 3.10+ and Node.js (Node is only used for the `node --check` step).
+- Python 3.10+ and Node.js.
+- For visual QA: run `npm install` once, then `npx playwright install chromium`
+  if Chromium is not already installed for Playwright.
 - Optional but recommended: a local clone of `hermes-agent` to validate
   assumptions (schemas, env vars, plugin SDK) against the real source.
 
@@ -76,14 +78,18 @@ assuming — Hermes details are version-dependent.
 ## Verify before every commit
 
 ```bash
-python3 -m py_compile dashboard/plugin_api.py   # backend compiles
-node --check dashboard/dist/index.js            # frontend parses
-git diff --check                                 # no whitespace/conflict errors
+npm run verify       # backend compiles, frontend parses, whitespace is clean
+npm run test:visual  # fixture-backed desktop/mobile visual smoke
 ```
 
 When you touch a data path, exercise it for real against a live `$HERMES_HOME`
 (or a temporary SQLite DB / fixture). No mocks — integration against real code
 only.
+
+The visual fixture intentionally uses fixed evidence states. It is not a
+substitute for a live Hermes check, but it catches the most common regressions:
+console errors, horizontal overflow, unreadable Agent View labels, and broken
+desktop/mobile layout.
 
 ## Commit conventions
 
