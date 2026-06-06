@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Olympus Visual Fixture</title>
+    <link rel="stylesheet" href="../../dashboard/dist/style.css">
+    <style>
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: #120d12;
+        color: #f6f0df;
+      }
+
+      body {
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      .fixture-shell {
+        display: grid;
+        grid-template-columns: 232px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+
+      .fixture-sidebar {
+        padding: 18px 14px;
+        border-right: 1px solid rgba(246, 240, 223, 0.16);
+        background: #1a1117;
+      }
+
+      .fixture-sidebar h1 {
+        margin: 0 0 24px;
+        font-family: Charter, "Iowan Old Style", "Palatino Linotype", Georgia, ui-serif, serif;
+        font-size: 24px;
+        line-height: 1;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      .fixture-sidebar span {
+        display: block;
+        padding: 9px 0;
+        color: rgba(246, 240, 223, 0.7);
+        font-size: 12px;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      .fixture-main {
+        min-width: 0;
+      }
+
+      @media (max-width: 760px) {
+        .fixture-shell {
+          display: block;
+        }
+
+        .fixture-sidebar {
+          position: sticky;
+          top: 0;
+          z-index: 10;
+          padding: 10px 14px;
+        }
+
+        .fixture-sidebar h1 {
+          margin: 0;
+          font-size: 16px;
+        }
+
+        .fixture-sidebar span {
+          display: none;
+        }
+      }
+    </style>
+    <script src="../../node_modules/react/umd/react.development.js"></script>
+    <script src="../../node_modules/react-dom/umd/react-dom.development.js"></script>
+    <script src="./olympus-fixture-data.js"></script>
+  </head>
+  <body>
+    <div class="fixture-shell">
+      <aside class="fixture-sidebar" aria-label="Fixture navigation">
+        <h1>Hermes Agent</h1>
+        <span>Chat</span>
+        <span>Sessions</span>
+        <span>Skills</span>
+        <span>Kanban</span>
+        <span>Olympus</span>
+      </aside>
+      <main class="fixture-main">
+        <div id="olympus-root"></div>
+      </main>
+    </div>
+    <script>
+      const React = window.React;
+      const ReactDOM = window.ReactDOM;
+
+      function FixtureBadge(props) {
+        return React.createElement("span", props, props.children);
+      }
+
+      function FixtureButton(props) {
+        return React.createElement("button", props, props.children);
+      }
+
+      window.__HERMES_PLUGIN_SDK__ = {
+        React,
+        hooks: React,
+        components: {
+          Badge: FixtureBadge,
+          Button: FixtureButton
+        },
+        fetchJSON: async () => window.__OLYMPUS_FIXTURE_DATA__
+      };
+
+      window.__HERMES_PLUGINS__ = {
+        register: function register(_name, Component) {
+          const root = ReactDOM.createRoot(document.getElementById("olympus-root"));
+          root.render(React.createElement(Component));
+        }
+      };
+    </script>
+    <script src="../../dashboard/dist/index.js"></script>
+  </body>
+</html>

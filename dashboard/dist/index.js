@@ -3,7 +3,7 @@
 
   const SDK = window.__HERMES_PLUGIN_SDK__;
   const { React } = SDK;
-  const { useEffect, useMemo, useRef, useState } = SDK.hooks;
+  const { useEffect, useRef, useState } = SDK.hooks;
   const C = SDK.components || {};
   const Badge = C.Badge || "span";
   const Button = C.Button || "button";
@@ -57,6 +57,14 @@
     return n > 0 ? "$" + n.toFixed(2) : "unpriced";
   }
 
+  function formatBytes(value) {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n) || n <= 0) return "0 B";
+    if (n < 1024) return Math.round(n) + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    return (n / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
   function Hero({ health, score, loading, onRefresh }) {
     const status = health.status || (loading ? "checking" : "unknown");
     const statusLabel = health.status_label || status;
@@ -64,7 +72,7 @@
       el("div", { className: "olympus-hero-copy" },
         el("div", { className: "olympus-kicker" }, "HermesOS Agent HQ"),
         el("h1", null, "Olympus"),
-        el("p", null, "Read-only operations for multiple Hermes agents: speed, token pressure, tool loops, workload, reliability risks, and the next tuning move."),
+        el("p", null, "Read-only Hermes operations: runtime health, workload, tool pressure, context pressure, and the next tuning action."),
         el("div", { className: "olympus-hero-actions" },
           el(StatePill, { state: status, label: statusLabel }),
           el(Button, { className: "olympus-refresh", onClick: onRefresh, disabled: loading }, loading ? "Refreshing" : "Refresh")
@@ -138,14 +146,14 @@
     const summary = data.summary || {};
     const metrics = data.metrics || {};
     const agents = asList(data.agents);
-    const opportunities = asList(data.opportunities);
+    const tuningItems = asList(data.opportunities);
     const cost = Number(summary.total_cost_usd || 0);
     const failedRuns = Number(metrics.failed_kanban_runs || 0);
     const medianDuration = Number(metrics.median_duration_seconds || 0);
     const p90Duration = Number(metrics.p90_duration_seconds || 0);
     const tiles = [
       { label: "Agents", value: summary.agents || agents.length || 0, state: agents.length ? "active" : "unknown" },
-      { label: "Opportunities", value: summary.opportunities || opportunities.length || 0, state: opportunities.length ? "warning" : "ok" },
+      { label: "Tuning Items", value: summary.opportunities || tuningItems.length || 0, state: tuningItems.length ? "warning" : "ok" },
       { label: "Median Speed", value: formatDuration(medianDuration), state: medianDuration > 900 ? "warning" : medianDuration ? "active" : "idle" },
       { label: "P90 Speed", value: formatDuration(p90Duration), state: p90Duration > 1800 ? "warning" : p90Duration ? "active" : "idle" },
       { label: "Token Volume", value: formatCount(summary.total_tokens || metrics.total_tokens), state: (summary.total_tokens || metrics.total_tokens) ? "active" : "idle" },
@@ -160,7 +168,7 @@
       el("div", { className: "olympus-section-head" },
         el("div", null,
           el("h2", null, "Agent HQ"),
-          el("p", null, "The no-fluff panel: speed, tokens, loops, context pressure, reliability risk, and what to tune next.")
+          el("p", null, "Runtime evidence across speed, tokens, tool use, context pressure, reliability, and the next tuning action.")
         )
       ),
       el("div", { className: "olympus-hq-tiles" },
@@ -171,13 +179,13 @@
         ))
       ),
       el("div", { className: "olympus-hq-grid" },
-        el("div", { className: "olympus-hq-pane olympus-hq-opportunities" },
-          el("h3", null, "What To Tune"),
-          opportunities.length ? opportunities.map((item, idx) => el("article", { key: idx, className: cx("olympus-opportunity", "olympus-opportunity-" + String(item.severity || "info").toLowerCase()) },
-            el("div", { className: "olympus-opportunity-head" },
+        el("div", { className: "olympus-hq-pane olympus-hq-tuning-items" },
+          el("h3", null, "Tuning Queue"),
+          tuningItems.length ? tuningItems.map((item, idx) => el("article", { key: idx, className: cx("olympus-tuning-item", "olympus-tuning-item-" + String(item.severity || "info").toLowerCase()) },
+            el("div", { className: "olympus-item-head" },
               el("div", null,
-                el("span", null, "Tune " + String(item.kind || "agent")),
-                el("h4", null, item.title || "Opportunity")
+                el("span", null, String(item.kind || "signal")),
+                el("h4", null, item.title || "Tuning item")
               ),
               el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
             ),
@@ -188,10 +196,72 @@
               item.threshold ? el("small", { className: "olympus-threshold" }, "Trigger: " + item.threshold) : null,
               item.basis ? el("small", { className: "olympus-basis" }, item.basis) : null
             ) : null,
-            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || "Open view") : null
-          )) : el("p", { className: "olympus-muted" }, "No improvement opportunities detected.")
+            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || "Open Hermes view") : null
+          )) : el("p", { className: "olympus-muted" }, "No tuning items in this scan.")
         )
       )
+    );
+  }
+
+  function PerformanceTracking({ performance, diagnostics, clientDiagnostics }) {
+    const data = performance || {};
+    const summary = data.summary || {};
+    const lanes = asList(data.lanes);
+    const signals = asList(data.signals);
+    const diag = diagnostics || {};
+    const client = clientDiagnostics || {};
+    if (!lanes.length && !signals.length && !diag.generated_ms && !client.fetch_ms) return null;
+
+    function laneValue(item) {
+      if (item.unit === "seconds") return formatDuration(item.value);
+      if (item.unit === "usd") return formatMoney(item.value);
+      return formatCount(item.value);
+    }
+
+    return el("section", { className: "olympus-section olympus-performance" },
+      el("div", { className: "olympus-section-head" },
+        el("div", null,
+          el("h2", null, "Performance Tracking"),
+          el("p", null, "Windowed speed, tool pressure, context, reliability, and cost signals from Hermes runtime evidence.")
+        ),
+        el(StatePill, { state: summary.state || "unknown" })
+      ),
+      el("div", { className: "olympus-performance-grid" },
+        lanes.map((item) => el("article", { key: item.id || item.label, className: cx("olympus-performance-lane", "olympus-performance-lane-" + String(item.state || "unknown").toLowerCase()) },
+          el("div", { className: "olympus-performance-lane-head" },
+            el("span", null, item.label || "Signal"),
+            el(StatePill, { state: item.state || "unknown" })
+          ),
+          el("strong", null, laneValue(item)),
+          el("p", null, item.detail || ""),
+          item.source ? el("small", null, item.source) : null,
+          item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, "Open Hermes view") : null
+        ))
+      ),
+      signals.length ? el("div", { className: "olympus-performance-signals" },
+        signals.map((item, idx) => el("div", { key: idx, className: "olympus-mini-row" },
+          el("span", null, item.label || "Signal"),
+          el("small", null, item.detail || ""),
+          el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
+        ))
+      ) : null,
+      (diag.generated_ms || client.fetch_ms) ? el("div", { className: "olympus-performance-diagnostics" },
+        el("h3", null, "Production Diagnostics"),
+        el("div", { className: "olympus-diagnostic-grid" },
+          [
+            { label: "API Build", value: diag.generated_ms ? Math.round(Number(diag.generated_ms)) + "ms" : "unknown", state: diag.budget_status && diag.budget_status.api_response || "unknown" },
+            { label: "Payload", value: diag.payload_bytes ? formatBytes(diag.payload_bytes) : "unknown", state: diag.budget_status && diag.budget_status.payload || "unknown" },
+            { label: "Fetch", value: client.fetch_ms ? Math.round(Number(client.fetch_ms)) + "ms" : "pending", state: client.fetch_state || "unknown" },
+            { label: "Render", value: client.render_ms ? Math.round(Number(client.render_ms)) + "ms" : "pending", state: client.render_state || "unknown" },
+            { label: "Boards", value: String(diag.counts && diag.counts.kanban_boards_scanned || 0), state: diag.counts && diag.counts.kanban_board_read_failures ? "warning" : "ok" },
+            { label: "Hermes", value: diag.hermes && diag.hermes.version || "unknown", state: diag.hermes && diag.hermes.version && diag.hermes.version !== "unknown" ? "ok" : "unknown" },
+          ].map((item) => el("div", { key: item.label, className: "olympus-diagnostic-tile" },
+            el("span", null, item.label),
+            el("strong", null, item.value),
+            el(StatePill, { state: item.state })
+          ))
+        )
+      ) : null
     );
   }
 
@@ -214,7 +284,7 @@
       el("div", { className: "olympus-section-head" },
         el("div", null,
           el("h2", null, "Skill Coverage"),
-          el("p", null, "Where Hermes skills can reduce loops, repeated tool work, long context, or implicit profile behavior.")
+          el("p", null, "Skill signals from repeated tool use, loops, long context, and profiles without skill coverage.")
         ),
         el("a", { className: "olympus-link", href: "/skills" }, "Open Skills")
       ),
@@ -227,18 +297,18 @@
       ),
       el("div", { className: "olympus-skill-grid" },
         el("div", { className: "olympus-skill-pane" },
-          el("h3", null, "Coverage Moves"),
+          el("h3", null, "Skill Recommendations"),
           suggestions.map((item, idx) => el("article", { key: idx, className: cx("olympus-skill-suggestion", "olympus-skill-suggestion-" + String(item.severity || "info").toLowerCase()) },
-            el("div", { className: "olympus-opportunity-head" },
+            el("div", { className: "olympus-item-head" },
               el("div", null,
-                el("span", null, "Tune " + String(item.kind || "skill")),
-                el("h4", null, item.title || "Skill recommendation")
+                el("span", null, String(item.kind || "skill")),
+                el("h4", null, item.title || "Skill item")
               ),
               el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
             ),
             el("p", null, item.detail || ""),
             item.evidence ? el("small", null, item.evidence) : null,
-            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || "Open view") : null
+            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || "Open Hermes view") : null
           ))
         ),
         el("div", { className: "olympus-skill-pane" },
@@ -254,7 +324,7 @@
             ),
             el(StatePill, { state: profile.state || "unknown" }),
             el("p", null, profile.top_issue || "No current skill signal."),
-            profile.recommended_view ? el("a", { className: "olympus-link", href: routeLink(profile.recommended_view) }, "Open owner") : null
+            profile.recommended_view ? el("a", { className: "olympus-link", href: routeLink(profile.recommended_view) }, "Open Hermes view") : null
           ))
         )
       )
@@ -315,25 +385,11 @@
                 [reason.label, reason.detail, reason.points ? "-" + String(reason.points) : null].filter(Boolean).join(" / ")
               ))
             ) : null,
-            profile.recommended_view ? el("a", { className: "olympus-link", href: routeLink(profile.recommended_view) }, "Open owner") : null
+            profile.recommended_view ? el("a", { className: "olympus-link", href: routeLink(profile.recommended_view) }, "Open Hermes view") : null
           );
         })
       )
     );
-  }
-
-  function statusColor(state) {
-    const k = String(state || "").toLowerCase();
-    if (["error", "critical", "stale", "failed", "warning"].includes(k)) return "var(--color-warning)";
-    if (["running", "active", "recent", "ready", "scheduled"].includes(k)) return "var(--color-success)";
-    return "var(--midground, #ffe6cb)";
-  }
-
-  function nodePulse(state) {
-    const k = String(state || "").toLowerCase();
-    if (["error", "critical", "stale", "failed", "warning"].includes(k)) return "olympus-party-node-watch";
-    if (["running", "active", "recent"].includes(k)) return "olympus-party-node-live";
-    return "olympus-party-node-calm";
   }
 
   function eventState(kind, fallback) {
@@ -352,16 +408,23 @@
     const [selectedId, setSelectedId] = useState(members[0] && members[0].id);
     const selected = members.find((m) => m.id === selectedId) || members[0] || {};
     const activity = asList(events).slice(0, 8);
-    const W = 1000, H = 420, CX = 500, CY = 210;
+    const hasOrchestrationSignal = Boolean(
+      orchSummary.open || orchSummary.running || orchSummary.ready || orchSummary.blocked ||
+      orchSummary.active_workers || orchSummary.stale_workers
+    );
+    useEffect(() => {
+      if (members.length && !members.some((member) => member.id === selectedId)) {
+        setSelectedId(members[0].id);
+      }
+    }, [members.map((member) => member.id).join("|"), selectedId]);
+    if (!members.length && !activity.length && !hasOrchestrationSignal) return null;
     const lanes = [
-      { key: "kanban", label: "Kanban", x: 170, y: 70, value: orchSummary.open || 0, state: (orchSummary.active_workers || orchSummary.open) ? "running" : "idle" },
-      { key: "cron", label: "Cron", x: 500, y: 48, value: members.reduce((n, m) => n + Number(m.cron_jobs || 0), 0), state: "scheduled" },
-      { key: "gateway", label: "Gateway", x: 830, y: 70, value: members.reduce((n, m) => n + Number(m.gateway_count || 0), 0), state: "running" },
+      { key: "kanban", label: "Kanban", value: orchSummary.open || 0, detail: (orchSummary.running || 0) + " running / " + (orchSummary.ready || 0) + " ready", state: (orchSummary.active_workers || orchSummary.open) ? "running" : "idle" },
+      { key: "cron", label: "Cron", value: members.reduce((n, m) => n + Number(m.cron_jobs || 0), 0), detail: "scheduled triggers", state: "scheduled" },
+      { key: "gateway", label: "Gateway", value: members.reduce((n, m) => n + Number(m.gateway_count || 0), 0), detail: (summary.working || 0) + " working profiles", state: "running" },
     ];
-    const tiles = [
-      { label: "Party", value: summary.members || members.length || 0, state: members.length ? "active" : "unknown" },
-      { label: "Working", value: summary.working || 0, state: summary.working ? "running" : "idle" },
-      { label: "Queued", value: summary.queued || 0, state: summary.queued ? "active" : "idle" },
+    const status = [
+      { label: "Profiles", value: summary.members || members.length || 0, state: members.length ? "active" : "unknown" },
       { label: "Workers", value: summary.workers || orchSummary.active_workers || 0, state: (summary.workers || orchSummary.active_workers) ? "running" : "idle" },
       { label: "Blocked", value: summary.blocked || orchSummary.blocked || 0, state: (summary.blocked || orchSummary.blocked) ? "warning" : "ok" },
       { label: "Stale", value: orchSummary.stale_workers || 0, state: orchSummary.stale_workers ? "warning" : "ok" },
@@ -370,67 +433,73 @@
     return el("section", { className: "olympus-section olympus-party" },
       el("div", { className: "olympus-section-head" },
         el("div", null,
-          el("h2", null, "Party View"),
-          el("p", null, "Real Hermes profiles, their trigger lanes, and current orchestration health. Nodes pulse only from local runtime state.")
+          el("h2", null, "Agent View"),
+          el("p", null, "Profiles, trigger lanes, workload, and risk from current Hermes evidence.")
         ),
         el("a", { className: "olympus-link", href: "/kanban" }, "Open Kanban")
       ),
-      el("div", { className: "olympus-party-tiles" },
-        tiles.map((item) => el("div", { key: item.label, className: "olympus-party-tile" },
-          el("span", null, item.label),
-          el("strong", null, String(item.value)),
-          el(StatePill, { state: item.state })
-        ))
-      ),
-      el("div", { className: "olympus-party-grid" },
-        el("div", { className: "olympus-party-map", role: "img", "aria-label": "Party View map showing real Hermes profiles and trigger lanes." },
-          el("svg", { viewBox: "0 0 " + W + " " + H, preserveAspectRatio: "xMidYMid meet", className: "olympus-party-svg" },
-            el("defs", null,
-              el("linearGradient", { id: "olympus-party-line", x1: "0%", y1: "0%", x2: "100%", y2: "0%" },
-                el("stop", { offset: "0%", stopColor: "rgba(67,201,191,0.16)" }),
-                el("stop", { offset: "100%", stopColor: "rgba(239,196,92,0.34)" })
-              )
+      el("div", { className: "olympus-command-viewport" },
+        el("div", { className: "olympus-viewport-main", role: "group", "aria-label": "Agent view showing trigger lanes, profile workload, and current operational risk." },
+          el("div", { className: "olympus-viewport-head" },
+            el("div", null,
+              el("span", null, "Live Agent View"),
+              el("h3", null, "Operational State")
             ),
-            el("g", { className: "olympus-party-gridlines" },
-              Array.from({ length: 9 }).map((_, i) => el("line", { key: "v" + i, x1: 40 + i * 115, y1: 28, x2: 40 + i * 115, y2: H - 28 })),
-              Array.from({ length: 5 }).map((_, i) => el("line", { key: "h" + i, x1: 36, y1: 70 + i * 72, x2: W - 36, y2: 70 + i * 70 }))
-            ),
-            lanes.map((lane) => el("g", { key: lane.key, className: "olympus-party-lane", style: { color: statusColor(lane.state) } },
-              el("line", { x1: lane.x, y1: lane.y, x2: CX, y2: CY, className: "olympus-party-signal" }),
-              el("circle", { cx: lane.x, cy: lane.y, r: 26, className: "olympus-party-lane-node" }),
-              el("text", { x: lane.x, y: lane.y + 4, textAnchor: "middle", className: "olympus-party-lane-value" }, String(lane.value || 0)),
-              el("text", { x: lane.x, y: lane.y + 45, textAnchor: "middle", className: "olympus-party-lane-label" }, lane.label)
-            )),
-            members.map((member, idx) => {
-              const pos = member.position || {};
-              const x = Math.max(90, Math.min(910, Number(pos.x || (28 + idx * 28)) * 10));
-              const y = Math.max(120, Math.min(360, Number(pos.y || 50) * 4));
-              return el("g", {
-                key: member.id || idx,
-                className: cx("olympus-party-node", nodePulse(member.state), selected.id === member.id && "olympus-party-node-selected"),
-                style: { color: statusColor(member.state) },
-                onClick: () => setSelectedId(member.id)
-              },
-                el("title", null, [member.label, member.state, (member.open_work || 0) + " open", (member.running_work || 0) + " running"].join(" / ")),
-                el("line", { x1: CX, y1: CY, x2: x, y2: y, className: "olympus-party-member-line" }),
-                el("circle", { cx: x, cy: y, r: 27, className: "olympus-party-node-halo" }),
-                el("circle", { cx: x, cy: y, r: 16, className: "olympus-party-node-core" }),
-                el("text", { x: x, y: y + 5, textAnchor: "middle", className: "olympus-party-node-name" }, member.label || "Agent"),
-                (member.running_work || member.blocked_work) ? el("text", { x: x, y: y - 36, textAnchor: "middle", className: "olympus-party-node-count" }, String((member.running_work || 0) + (member.blocked_work || 0))) : null
-              );
-            }),
-            el("g", { className: "olympus-party-core" },
-              el("circle", { cx: CX, cy: CY, r: 44, className: "olympus-party-core-halo" }),
-              el("circle", { cx: CX, cy: CY, r: 26, className: "olympus-party-core-dot" }),
-              el("text", { x: CX, y: CY - 2, textAnchor: "middle", className: "olympus-party-core-title" }, "HQ"),
-              el("text", { x: CX, y: CY + 14, textAnchor: "middle", className: "olympus-party-core-sub" }, String(orchSummary.active_workers || 0) + " workers")
+            el("div", { className: "olympus-viewport-status" },
+              status.map((item) => el("div", { key: item.label, className: "olympus-viewport-stat" },
+                el("span", null, item.label),
+                el("strong", null, String(item.value)),
+                el(StatePill, { state: item.state })
+              ))
             )
-          )
+          ),
+          el("div", { className: "olympus-trigger-lanes" },
+            lanes.map((lane) => el("div", { key: lane.key, className: cx("olympus-trigger-card", "olympus-trigger-" + lane.key) },
+              el("span", null, lane.label),
+              el("strong", null, String(lane.value || 0)),
+              el("small", null, lane.detail),
+              el(StatePill, { state: lane.state })
+            ))
+          ),
+          members.length ? el("div", { className: "olympus-agent-grid" },
+            members.map((member) => el("button", {
+              key: member.id,
+              type: "button",
+              "aria-pressed": selected.id === member.id,
+              "aria-label": "Select profile " + (member.label || "Agent"),
+              className: cx("olympus-agent-card", "olympus-agent-card-" + String(member.state || "unknown").toLowerCase(), selected.id === member.id && "olympus-agent-card-selected"),
+              onClick: () => setSelectedId(member.id)
+            },
+              el("div", { className: "olympus-agent-card-head" },
+                el("div", null,
+                  el("span", null, "Profile"),
+                  el("strong", null, member.label || "Agent")
+                ),
+                el(StatePill, { state: member.state || "unknown" })
+              ),
+              el("div", { className: "olympus-agent-card-metrics" },
+                [
+                  ["Open", member.open_work || 0],
+                  ["Run", member.running_work || 0],
+                  ["Ready", member.ready_work || 0],
+                  ["Block", member.blocked_work || 0],
+                ].map((pair) => el("span", { key: pair[0] }, el("b", null, String(pair[1])), pair[0]))
+              ),
+              el("div", { className: "olympus-agent-card-foot" },
+                el("span", null, (member.skill_count || 0) + " skills"),
+                el("span", null, (member.cron_jobs || 0) + " cron"),
+                el("span", null, (member.gateway_count || 0) + " gateways")
+              ),
+              asList(member.flags).length ? el("div", { className: "olympus-agent-card-flags" },
+                asList(member.flags).slice(0, 4).map((flag) => el("em", { key: flag }, flag))
+              ) : null
+            ))
+          ) : el("p", { className: "olympus-muted" }, "No Hermes profiles detected.")
         ),
         el("aside", { className: "olympus-party-inspector" },
           el("div", { className: "olympus-party-inspector-head" },
             el("div", null,
-              el("span", null, "Selected Agent"),
+              el("span", null, "Selected Profile"),
               el("h3", null, selected.label || "No profile")
             ),
             el(StatePill, { state: selected.state || "unknown" })
@@ -469,7 +538,7 @@
             el("small", null, [item.source, item.profile, item.detail].filter(Boolean).join(" / "))
           ),
           el(StatePill, { state: eventState(item.kind, item.state), label: item.state || eventState(item.kind) })
-        )) : el("p", { className: "olympus-muted" }, "No recent agent activity events detected.")
+        )) : el("p", { className: "olympus-muted" }, "No recent activity in this scan.")
       )
     );
   }
@@ -485,7 +554,7 @@
     const open = Number(data.open || 0);
     const blocked = Number(totals.blocked || 0);
     const ready = Number(totals.ready || 0);
-    const hasSignal = open || blocked || ready || workers.length || attention.length;
+    const hasSignal = totalBoards || open || blocked || ready || workers.length || attention.length;
 
     if (!hasSignal) return null;
 
@@ -554,13 +623,40 @@
     const [data, setData] = useState(null);
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [clientDiagnostics, setClientDiagnostics] = useState(null);
+    const requestSeq = useRef(0);
 
     function load() {
+      const requestId = requestSeq.current + 1;
+      requestSeq.current = requestId;
       setLoading(true);
+      const started = window.performance && performance.now ? performance.now() : Date.now();
       SDK.fetchJSON(API + "/overview?ts=" + encodeURIComponent(String(Date.now())))
-        .then((next) => { setData(next); setError(null); })
-        .catch((err) => setError(String(err && err.message ? err.message : err)))
-        .finally(() => setLoading(false));
+        .then((next) => {
+          if (requestId !== requestSeq.current) return;
+          const received = window.performance && performance.now ? performance.now() : Date.now();
+          setData(next);
+          setError(null);
+          window.requestAnimationFrame(() => {
+            if (requestId !== requestSeq.current) return;
+            const rendered = window.performance && performance.now ? performance.now() : Date.now();
+            const budgets = next && next.diagnostics && next.diagnostics.budgets || {};
+            const renderBudget = Number(budgets.client_render_ms || 150);
+            setClientDiagnostics({
+              fetch_ms: Math.round(received - started),
+              fetch_state: received - started > Number(budgets.api_response_ms || 750) ? "warning" : "ok",
+              render_ms: Math.round(rendered - received),
+              render_state: rendered - received > renderBudget ? "warning" : "ok",
+              total_ms: Math.round(rendered - started)
+            });
+          });
+        })
+        .catch((err) => {
+          if (requestId === requestSeq.current) setError(String(err && err.message ? err.message : err));
+        })
+        .finally(() => {
+          if (requestId === requestSeq.current) setLoading(false);
+        });
     }
 
     useEffect(() => {
@@ -577,6 +673,7 @@
       el(Hero, { health, score, loading, onRefresh: load }),
       error ? el("div", { className: "olympus-error" }, error) : null,
       el(AgentHQ, { hq: tuning.agent_hq }),
+      el(PerformanceTracking, { performance: data && data.performance, diagnostics: data && data.diagnostics, clientDiagnostics }),
       el(SkillCoverage, { coverage: data && data.skill_coverage }),
       el(ProfileFitness, { fitness: data && data.profile_fitness }),
       el(PartyView, { party: data && data.party, orchestration: data && data.orchestration, events: data && data.activity_events }),

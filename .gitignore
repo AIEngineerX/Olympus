@@ -47,6 +47,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+test-results/
+playwright-report/
+.impeccable/live/sessions/
 
 # Install-script backups (scripts/install-dashboard-link.sh)
 *.backup.*

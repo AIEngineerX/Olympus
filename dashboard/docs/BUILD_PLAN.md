@@ -16,7 +16,7 @@ Olympus stays read-only until a control has a clear side-effect contract.
 Backend: `plugin_api.py`
 
 - reads Hermes profile, cron, session, gateway, log, and Kanban metadata
-- computes health, attention, tuning recommendations, score deductions, and Agent HQ opportunities
+- computes health, attention, tuning recommendations, score deductions, and Agent HQ tuning items
 - redacts secrets and hides local labels by default
 
 Frontend: `dist/index.js` and `dist/style.css`

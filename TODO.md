@@ -16,6 +16,12 @@
 
 Complete each item in order and test before starting the next.
 
+0. Production QA Gate
+   - Keep `npm run verify`, `npm run test:visual`, and `npm run test:live` passing.
+   - Maintain fixture states for noisy, healthy, empty, overloaded, stale/blocked, high-cost, and hidden-label systems.
+   - Track production gaps in `dashboard/docs/PRODUCTION_READINESS.md`.
+   - Done when CI runs static checks and visual smoke on every PR.
+
 1. Skill Coverage
    - Show profile skill counts, forced-skill Kanban work, and missing-skill risk.
    - Recommend skill bundles when repeated work patterns appear.
@@ -46,9 +52,9 @@ Complete each item in order and test before starting the next.
 Run after each implemented item:
 
 ```bash
-python3 -m py_compile dashboard/plugin_api.py
-node --check dashboard/dist/index.js
-git diff --check
+npm run verify
+npm run test:visual
+npm run test:live
 ```
 
 Then verify the live dashboard:
@@ -59,16 +65,15 @@ Then verify the live dashboard:
 - Links go to Hermes-owned pages.
 - Local names and paths stay hidden unless `OLYMPUS_EXPOSE_LOCAL_LABELS=1`.
 
-## Verification
-
-```bash
-python3 -m py_compile dashboard/plugin_api.py
-node --check dashboard/dist/index.js
-git diff --check
-```
-
 Browser check:
 
 ```text
 http://127.0.0.1:9119/olympus
+```
+
+Visual fixture:
+
+```bash
+npm run test:visual
+npm run test:live
 ```

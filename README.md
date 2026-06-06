@@ -28,7 +28,8 @@ owns vs. what Hermes owns).
 
 - A working [HermesOS / Hermes Agent](https://github.com/NousResearch/hermes-agent) install (`$HERMES_HOME`, default `~/.hermes`).
 - Python 3.10+ (the backend is a FastAPI router loaded by Hermes).
-- Node.js (only for the `node --check` verification step; there is no build step).
+- Node.js/npm for verification and Playwright-based visual smoke tests. There is
+  still no frontend build step; `dashboard/dist/*` is hand-authored.
 
 ## Install (local Hermes)
 
@@ -90,8 +91,15 @@ See [`SECURITY.md`](SECURITY.md) for the full security and privacy posture.
 │   ├── dist/index.js            # hand-authored frontend (registered with the Hermes plugin SDK)
 │   ├── dist/style.css           # olympus-* styles
 │   ├── docs/BUILD_PLAN.md       # implementation plan
+│   ├── docs/PRODUCTION_READINESS.md
+│   ├── docs/VIEWPORT_STRATEGY.md
+│   ├── docs/FRONTEND_SKILL_RESEARCH.md
 │   └── README.md                # package notes
 ├── scripts/install-dashboard-link.sh
+├── scripts/olympus-live-smoke.mjs
+├── tests/visual/                 # Playwright fixture checks
+├── tests/fixtures/                # Olympus browser fixtures
+├── package.json                   # verification scripts
 ├── OLYMPUS_GOAL.md              # product boundary
 ├── TODO.md                      # active backlog
 ├── SECURITY.md                  # security and privacy notes
@@ -106,10 +114,37 @@ build step. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflo
 ## Verify
 
 ```bash
-python3 -m py_compile dashboard/plugin_api.py
-node --check dashboard/dist/index.js
-git diff --check
+npm run verify
+npm run test:visual
+npm run test:live
 ```
+
+`npm run test:visual` uses a fixture-backed Playwright harness. It loads the
+hand-authored dashboard assets directly, checks desktop/mobile readability across
+multiple fixture states, validates link destinations, verifies empty evidence
+sections stay hidden, and catches private-label leaks in the no-labels scenario.
+
+`npm run test:live` checks the real Hermes dashboard route at
+`http://127.0.0.1:9119/olympus`. It starts Hermes when needed, verifies
+desktop/mobile rendering, and fails on console errors, overflow, tiny labels,
+bad links, SVG text, or missing Production Diagnostics.
+
+The live smoke runner reuses an existing Hermes dashboard only when the served
+HTML includes the Hermes session token. If it needs to start Hermes and your
+`$HERMES_HOME/plugins/olympus/dashboard` target already points somewhere else,
+set `OLYMPUS_SMOKE_RELINK=1` before running the smoke command.
+
+## Quality Gates
+
+- API responses redact session IDs, private labels, paths, and secrets unless
+  `OLYMPUS_EXPOSE_LOCAL_LABELS=1` is explicitly set.
+- Agent View uses HTML text and accessible buttons rather than SVG text or an
+  image-role wrapper.
+- Frontend refreshes ignore stale `/overview` responses so an older request
+  cannot overwrite newer data.
+- Attention items are sorted by severity before truncation.
+- Gateway configuration detection parses `.env` variable names only; values are
+  not scanned or returned.
 
 ## Contributing
 
@@ -126,6 +161,8 @@ posture and how to report.
 
 - [HermesOS / Hermes Agent](https://github.com/NousResearch/hermes-agent)
 - [HermesOS documentation](https://hermes-agent.nousresearch.com/docs)
+- [`dashboard/docs/PRODUCTION_READINESS.md`](dashboard/docs/PRODUCTION_READINESS.md)
+- [`dashboard/docs/VIEWPORT_STRATEGY.md`](dashboard/docs/VIEWPORT_STRATEGY.md)
 
 ## License
 

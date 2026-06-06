@@ -1,0 +1,6 @@
+{
+  "files": ["tests/fixtures/olympus-fixture.html"],
+  "insertBefore": "</body>",
+  "commentSyntax": "html",
+  "cspChecked": true
+}
