@@ -1,6 +1,6 @@
 # Olympus
 
-Olympus is a read-only [HermesOS](https://github.com/NousResearch/hermes-agent) dashboard plugin for agent tuning.
+Olympus is a read-only [HermesOS](https://github.com/NousResearch/hermes-agent) Agent Monitor for operational tuning.
 
 It reads local Hermes runtime state and shows what to tune next across profiles,
 routes, skills, sessions, cron, gateways, Kanban work, and runtime health. It
@@ -23,6 +23,7 @@ owns vs. what Hermes owns).
 
 - Create or move Kanban tasks, or spawn workers.
 - Edit profiles, cron, gateways, routes, memory, MCP, keys, or config.
+- Rebuild Hermes Usage/Analytics for token, model, session, or spend totals.
 - Show secrets, or expose local labels/paths unless explicitly enabled.
 
 ## Requirements
@@ -65,6 +66,18 @@ Then open:
 http://127.0.0.1:9119/olympus
 ```
 
+## Hermes Desktop
+
+Hermes Desktop owns chat, agents, profiles, skills, sessions, cron, settings,
+and Command Center Usage. Olympus is the read-only operations monitor beside
+those controls. It should show risk and evidence, then link to the Hermes page
+that owns the fix.
+
+Today Olympus is verified through the Hermes web dashboard at `/olympus`.
+Desktop visibility requires Hermes Desktop plugin-tab parity for dashboard
+plugins. See
+[`dashboard/docs/HERMES_DESKTOP_INTEGRATION.md`](dashboard/docs/HERMES_DESKTOP_INTEGRATION.md).
+
 ## API
 
 Hermes mounts Olympus at `/api/plugins/olympus/`:
@@ -99,6 +112,7 @@ See [`SECURITY.md`](SECURITY.md) for the full security and privacy posture.
 │   ├── dist/index.js            # hand-authored SDK React frontend
 │   ├── dist/style.css           # olympus-* styles
 │   ├── docs/BUILD_PLAN.md       # implementation plan
+│   ├── docs/HERMES_DESKTOP_INTEGRATION.md
 │   ├── docs/PRODUCTION_READINESS.md
 │   ├── docs/VIEWPORT_STRATEGY.md
 │   ├── docs/FRONTEND_SKILL_RESEARCH.md

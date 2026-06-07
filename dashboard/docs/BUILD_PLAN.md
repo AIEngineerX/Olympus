@@ -2,30 +2,30 @@
 
 ## Goal
 
-Build a HermesOS Agent HQ dashboard that answers:
+Build a HermesOS Agent Monitor dashboard that answers:
 
 - what needs attention
 - which agent/profile owns it
 - what evidence supports the finding
 - what Hermes page owns the next action
 
-Olympus stays read-only until a control has a clear side-effect contract.
+Olympus remains read-only until a write action has an approved side-effect contract.
 
 ## Current Build
 
 Backend: `plugin_api.py`
 
 - reads Hermes profile, cron, session, gateway, log, and Kanban metadata
-- computes health, attention, tuning recommendations, score deductions, Agent HQ tuning items, and skill hygiene signals
+- computes health, attention, tuning recommendations, score deductions, Agent Monitor tuning items, and skill hygiene signals
 - computes safe config policy, browser privacy, fallback, toolset, and auxiliary cost visibility signals
 - redacts secrets and hides local labels by default
 - returns an Evidence Sources contract for the Hermes stores and safe fields used in each scan
 
 Frontend: `dist/index.js` and `dist/style.css`
 
-- renders the score explanation, Agent HQ, tuning queue, Pantheon, conditional Kanban intelligence, and activity events
+- renders the score explanation, Agent Monitor, tuning queue, Pantheon, conditional Kanban intelligence, and activity events
 - renders Evidence Sources inside Performance Tracking so operators can see the first-party source basis for each scan
-- renders Tool Policy & Aux Cost from safe Hermes config fields and session cost metadata
+- renders Tool Policy & Aux Cost from safe Hermes config fields and session cost-visibility metadata
 - renders Skill Hygiene from local skill usage and hub provenance metadata
 - links actions to existing Hermes pages
 - avoids duplicating Kanban, Sessions, Cron, Profiles, Logs, Models, Config, Keys, MCP, or Memory admin surfaces
@@ -33,10 +33,15 @@ Frontend: `dist/index.js` and `dist/style.css`
 ## Hermes Dashboard Finding
 
 Hermes Dashboard already manages agents, profiles, skills, sessions, cron,
-models, gateways, logs, Kanban, and plugin pages. Olympus should not rebuild
+models, gateways, logs, Kanban, and plugin pages. Olympus does not rebuild
 those controls.
 
-Olympus should add the missing tuning layer:
+Hermes Desktop also has Command Center Usage. It shows sessions, API calls,
+input/output tokens, daily token bars, top models, top skills, and cost. Olympus
+must not become a second Usage page. It may use usage evidence only to flag
+operator risk and link to Hermes Usage/Analytics for the ledger.
+
+Olympus adds the missing tuning layer:
 
 - Which profile is weak, overloaded, or underconfigured?
 - Which skill coverage gap is causing repeated tool use or slow work?
@@ -103,19 +108,16 @@ Frontend:
 - Shipped: Kanban Intelligence summarizes open, ready, running, blocked, review,
   active workers, stale workers, failed runs, assignee load, and attention
   items from Hermes Kanban evidence.
-- Remaining: Trace Spine V0 should correlate Kanban `session_id`, `task_runs`,
+- Remaining: Trace Spine V0 correlates Kanban `session_id`, `task_runs`,
   task events, and Hermes sessions, then summarize tool sequences and failure
   points without transcript content.
-- Keep action buttons as handoff links unless a write action is explicitly approved.
+- Keep action buttons as handoff links until a write action is approved.
 
 ### 4. Pantheon V2 Visual Restoration (shipped)
 
-- Restores the Pantheon identity as a real operational control, not a decorative
-  diagram.
-- Impeccable product-UI gate was run against the live `/olympus` surface. The
-  repo-local helper was missing, so the installed Impeccable skill, product
-  register, this build plan, `VIEWPORT_STRATEGY.md`, existing CSS, and live
-  browser screenshots were used.
+- Restores Pantheon as an operational control, not a decorative diagram.
+- Impeccable product-UI review covered the live `/olympus` surface, product
+  register, build plan, `VIEWPORT_STRATEGY.md`, CSS, and browser screenshots.
 - Uses current `/overview` evidence: profiles, trigger lanes, workload, profile
   state, selected profile details, orchestration summary, and activity events.
 - Keeps agent nodes as accessible HTML buttons with selected state and visible
@@ -149,6 +151,15 @@ Frontend:
 - Does not return prompt text, personality text, base URLs, API keys, env
   values, provider secrets, local paths, or exact route labels by default.
 
+### 7. Hermes Desktop Plugin Parity (planned)
+
+- Keep Olympus Dashboard-first until Desktop exposes dashboard plugin tabs.
+- Prepare an upstream Hermes Desktop PR that reads dashboard plugin manifests,
+  shows plugin nav entries, and hosts plugin pages safely.
+- Do not duplicate Desktop Command Center Usage. Link to Hermes Usage/Analytics
+  for token, model, session, and cost totals.
+- Add a Desktop preflight gate before opening the upstream PR.
+
 ## Bug-Test Gate
 
 Run after each implemented item:
@@ -177,4 +188,4 @@ An operator can open `/olympus` and answer:
 3. What is stale or blocked?
 4. Which profile owns the issue?
 5. What evidence backs the finding?
-6. Where should I go to fix it?
+6. Where do I go to fix it?

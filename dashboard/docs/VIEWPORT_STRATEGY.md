@@ -1,21 +1,20 @@
 # Pantheon and Skill Suggestion Strategy
 
-Pantheon exists to clarify live operational state. It should not be a
-decorative diagram.
+Pantheon exists to clarify live operational state, not decorate the page.
 
 ## Pantheon Control
 
-An operator should be able to answer these in one scan:
+An operator can answer these in one scan:
 
 1. Which profiles are working, idle, blocked, or risky?
 2. Which trigger lanes are feeding work: Kanban, Cron, Gateway?
 3. Where is work concentrated?
-4. Which profile should I inspect first?
+4. Which profile needs inspection first?
 5. What Hermes page owns the fix?
 
-The visual should use readable text, stable controls, and clear risk hierarchy. Avoid
-SVG text that scales down with the viewport. If a graph is used, labels should be
-HTML or otherwise sized independently from the graphic.
+Use readable text, stable controls, and clear risk hierarchy. Avoid SVG labels
+that shrink with the viewport. If a graph is used, labels must be HTML or sized
+independently from the graphic.
 
 ## Pantheon V2 Shipped Direction
 
@@ -24,10 +23,8 @@ constellation proved the direction, then got removed during hardening because
 SVG text and image-role wrapping made viewport and accessibility guarantees
 fragile.
 
-The Impeccable product-UI pass was run against the live `/olympus` page. The
-repo-local helper was unavailable, so the implementation used the installed
-Impeccable skill, product register, existing CSS, this document, and live
-browser screenshots.
+The Impeccable product-UI pass covered the live `/olympus` page, product
+register, existing CSS, this document, and browser screenshots.
 
 Pantheon v2 rules:
 
@@ -36,10 +33,10 @@ Pantheon v2 rules:
 - Labels are HTML text, not SVG text.
 - The visual map uses CSS layout and positioned buttons; interaction stays in
   accessible HTML controls.
-- Desktop should show the visual map and selected profile inspector together.
-- Mid-width in-app browser views should compress to a compact map or node grid,
+- Desktop shows the visual map and selected profile inspector together.
+- Mid-width in-app browser views compress to a compact map or node grid,
   with the profile buttons visible at the top of Pantheon.
-- Mobile should stack deliberately with no horizontal overflow and no tiny text.
+- Mobile stacks with no horizontal overflow and no tiny text.
 
 ## Current Rules
 
@@ -53,12 +50,12 @@ Pantheon is a command-style operational surface:
 - Mobile stacks the view rather than shrinking the whole graphic.
 - Profile controls are real buttons with selected state exposed through ARIA.
   Do not wrap interactive Pantheon content in `role="img"`.
-- Empty evidence sections stay hidden; do not render filler panels just to keep a
+- Empty evidence sections stay hidden; do not render filler panels to keep a
   layout shape.
 
 ## Better Skill Suggestions
 
-Skill suggestions should be ranked by observed repeatability, not guesses:
+Rank skill suggestions by observed repeatability:
 
 | Signal | Suggestion |
 | --- | --- |
@@ -94,10 +91,10 @@ Current backend shape:
 }
 ```
 
-Next skill-hygiene work should add read-only curator and hub evidence: local
+Next skill-hygiene work adds read-only curator and hub evidence: local
 usage/provenance, hub install scan verdicts, trust level, and any stored
-skills.sh security audit status. Olympus should report those signals and link
-to Hermes Skills or Curator surfaces; it should not install, scan, archive, or
+skills.sh security audit status. Olympus reports those signals and links
+to Hermes Skills or Curator surfaces; it does not install, scan, archive, or
 mutate skills in v1.
 
 ## Performance Tracking

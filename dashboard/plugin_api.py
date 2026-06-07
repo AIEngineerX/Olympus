@@ -41,10 +41,10 @@ TOOL_HEAVY_THRESHOLD = 20
 LONG_THREAD_THRESHOLD = 40
 OVERLOADED_OPEN_THRESHOLD = 5
 OVERLOADED_RUNNING_THRESHOLD = 2
-CONTEXT_PRESSURE_TOKENS = 50000   # large per-call context worth surfacing for review
-RUNAWAY_TOOLS_THRESHOLD = 40      # tool calls in one run that suggest looping/thrash
-EXPENSIVE_RUN_USD = 1.0           # single-run cost worth surfacing as a tuning signal
-MAX_TURNS_REVIEW_THRESHOLD = 80   # high enough to require a visible loop guardrail
+CONTEXT_PRESSURE_TOKENS = 50000
+RUNAWAY_TOOLS_THRESHOLD = 40
+EXPENSIVE_RUN_USD = 1.0
+MAX_TURNS_REVIEW_THRESHOLD = 80
 API_RESPONSE_BUDGET_MS = 750.0
 PAYLOAD_BUDGET_BYTES = 250_000
 CLIENT_RENDER_BUDGET_MS = 150.0
@@ -535,7 +535,7 @@ def build_skill_hygiene(skill_metadata: Dict[str, Any], skill_coverage: Dict[str
             detail,
             evidence,
             view,
-            "Open Skills" if view == "/skills" else "Open Hermes view",
+            _action_label_for_view(view),
             "Apollo",
             basis,
         ))
@@ -579,7 +579,7 @@ def build_skill_hygiene(skill_metadata: Dict[str, Any], skill_coverage: Dict[str
         add_signal(
             "info",
             "Recently changed skills need review",
-            "Frequently patched skills should be reviewed before treating their recommendations as stable operating procedure.",
+            "Review frequently patched skills before treating their recommendations as stable procedure.",
             ", ".join(f"{item.get('label')}: {item.get('patch_count')} patches" for item in frequently_patched[:3]),
         )
 
@@ -588,7 +588,7 @@ def build_skill_hygiene(skill_metadata: Dict[str, Any], skill_coverage: Dict[str
         add_signal(
             "warning",
             "Hub skills are missing trust or scan metadata",
-            "Hub-installed skills should show trust and scan evidence when Hermes has recorded it locally.",
+            "Hub-installed skills need trust and scan evidence when Hermes has recorded it locally.",
             ", ".join(str(item.get("label")) for item in hub_missing[:3]),
         )
 
@@ -1106,15 +1106,7 @@ def _process_cmdline(pid: int) -> Optional[str]:
 
 
 def gateway_process_state(profile_home: Path) -> str:
-    """Gateway liveness for a profile, keyed on Hermes' per-profile ``gateway.pid``.
-
-    Prefers Hermes' own authoritative check (``gateway.status.get_running_pid``),
-    which validates the runtime lock, process start time, and cmdline -- so a
-    recycled PID is not mistaken for a live gateway. Falls back to a defensive
-    PID-file read that still guards against PID reuse by confirming the live
-    process actually looks like a gateway. Works for the default profile and on
-    Windows, which a pgrep scan cannot.
-    """
+    """Gateway liveness for a profile using Hermes' `gateway.pid` contract."""
     pid_path = profile_home / "gateway.pid"
     if not pid_path.exists():
         return "stopped"
@@ -1143,7 +1135,7 @@ def gateway_process_state(profile_home: Path) -> str:
         return "stopped"
     if alive is None:
         return "unknown"
-    # Alive: guard against a recycled PID by confirming the process is a gateway.
+    # Avoid treating a recycled PID as a gateway.
     cmdline = _process_cmdline(pid)
     if cmdline is not None:
         return "running" if "gateway" in cmdline else "stopped"
@@ -1295,9 +1287,8 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
         output_tokens = int(row_value(r, "output_tokens", 0) or 0)
         reasoning_tokens = int(row_value(r, "reasoning_tokens", 0) or 0)
         api_calls = int(row_value(r, "api_call_count", 0) or 0)
-        # input_tokens is the cumulative session total; the average per API call
-        # estimates the typical context-window size, which is the real
-        # context-pressure signal (cumulative alone over-counts chatty sessions).
+        # Average per API call is the context-pressure signal; cumulative tokens
+        # over-count chatty sessions.
         avg_input_tokens = int(input_tokens / api_calls) if api_calls > 0 else 0
         actual_cost = row_value(r, "actual_cost_usd")
         estimated_cost = row_value(r, "estimated_cost_usd")
@@ -1335,7 +1326,7 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
 
 
 def collect_gateways(profiles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    # Markers are the real env vars Hermes reads (see hermes-agent gateway/config.py).
+    # Match Hermes gateway env markers.
     platform_markers = {
         "telegram": ["TELEGRAM_BOT_TOKEN"],
         "discord": ["DISCORD_BOT_TOKEN"],
@@ -1360,7 +1351,7 @@ def collect_gateways(profiles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         configured_keys = env_keys(home / ".env")
         gateway_state = prof.get("gateway_state") or "unknown"
         for platform, markers in platform_markers.items():
-            # Hermes accepts both a top-level `<platform>:` block and `platforms.<platform>:`.
+            # Hermes accepts top-level and `platforms.<platform>` config.
             pdata = cfg.get(platform)
             if not isinstance(pdata, dict):
                 pdata = platforms_block.get(platform)
@@ -1647,7 +1638,7 @@ def collect_health(profiles: List[Dict[str, Any]], cron: List[Dict[str, Any]]) -
     agent_log = logs_dir / "agent.log"
     gateway_log = logs_dir / "gateway.log"
     error_log = logs_dir / "errors.log"
-    # agent.log is written on every run; gateway.log only exists once the gateway runs.
+    # agent.log always exists; gateway.log appears after gateway startup.
     log_tail = "\n".join(
         read_text(p, 8000) for p in (agent_log, gateway_log, error_log) if p.exists()
     ).lower()
@@ -1710,6 +1701,19 @@ def build_attention(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any
 
 def _severity_rank(value: str) -> int:
     return {"critical": 0, "error": 1, "warning": 2, "info": 3, "ok": 4}.get(value, 3)
+
+
+def _action_label_for_view(view: str) -> str:
+    return {
+        "/analytics": "Open Analytics",
+        "/config": "Open Config",
+        "/cron": "Open Cron",
+        "/kanban": "Open Kanban",
+        "/logs": "Open Logs",
+        "/profiles": "Open Profiles",
+        "/sessions": "Open Sessions",
+        "/skills": "Open Skills",
+    }.get(view, "Open Route")
 
 
 def _recommendation(severity: str, title: str, detail: str, evidence: str, view: str, owner: str, action: str, basis: str = "") -> Dict[str, Any]:
@@ -1888,7 +1892,7 @@ def build_performance_tracking(sessions: List[Dict[str, Any]], kanban: Optional[
     tool_state = "warning" if looping or tool_heavy else ("active" if metrics.get("total_tool_calls") else "idle")
     context_state = "warning" if context_pressure else ("active" if metrics.get("avg_tokens_per_call") else "idle")
     reliability_state = "warning" if failed_runs or stale_sessions or errored_sessions else ("ok" if sessions or kanban.get("open") else "unknown")
-    cost_state = "warning" if expensive_sessions else ("active" if total_cost > 0 else "unknown")
+    cost_state = "warning" if expensive_sessions else ("ok" if sessions else "unknown")
 
     lanes = [
         {
@@ -1929,13 +1933,12 @@ def build_performance_tracking(sessions: List[Dict[str, Any]], kanban: Optional[
             "recommended_view": "/kanban" if failed_runs else "/sessions",
         },
         {
-            "id": "cost",
-            "label": "Cost",
-            "value": total_cost,
-            "unit": "usd",
+            "id": "cost_risk",
+            "label": "Cost Risk",
+            "value": expensive_sessions,
             "state": cost_state,
-            "detail": f"{expensive_sessions} expensive session(s)" if total_cost else "cost data unavailable or zero",
-            "source": "Hermes estimated/actual_cost_usd",
+            "detail": f"{expensive_sessions} session(s) over ${EXPENSIVE_RUN_USD:.2f}" if sessions else "no session cost evidence",
+            "source": "Hermes per-session cost fields; Usage/Analytics owns totals",
             "recommended_view": "/analytics",
         },
     ]
@@ -2053,9 +2056,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
     cron_by_profile = group_cron_by_profile(cron)
 
     tool_heavy = [s for s in sessions if int(s.get("tool_call_count") or 0) >= TOOL_HEAVY_THRESHOLD]
-    # The >= RUNAWAY_TOOLS_THRESHOLD band is owned by the looping detector in
-    # detect_friction; keep only the moderate band here so the queue never shows
-    # two overlapping cards for the same session.
+    # Runaway sessions are handled by detect_friction to avoid duplicate cards.
     _looping_ids = {s.get("id") for s in sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD}
     tool_heavy = [s for s in tool_heavy if s.get("id") not in _looping_ids]
     message_heavy = [s for s in sessions if int(s.get("message_count") or 0) >= LONG_THREAD_THRESHOLD]
@@ -2149,7 +2150,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "agent",
             "warning",
             "Consider a specialist agent or route split",
-            "One profile owns enough open or running work to justify a route split.",
+            "One profile owns enough open or running work to need route review.",
             ", ".join(f"{a.get('label')}: {a['kanban']['open']} open" for a in overloaded[:4]),
             "/profiles",
             "Open Profiles",
@@ -2226,7 +2227,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
         tuning_items.append(_tuning_item(
             "operations",
             "warning",
-            "Resolve stale sessions so the HQ view reflects reality",
+            "Resolve stale sessions so the monitor reflects reality",
             "Stale work makes tuning noisy. Close, resume, or annotate it.",
             ", ".join(str(s.get("label") or s.get("session_id")) for s in stale_sessions[:3]),
             "/sessions",
@@ -2349,7 +2350,7 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
             "skill",
             "info",
             "Turn repeated tool-heavy work into a reusable skill",
-            "Moderate tool pressure often means the agent is rediscovering a procedure that should be written once.",
+            "Moderate tool pressure often means the agent is rediscovering a procedure worth writing once.",
             ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in tool_heavy[:3]),
             "/skills",
             "Open Skills",
@@ -2388,7 +2389,7 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
             "skill",
             "ok",
             "Kanban is using explicit skills",
-            "Some tasks already declare forced skills. Keep this pattern for work that should run with repeatable procedure.",
+            "Some tasks already declare forced skills. Keep this pattern for work that needs repeatable procedure.",
             ", ".join(str(t.get("title") or t.get("id")) for t in forced_skill_tasks[:4]),
             "/kanban",
             "Open Kanban",

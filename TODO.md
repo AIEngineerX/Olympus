@@ -1,25 +1,15 @@
 # Olympus TODO
 
-## Done
+## Shipped
 
 - Grounded Olympus in Hermes dashboard/plugin reality.
-- Removed old office/product-clone framing.
-- Packaged Olympus as a Hermes dashboard plugin.
-- Added read-only `/health`, `/overview`, and `/tuning` routes.
-- Added Agent HQ, Pantheon, tuning queue, score breakdown, Kanban intelligence, and activity events.
-- Added Skill Coverage from profile skill counts, forced-skill Kanban work, session tool pressure, long threads, and context pressure.
-- Added Profile Fitness scoring from workload, route metadata, gateway state, skill count, cron load, blocked work, failed runs, and stale workers.
-- Added Evidence Sources so each scan shows which Hermes stores, metadata files, and safe fields grounded the result.
-- Added Skill Hygiene from Hermes skill usage metadata and hub lock provenance, including stale/archive/patch counts and trust/scan gaps.
-- Restored Pantheon as a clickable profile map with accessible HTML controls and selected-profile details.
-- Added Tool Policy & Aux Cost from safe Hermes config structure, route-audit presence, browser privacy flags, and session cost visibility.
-- Added a live security smoke test for `/overview` payload redaction.
+- Packaged Olympus as a read-only Hermes dashboard plugin with `/health`, `/overview`, and `/tuning`.
+- Added Agent Monitor, readiness score, tuning queue, Evidence Sources, Performance Tracking, Pantheon, Kanban Intelligence, Skill Coverage, Skill Hygiene, Profile Fitness, Tool Policy, and Aux Cost.
+- Redacted local labels, paths, raw IDs, prompt text, and secret-like values by default.
+- Added visual, live, and security smoke gates.
 - Kept actions as links to Hermes-owned pages.
-- Added privacy defaults for local labels, private paths, route labels, and secrets.
-- Kept copy model/provider agnostic and HermesOS-native.
-- Confirmed the Hermes Dashboard already owns agent, profile, skill, cron, session, model, and gateway management.
 
-## Remaining Phases
+## Phase Ledger
 
 Complete each item in order and test before starting the next.
 
@@ -29,25 +19,25 @@ Complete each item in order and test before starting the next.
    - Track production gaps in `dashboard/docs/PRODUCTION_READINESS.md`.
    - Static checks and fixture visual smoke now run in CI; live Hermes smoke remains a local release gate.
 
-1. Kanban Worker Inspector
-   - Correlate Kanban `session_id`, `task_runs`, worker heartbeat, retry, stale, and model override data.
-   - Show stuck or risky work only when there is real evidence.
-   - Link to Hermes Kanban and Sessions.
-   - Remaining: add dispatcher/orchestration settings evidence and deeper task-to-session correlation.
+1. Kanban Worker Inspector (partial)
+   - Shipped: board pressure, blocked work, active workers, stale workers, failed runs, and assignee load.
+   - Remaining: dispatcher/orchestration settings evidence and task-to-session correlation.
 
-2. Curator and Skill Hygiene
-   - Shipped v0: read Hermes skill usage/provenance and hub install metadata.
-   - Shipped v0: surface unused, heavily used, stale, archived, or recently changed skills if the evidence exists locally.
-   - Shipped v0: surface hub trust level and install scan verdict gaps.
-   - Remaining: surface stored skills.sh security audit status when Hermes records it.
-   - Keep the panel read-only and link to Hermes Skills or Curator surfaces.
+2. Curator and Skill Hygiene (partial)
+   - Shipped: usage/provenance, stale/archive/patch counts, hub trust, and scan gaps.
+   - Remaining: stored skills.sh audit status when Hermes records it, plus a Curator route when Hermes exposes one.
 
-3. Trace Spine
+3. Hermes Desktop Integration (next)
+   - Add a Desktop preflight script in this repo.
+   - Prepare an upstream Hermes Desktop PR for dashboard plugin-tab parity.
+   - Keep Olympus read-only and avoid duplicating Desktop Command Center Usage.
+   - Fallback: document browser-dashboard access if Desktop plugin parity is not accepted.
+
+4. Trace Spine
    - Correlate sessions, messages, Kanban tasks, task runs, and task events.
    - Show tool sequence summaries and failure points without transcript content.
-   - This is the next implementation phase after the current docs sweep.
 
-4. Deterministic Eval Signals
+5. Deterministic Eval Signals
    - Add local reliability, efficiency, routing, and skill-use eval signals.
    - Keep them labeled as operational evals, not answer-quality judgments.
 

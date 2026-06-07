@@ -39,6 +39,21 @@
     return path.startsWith("/") ? path : "/" + path;
   }
 
+  function routeLabel(path) {
+    const route = routeLink(path);
+    const labels = {
+      "/analytics": "Open Analytics",
+      "/config": "Open Config",
+      "/cron": "Open Cron",
+      "/kanban": "Open Kanban",
+      "/logs": "Open Logs",
+      "/profiles": "Open Profiles",
+      "/sessions": "Open Sessions",
+      "/skills": "Open Skills"
+    };
+    return labels[route] || "Open Route";
+  }
+
   function formatCount(value) {
     const n = Number(value || 0);
     return n.toLocaleString();
@@ -70,9 +85,9 @@
     const statusLabel = health.status_label || status;
     return el("section", { className: "olympus-hero" },
       el("div", { className: "olympus-hero-copy" },
-        el("div", { className: "olympus-kicker" }, "HermesOS Agent HQ"),
+        el("div", { className: "olympus-kicker" }, "HermesOS Agent Monitor"),
         el("h1", null, "Olympus"),
-        el("p", null, "Read-only Hermes operations: runtime health, workload, tool pressure, context pressure, and the next tuning action."),
+        el("p", null, "Live read-only view of agent health, workload, tool pressure, context pressure, and the next action owner."),
         el("div", { className: "olympus-hero-actions" },
           el(StatePill, { state: status, label: statusLabel }),
           el(Button, { className: "olympus-refresh", onClick: onRefresh, disabled: loading }, loading ? "Refreshing" : "Refresh")
@@ -147,7 +162,7 @@
     const metrics = data.metrics || {};
     const agents = asList(data.agents);
     const tuningItems = asList(data.opportunities);
-    const cost = Number(summary.total_cost_usd || 0);
+    const costRisks = Number(summary.expensive_sessions || metrics.expensive_sessions || 0);
     const failedRuns = Number(metrics.failed_kanban_runs || 0);
     const medianDuration = Number(metrics.median_duration_seconds || 0);
     const p90Duration = Number(metrics.p90_duration_seconds || 0);
@@ -156,19 +171,18 @@
       { label: "Tuning Items", value: summary.opportunities || tuningItems.length || 0, state: tuningItems.length ? "warning" : "ok" },
       { label: "Median Speed", value: formatDuration(medianDuration), state: medianDuration > 900 ? "warning" : medianDuration ? "active" : "idle" },
       { label: "P90 Speed", value: formatDuration(p90Duration), state: p90Duration > 1800 ? "warning" : p90Duration ? "active" : "idle" },
-      { label: "Token Volume", value: formatCount(summary.total_tokens || metrics.total_tokens), state: (summary.total_tokens || metrics.total_tokens) ? "active" : "idle" },
       { label: "Tool Calls", value: formatCount(metrics.total_tool_calls), state: metrics.total_tool_calls ? "active" : "idle" },
       { label: "Looping", value: summary.looping_sessions || 0, state: summary.looping_sessions ? "warning" : "ok" },
       { label: "Context Pressure", value: summary.context_pressure_sessions || 0, state: summary.context_pressure_sessions ? "warning" : "ok" },
       { label: "Outcome Risks", value: failedRuns || 0, state: failedRuns ? "warning" : "ok" },
-      { label: "Spend", value: formatMoney(cost), state: cost > 0 ? "active" : "unknown" },
+      { label: "Cost Risks", value: costRisks, state: costRisks ? "warning" : "ok" },
     ];
 
     return el("section", { className: "olympus-section olympus-agent-hq" },
       el("div", { className: "olympus-section-head" },
         el("div", null,
-          el("h2", null, "Agent HQ"),
-          el("p", null, "Runtime evidence across speed, tokens, tool use, context pressure, reliability, and the next tuning action.")
+          el("h2", null, "Agent Monitor"),
+          el("p", null, "Profiles, sessions, Kanban work, tool pressure, context risk, and reliability in one operational scan.")
         )
       ),
       el("div", { className: "olympus-hq-tiles" },
@@ -196,7 +210,7 @@
               item.threshold ? el("small", { className: "olympus-threshold" }, "Trigger: " + item.threshold) : null,
               item.basis ? el("small", { className: "olympus-basis" }, item.basis) : null
             ) : null,
-            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || "Open Hermes view") : null
+            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
           )) : el("p", { className: "olympus-muted" }, "No tuning items in this scan.")
         )
       )
@@ -222,7 +236,7 @@
       el("div", { className: "olympus-evidence-sources-head" },
         el("div", null,
           el("h3", null, "Evidence Sources"),
-          el("p", null, "Hermes evidence used for this scan, with privacy policy and read state.")
+          el("p", null, "Source health, safe fields, and redaction status for this scan.")
         ),
         el(StatePill, { state: summary.warnings ? "warning" : summary.missing ? "info" : "ok", label: [
           formatCount(summary.available || 0),
@@ -236,14 +250,14 @@
           el("div", { className: "olympus-evidence-source-title" },
             el("div", null,
               el("span", null, item.type || "source"),
-              el("strong", null, item.label || "Hermes evidence")
+              el("strong", null, item.label || "Evidence source")
             ),
             el(StatePill, { state: item.state || "unknown" })
           ),
           countLine(item.counts) ? el("small", null, countLine(item.counts)) : null,
           asList(item.fields).length ? el("em", null, asList(item.fields).slice(0, 4).join(" / ")) : null,
           item.redaction ? el("p", null, item.redaction) : null,
-          item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, "Open Hermes view") : null
+          item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, routeLabel(item.recommended_view)) : null
         ))
       )
     );
@@ -268,7 +282,7 @@
       el("div", { className: "olympus-section-head" },
         el("div", null,
           el("h2", null, "Performance Tracking"),
-          el("p", null, "Windowed speed, tool pressure, context, reliability, and cost signals from Hermes runtime evidence.")
+          el("p", null, "Latency, tool pressure, context risk, reliability, and diagnostic payloads from the latest scan.")
         ),
         el(StatePill, { state: summary.state || "unknown" })
       ),
@@ -281,7 +295,7 @@
           el("strong", null, laneValue(item)),
           el("p", null, item.detail || ""),
           item.source ? el("small", null, item.source) : null,
-          item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, "Open Hermes view") : null
+          item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, routeLabel(item.recommended_view)) : null
         ))
       ),
       signals.length ? el("div", { className: "olympus-performance-signals" },
@@ -340,7 +354,7 @@
       el("div", { className: "olympus-section-head" },
         el("div", null,
           el("h2", null, "Tool Policy & Aux Cost"),
-          el("p", null, "Read-only config policy, route audit, browser privacy, and background cost visibility from safe Hermes evidence.")
+          el("p", null, "Config limits, route audit, browser privacy, and background cost visibility.")
         ),
         el("div", { className: "olympus-section-actions" },
           el(StatePill, { state: summary.state || "unknown" }),
@@ -380,7 +394,7 @@
             item.evidence ? el("small", null, item.evidence) : null,
             item.threshold ? el("small", null, "Trigger: " + item.threshold) : null,
             item.basis ? el("small", null, item.basis) : null,
-            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || "Open Hermes view") : null
+            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
           )) : el("p", { className: "olympus-muted" }, "No config policy risks in this scan.")
         )
       )
@@ -430,7 +444,7 @@
             ),
             el("p", null, item.detail || ""),
             item.evidence ? el("small", null, item.evidence) : null,
-            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || "Open Hermes view") : null
+            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
           ))
         ),
         el("div", { className: "olympus-skill-pane" },
@@ -446,7 +460,7 @@
             ),
             el(StatePill, { state: profile.state || "unknown" }),
             el("p", null, profile.top_issue || "No current skill signal."),
-            profile.recommended_view ? el("a", { className: "olympus-link", href: routeLink(profile.recommended_view) }, "Open Hermes view") : null
+            profile.recommended_view ? el("a", { className: "olympus-link", href: routeLink(profile.recommended_view) }, routeLabel(profile.recommended_view)) : null
           ))
         )
       )
@@ -474,7 +488,7 @@
       el("div", { className: "olympus-section-head" },
         el("div", null,
           el("h2", null, "Skill Hygiene"),
-          el("p", null, "Read-only skill usage, archive, patch, hub trust, and scan signals from local Hermes metadata.")
+          el("p", null, "Activity, archive, patch, hub trust, and scan gaps from local skill metadata.")
         ),
         el("div", { className: "olympus-section-actions" },
           el(StatePill, { state: summary.state || "unknown" }),
@@ -501,11 +515,11 @@
             ),
             el("p", null, item.detail || ""),
             item.evidence ? el("small", null, item.evidence) : null,
-            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || "Open Hermes view") : null
+            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
           )) : el("p", { className: "olympus-muted" }, "No skill hygiene issues in this scan.")
         ),
         el("div", { className: "olympus-skill-hygiene-pane" },
-          el("h3", null, "Usage"),
+          el("h3", null, "Skill Activity"),
           usage.length ? usage.slice(0, 6).map((item) => el("div", { key: item.id || item.label, className: "olympus-mini-row" },
             el("span", null, item.label || "Skill"),
             el("small", null, [
@@ -586,7 +600,7 @@
                 [reason.label, reason.detail, reason.points ? "-" + String(reason.points) : null].filter(Boolean).join(" / ")
               ))
             ) : null,
-            profile.recommended_view ? el("a", { className: "olympus-link", href: routeLink(profile.recommended_view) }, "Open Hermes view") : null
+            profile.recommended_view ? el("a", { className: "olympus-link", href: routeLink(profile.recommended_view) }, routeLabel(profile.recommended_view)) : null
           );
         })
       )
@@ -639,7 +653,7 @@
       el("div", { className: "olympus-section-head" },
         el("div", null,
           el("h2", null, "Pantheon"),
-          el("p", null, "Clickable agent map for profiles, trigger lanes, workload, and risk from current Hermes evidence.")
+          el("p", null, "Clickable profile map for workload, trigger lanes, and current operational risk.")
         ),
         el("a", { className: "olympus-link", href: "/kanban" }, "Open Kanban")
       ),
@@ -680,7 +694,7 @@
           ) : el("p", { className: "olympus-muted" }, "No Hermes profiles detected."),
           el("div", { className: "olympus-viewport-head" },
             el("div", null,
-              el("span", null, "Live Pantheon"),
+              el("span", null, "Live Monitor"),
               el("h3", null, "Operational State")
             ),
             el("div", { className: "olympus-viewport-status" },
@@ -774,7 +788,7 @@
       el("div", { className: "olympus-section-head" },
         el("div", null,
           el("h2", null, "Kanban Intelligence"),
-          el("p", null, "Read-only orchestration health: board pressure, blocked work, worker activity, and assignee load.")
+          el("p", null, "Board pressure, blocked work, worker activity, and assignee load.")
         ),
         el("a", { className: "olympus-link", href: "/kanban" }, "Open Kanban")
       ),

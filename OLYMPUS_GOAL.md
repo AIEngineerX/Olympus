@@ -1,6 +1,6 @@
 # Olympus Goal
 
-Olympus is HermesOS Agent HQ.
+Olympus is the HermesOS Agent Monitor.
 
 It is not a new orchestrator, Kanban clone, or admin dashboard. Hermes runs the
 agents. Kanban coordinates durable work. The Hermes dashboard owns admin pages.
@@ -8,7 +8,7 @@ Olympus explains how the agent system is performing and what to tune next.
 
 ## Core Question
 
-What should I tune, route, unblock, or review so my HermesOS agents perform
+What needs tuning, routing, unblocking, or review so my HermesOS agents perform
 better?
 
 ## Own
@@ -26,6 +26,8 @@ better?
 - Kanban board mechanics, task creation, comments, drag/drop, or worker drawers.
 - Sessions, Analytics, Cron, Skills, Models, Logs, Profiles, Config, Keys, MCP,
   Webhooks, Memory, or System admin clones.
+- Usage ledgers, token charts, model spend totals, or raw cost reporting.
+  Hermes Desktop Command Center Usage and Hermes web Analytics own those views.
 - Profile CRUD, skill install/toggle, toolset editing, gateway start/stop, cron
   edit/trigger, or config mutation in v1.
 - Visual elements that do not clarify operational state.
@@ -46,8 +48,12 @@ better?
 
 If a feature mutates tasks, profiles, cron, gateway, memory, credentials, or
 config, first check whether an existing Hermes page or API owns it. If Hermes
-already owns it, Olympus should recommend, explain, and link rather than
+already owns it, Olympus recommends, explains, and links rather than
 duplicate the control.
+
+If a feature is mainly sessions, API calls, tokens, daily usage, top models, top
+skills, or cost totals, Hermes Usage/Analytics owns the ledger. Olympus may use
+that evidence only to explain risk, routing, skill hygiene, or the next action.
 
 ## Next Direction
 
