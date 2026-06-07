@@ -102,6 +102,44 @@ class PrivacyContractTest(unittest.TestCase):
             self.assertNotIn(raw_key, serialized)
         self.assertIn("run:", serialized)
         self.assertIn("pid:", serialized)
+        self.assertNotIn('"session_id"', serialized)
+        self.assertIn('"session_ref"', serialized)
+        self.assertIn("session:", serialized)
+
+    def test_session_ids_are_public_refs_when_local_labels_are_hidden(self):
+        db = self.home / "state.db"
+        con = sqlite3.connect(db)
+        now = int(time.time())
+        con.executescript(
+            """
+            CREATE TABLE sessions (
+              id TEXT, title TEXT, source TEXT, state TEXT, model TEXT,
+              started_at INTEGER, ended_at INTEGER, message_count INTEGER,
+              tool_call_count INTEGER, input_tokens INTEGER, output_tokens INTEGER,
+              reasoning_tokens INTEGER, api_call_count INTEGER,
+              actual_cost_usd REAL, estimated_cost_usd REAL, handoff_error TEXT,
+              handoff_platform TEXT
+            );
+            """
+        )
+        con.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "raw-session-id-123", "private title", "cli", "completed", "model",
+                now - 120, now - 60, 5, 4, 1200, 300, 0, 2, None, 0.01,
+                None, None,
+            ),
+        )
+        con.commit()
+        con.close()
+
+        payload = plugin_api.collect_sessions()
+        serialized = json.dumps(payload)
+
+        self.assertNotIn("raw-session-id-123", serialized)
+        self.assertNotIn('"session_id"', serialized)
+        self.assertIn('"session_ref"', serialized)
+        self.assertIn("session:", payload[0]["session_ref"])
 
     def test_log_tail_warnings_are_not_described_as_recent(self):
         logs = self.home / "logs"
