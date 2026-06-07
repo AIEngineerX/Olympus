@@ -153,7 +153,7 @@ async function collectVisualMetrics(page) {
           item.text.length < 4 ||
           (route.startsWith("/") && !allowedRoutes.includes(route));
       });
-    const smallControls = Array.from(pageEl.querySelectorAll("button, a"))
+    const smallControls = Array.from(pageEl.querySelectorAll("button, a, summary"))
       .filter(visible)
       .map((el) => {
         const rect = el.getBoundingClientRect();
