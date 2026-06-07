@@ -93,14 +93,14 @@ Phase-specific security gates are listed under each phase. A phase is not done i
 - Modify: `scripts/olympus-live-smoke.mjs`
 - Modify: `dashboard/docs/PRODUCTION_READINESS.md`
 
-- [ ] Add a read-only `evidence_sources` object to `/overview` and `/tuning`.
+- [x] Add a read-only `evidence_sources` object to `/overview` and `/tuning`.
   - Include source name, source type, present/missing, safe field names read, item counts, read failures, and redaction policy.
   - Do not include actual file paths in public payloads; use labels such as `Hermes state database` and `Hermes Kanban database`.
-- [ ] Render an "Evidence Sources" compact diagnostics strip.
+- [x] Render an "Evidence Sources" compact diagnostics strip.
   - Show `state.db`, `kanban.db`, `config.yaml`, skill usage metadata, and hub lock metadata as `ok`, `missing`, or `warning`.
   - Link to `/system`, `/sessions`, `/kanban`, `/config`, or `/skills` as appropriate.
-- [ ] Add fixture coverage where `skills/.usage.json` and `skills/.hub/lock.json` are missing.
-- [ ] Add live smoke assertions that the Evidence Sources panel exists and does not expose `/Users/`, raw database paths, or raw session IDs.
+- [x] Add fixture coverage where `skills/.usage.json` and `skills/.hub/lock.json` are missing.
+- [x] Add live smoke assertions that the Evidence Sources panel exists and does not expose `/Users/`, raw database paths, or raw session IDs.
 
 **Bug gate:**
 
@@ -138,22 +138,22 @@ rg -n "/Users/ghost|\\.hermes/state\\.db|\\.hermes/kanban\\.db|github_pat_|ghp_|
 - Modify: `SECURITY.md`
 - Modify: `dashboard/docs/BUILD_PLAN.md`
 
-- [ ] Add `collect_skill_metadata()` to read `skills/.usage.json` and `skills/.hub/lock.json`.
+- [x] Add `collect_skill_metadata()` to read `skills/.usage.json` and `skills/.hub/lock.json`.
   - Return counts for total skills, archived, pinned, never used, recently used, stale, recently patched, hub-installed, missing hub lock, and metadata read failures.
   - Return redacted skill item labels unless `OLYMPUS_EXPOSE_LOCAL_LABELS=1`.
-- [ ] Add `build_skill_hygiene()` to combine skill metadata with existing `skill_coverage`.
+- [x] Add `build_skill_hygiene()` to combine skill metadata with existing `skill_coverage`.
   - Flag heavily used but unpinned skills.
   - Flag archived skills with recent use.
   - Flag frequently patched skills.
   - Flag hub-installed skills missing trust or scan metadata when the lock file lacks those keys.
   - Flag forced-skill Kanban tasks whose skill metadata is missing.
-- [ ] Render a "Skill Hygiene" panel below Skill Coverage.
+- [x] Render a "Skill Hygiene" panel below Skill Coverage.
   - Keep it read-only.
   - Link only to `/skills`, `/kanban`, and `/sessions`.
-- [ ] Add `scripts/olympus-security-smoke.mjs`.
+- [x] Add `scripts/olympus-security-smoke.mjs`.
   - Fetch `/api/plugins/olympus/overview` through the live dashboard session-token flow or reuse the fixture harness.
   - Fail if payload contains `/Users/`, raw `workspace_path`, `cwd`, secret-like tokens, or raw skill names when labels are hidden.
-- [ ] Update docs to mark Curator and Skill Hygiene as partially shipped, with hub trust/scan shown only when Hermes records those fields.
+- [x] Update docs to mark Curator and Skill Hygiene as partially shipped, with hub trust/scan shown only when Hermes records those fields.
 
 **Bug gate:**
 
@@ -243,7 +243,7 @@ OLYMPUS_EXPOSE_LOCAL_LABELS=0 npm run test:security
 
 ---
 
-### Phase 2: Config, Tool Policy, And Auxiliary Cost Watch
+### Phase 2: Config, Tool Policy & Auxiliary Cost Watch
 
 **Why third:** This is another quick win. Hermes config already exposes agent limits, toolsets, loop guardrails, compression, browser privacy flags, auxiliary providers, and route metadata. Olympus should surface risky settings without revealing secrets.
 
@@ -259,19 +259,19 @@ OLYMPUS_EXPOSE_LOCAL_LABELS=0 npm run test:security
 - Modify: `scripts/olympus-security-smoke.mjs`
 - Modify: `SECURITY.md`
 
-- [ ] Add `collect_config_policy()`.
+- [x] Add `collect_config_policy()`.
   - Read only safe keys: `model.provider`, `model.default` presence, `fallback_providers` count, `toolsets`, `agent.max_turns`, `agent.gateway_timeout`, `tool_loop_guardrails`, `compression`, `browser.allow_private_urls`, `browser.record_sessions`, auxiliary provider route presence.
   - Do not return prompt/personality text, secret values, `api_key`, `session_key`, `base_url` values, or environment values.
-- [ ] Add policy findings.
+- [x] Add policy findings.
   - High `agent.max_turns` with hard loop stop disabled.
   - Browser private URLs enabled.
   - Browser session recording enabled.
   - Auxiliary provider configured but no cost/usage signal available.
   - Fallback provider configured without visible route audit evidence.
-- [ ] Render "Tool Policy And Aux Cost" as a compact panel.
+- [x] Render "Tool Policy & Aux Cost" as a compact panel.
   - Link to `/config`, `/models`, `/sessions`, and `/keys` only if these routes are allowed by the smoke tests.
-- [ ] Extend allowed Hermes routes in visual/live tests if `/models` and `/keys` are used.
-- [ ] Add fixture states for risky config and healthy config.
+- [x] Keep route allowlists unchanged because the shipped panel uses `/config`, `/analytics`, and `/sessions` only.
+- [x] Add fixture states for risky config and healthy config.
 
 **Bug gate:**
 

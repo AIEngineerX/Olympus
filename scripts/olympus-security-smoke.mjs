@@ -20,6 +20,8 @@ const leakPatterns = [
   { name: "gateway pid file", pattern: /\bgateway\.pid\b/ },
   { name: "workspace path key", pattern: /"workspace_path"\s*:/ },
   { name: "cwd key", pattern: /"cwd"\s*:/ },
+  { name: "raw config secret key", pattern: /"(?:api_key|session_key|base_url|password|secret|token)"\s*:/i },
+  { name: "prompt/personality key", pattern: /"(?:prompt|personality)"\s*:/i },
   { name: "GitHub token", pattern: /github_pat_[A-Za-z0-9_]+|ghp_[A-Za-z0-9_]+/ },
   { name: "OpenAI-style secret", pattern: /sk-[A-Za-z0-9_-]{12,}/ },
   { name: "secret assignment", pattern: /(api[_-]?key|secret|password|passwd)\s*[:=]/i },
@@ -137,6 +139,7 @@ function assertPayload(payload) {
   if (!payload || typeof payload !== "object") failures.push("overview payload is not an object");
   if (!payload.evidence_sources) failures.push("missing evidence_sources");
   if (!payload.skill_hygiene) failures.push("missing skill_hygiene");
+  if (!payload.config_policy) failures.push("missing config_policy");
   const serialized = JSON.stringify(payload);
   for (const item of leakPatterns) {
     const match = serialized.match(item.pattern);
@@ -163,6 +166,7 @@ async function main() {
       sessionTokenDetected: Boolean(sessionToken),
       evidenceSources: payload.evidence_sources && payload.evidence_sources.items ? payload.evidence_sources.items.length : 0,
       skillHygieneSignals: payload.skill_hygiene && payload.skill_hygiene.signals ? payload.skill_hygiene.signals.length : 0,
+      configPolicyFindings: payload.config_policy && payload.config_policy.findings ? payload.config_policy.findings.length : 0,
       failures,
     };
     console.log(JSON.stringify(summary, null, 2));

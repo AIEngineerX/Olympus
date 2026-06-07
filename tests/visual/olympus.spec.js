@@ -9,6 +9,7 @@ const expectedSections = [
   { selector: ".olympus-score-card", text: "What the Score Means", minHeight: 120 },
   { selector: ".olympus-agent-hq", text: "Agent HQ", minHeight: 180 },
   { selector: ".olympus-performance", text: "Performance Tracking", minHeight: 180 },
+  { selector: ".olympus-policy", text: "Tool Policy & Aux Cost", minHeight: 180 },
   { selector: ".olympus-skill-coverage", text: "Skill Coverage", minHeight: 180 },
   { selector: ".olympus-skill-hygiene", text: "Skill Hygiene", minHeight: 180 },
   { selector: ".olympus-profile-fitness", text: "Profile Fitness", minHeight: 180 },
@@ -47,7 +48,7 @@ const scenarios = [
   {
     name: "empty",
     expectedSections: expectedSections.slice(0, 3),
-    absentSections: [".olympus-skill-coverage", ".olympus-skill-hygiene", ".olympus-profile-fitness", ".olympus-pantheon", ".olympus-kanban"],
+    absentSections: [".olympus-policy", ".olympus-skill-coverage", ".olympus-skill-hygiene", ".olympus-profile-fitness", ".olympus-pantheon", ".olympus-kanban"],
     minAgentCards: 0
   },
   { name: "overloaded", expectedSections, minAgentCards: 5 },
@@ -166,6 +167,7 @@ async function collectVisualMetrics(page) {
       badCopyPhrases,
       badLinks,
       evidenceSourcesVisible: renderedText.includes("Evidence Sources"),
+      policyVisible: Boolean(document.querySelector(".olympus-policy") && renderedText.includes("Tool Policy & Aux Cost")),
       horizontalOverflow: Math.max(
         document.documentElement.scrollWidth - window.innerWidth,
         document.body.scrollWidth - window.innerWidth
@@ -196,6 +198,7 @@ for (const scenario of scenarios) {
     expect(metrics.agentCards).toBeGreaterThanOrEqual(scenario.minAgentCards);
     expect(metrics.badCopyPhrases).toEqual([]);
     expect(metrics.evidenceSourcesVisible).toBe(true);
+    if (scenario.name !== "empty") expect(metrics.policyVisible).toBe(true);
     if (scenario.minAgentCards > 0) {
       expect(metrics.pantheonVisible).toBe(true);
       expect(metrics.pantheonButtons).toBeGreaterThanOrEqual(scenario.minAgentCards);
@@ -220,6 +223,7 @@ for (const scenario of scenarios) {
     expect(metrics.agentCards).toBeGreaterThanOrEqual(scenario.minAgentCards);
     expect(metrics.badCopyPhrases).toEqual([]);
     expect(metrics.evidenceSourcesVisible).toBe(true);
+    if (scenario.name !== "empty") expect(metrics.policyVisible).toBe(true);
     if (scenario.minAgentCards > 0) {
       expect(metrics.pantheonVisible).toBe(true);
       expect(metrics.pantheonButtons).toBeGreaterThanOrEqual(scenario.minAgentCards);

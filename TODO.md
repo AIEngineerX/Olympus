@@ -12,6 +12,7 @@
 - Added Evidence Sources so each scan shows which Hermes stores, metadata files, and safe fields grounded the result.
 - Added Skill Hygiene from Hermes skill usage metadata and hub lock provenance, including stale/archive/patch counts and trust/scan gaps.
 - Restored Pantheon as a clickable profile map with accessible HTML controls and selected-profile details.
+- Added Tool Policy and Aux Cost from safe Hermes config structure, route-audit presence, browser privacy flags, and session cost visibility.
 - Added a live security smoke test for `/overview` payload redaction.
 - Kept actions as links to Hermes-owned pages.
 - Added privacy defaults for local labels, private paths, route labels, and secrets.
@@ -41,9 +42,13 @@ Complete each item in order and test before starting the next.
    - Remaining: surface stored skills.sh security audit status when Hermes records it.
    - Keep the panel read-only and link to Hermes Skills or Curator surfaces.
 
-3. Auxiliary Cost Watch
-   - Detect background or auxiliary work causing token pressure.
-   - Show when expensive routes are being used for background tasks.
+3. Trace Spine
+   - Correlate sessions, messages, Kanban tasks, task runs, and task events.
+   - Show tool sequence summaries and failure points without transcript content.
+
+4. Deterministic Eval Signals
+   - Add local reliability, efficiency, routing, and skill-use eval signals.
+   - Keep them labeled as operational evals, not answer-quality judgments.
 
 ## Bug-Test Gate
 

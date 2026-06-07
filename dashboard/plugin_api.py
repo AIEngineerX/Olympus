@@ -44,6 +44,7 @@ OVERLOADED_RUNNING_THRESHOLD = 2
 CONTEXT_PRESSURE_TOKENS = 50000   # large per-call context worth surfacing for review
 RUNAWAY_TOOLS_THRESHOLD = 40      # tool calls in one run that suggest looping/thrash
 EXPENSIVE_RUN_USD = 1.0           # single-run cost worth surfacing as a tuning signal
+MAX_TURNS_REVIEW_THRESHOLD = 80   # high enough to require a visible loop guardrail
 API_RESPONSE_BUDGET_MS = 750.0
 PAYLOAD_BUDGET_BYTES = 250_000
 CLIENT_RENDER_BUDGET_MS = 150.0
@@ -336,6 +337,14 @@ def build_evidence_sources(profiles: List[Dict[str, Any]], sessions: List[Dict[s
             "fields": [
                 "model.provider_presence",
                 "model.default_presence",
+                "fallback_providers.presence",
+                "toolsets.presence",
+                "agent.max_turns",
+                "agent.gateway_timeout",
+                "tool_loop_guardrails.presence",
+                "compression.presence",
+                "browser.privacy_flags",
+                "auxiliary_provider.presence",
                 "profile.gateway_state",
                 "profile.skill_count",
                 "cron.enabled",
@@ -774,6 +783,294 @@ def summarize_model(config: Dict[str, Any]) -> Dict[str, Optional[str]]:
     return {
         "provider": model.get("provider"),
         "model": model.get("default") or model.get("model"),
+    }
+
+
+def _cfg_value(config: Dict[str, Any], *keys: str) -> Any:
+    current: Any = config
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _cfg_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled", "allow", "record"}
+    return False
+
+
+def _cfg_int(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _configured_count(value: Any) -> int:
+    if isinstance(value, dict):
+        return len([k for k, v in value.items() if v not in (None, "", False, [], {})])
+    if isinstance(value, list):
+        return len([item for item in value if item not in (None, "", False, [], {})])
+    return 1 if value not in (None, "", False, [], {}) else 0
+
+
+def _cfg_any_count(config: Dict[str, Any], paths: List[List[str]]) -> int:
+    total = 0
+    for path in paths:
+        total += _configured_count(_cfg_value(config, *path))
+    return total
+
+
+def _cfg_any_bool(config: Dict[str, Any], paths: List[List[str]]) -> bool:
+    return any(_cfg_bool(_cfg_value(config, *path)) for path in paths)
+
+
+def _profile_config_paths(profiles: List[Dict[str, Any]]) -> List[Path]:
+    paths: List[Path] = []
+    for profile in profiles:
+        raw = profile.get("_path") if isinstance(profile, dict) else None
+        if raw:
+            paths.append(Path(str(raw)) / "config.yaml")
+    return paths
+
+
+def _config_max_turns(configs: List[Dict[str, Any]], kanban: Dict[str, Any]) -> List[int]:
+    values: List[int] = []
+    for cfg in configs:
+        for path in (["agent", "max_turns"], ["agents", "max_turns"], ["max_turns"]):
+            val = _cfg_int(_cfg_value(cfg, *path))
+            if val is not None:
+                values.append(val)
+    for task in kanban_items(kanban, "recent_tasks"):
+        val = _cfg_int(task.get("goal_max_turns"))
+        if val is not None:
+            values.append(val)
+    return values
+
+
+def _loop_guardrail_enabled(config: Dict[str, Any]) -> bool:
+    for path in (["tool_loop_guardrails"], ["tool_loop_guardrail"], ["agent", "tool_loop_guardrails"], ["agent", "loop_guardrails"]):
+        section = _cfg_value(config, *path)
+        if isinstance(section, dict):
+            if any(_cfg_bool(section.get(key)) for key in ("enabled", "hard_stop", "hard_stop_enabled", "stop_enabled")):
+                return True
+            if any(section.get(key) not in (None, "", 0, False) for key in ("max_repeats", "max_tool_repeats", "max_iterations", "max_tool_calls")):
+                return True
+        elif _cfg_bool(section):
+            return True
+    return False
+
+
+def _auxiliary_route_count(config: Dict[str, Any], env_names: set[str]) -> int:
+    config_count = _cfg_any_count(config, [
+        ["auxiliary_provider"],
+        ["auxiliary_providers"],
+        ["auxiliary"],
+        ["aux"],
+        ["model", "auxiliary_provider"],
+        ["model", "auxiliary_providers"],
+        ["providers", "auxiliary"],
+        ["providers", "background"],
+        ["providers", "summarizer"],
+    ])
+    env_count = 1 if any("AUX" in key or "AUXILIARY" in key for key in env_names) else 0
+    return config_count + env_count
+
+
+def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    kanban = kanban or {}
+    hermes_home = get_hermes_home()
+    root_config_path = hermes_home / "config.yaml"
+    root_config = read_yaml(root_config_path)
+    profile_paths = _profile_config_paths(profiles)
+    profile_configs = [read_yaml(path) for path in profile_paths if path.exists()]
+    configs = [root_config, *profile_configs]
+    env_names = set(env_keys(hermes_home / ".env"))
+    for profile in profiles:
+        raw = profile.get("_path") if isinstance(profile, dict) else None
+        if raw:
+            env_names.update(env_keys(Path(str(raw)) / ".env"))
+
+    max_turns_values = _config_max_turns(configs, kanban)
+    max_turns = max(max_turns_values) if max_turns_values else 0
+    hard_loop_stop = any(_loop_guardrail_enabled(cfg) for cfg in configs)
+    fallback_count = _cfg_any_count(root_config, [["fallback_providers"], ["model", "fallback_providers"], ["providers", "fallback"], ["providers", "fallback_providers"]])
+    toolset_count = sum(_cfg_any_count(cfg, [["toolsets"], ["tools", "toolsets"], ["agent", "toolsets"]]) for cfg in configs)
+    compression_enabled = any(_cfg_any_bool(cfg, [["compression", "enabled"], ["agent", "compression"], ["memory", "compression"]]) for cfg in configs)
+    browser_private_urls = _cfg_any_bool(root_config, [["browser", "allow_private_urls"], ["browser", "allow_local_urls"], ["browser", "private_urls"], ["browser", "allow_private_network"]])
+    browser_recording = _cfg_any_bool(root_config, [["browser", "record_sessions"], ["browser", "recording"], ["browser", "session_recording"]])
+    auxiliary_routes = _auxiliary_route_count(root_config, env_names)
+    route_audit_profiles = sum(1 for profile in profiles if profile.get("model") or profile.get("provider"))
+    model_override_tasks = int(((build_orchestration(kanban).get("summary") or {}).get("model_override_tasks")) or 0)
+    sessions_with_cost = sum(1 for session in sessions if _session_cost(session) > 0)
+    total_cost = round(sum(_session_cost(session) for session in sessions), 4)
+    cost_signal_available = bool(sessions_with_cost or total_cost > 0)
+
+    findings: List[Dict[str, Any]] = []
+
+    def add(kind: str, severity: str, title: str, detail: str, evidence: str, view: str, basis: str, threshold: str = "") -> None:
+        action = "Open Config" if view == "/config" else ("Open Sessions" if view == "/sessions" else "Open Analytics")
+        findings.append(_tuning_item(kind, severity, title, detail, evidence, view, action, "Athena", basis, threshold))
+
+    if root_config_path.exists() is False and not profile_configs:
+        add(
+            "config",
+            "info",
+            "Hermes config policy evidence is missing",
+            "Olympus did not find a readable root or profile config. Runtime signals still render, but policy checks cannot explain agent limits.",
+            "config files missing",
+            "/config",
+            "Hermes config.yaml presence",
+        )
+    if max_turns >= MAX_TURNS_REVIEW_THRESHOLD and not hard_loop_stop:
+        add(
+            "policy",
+            "warning",
+            "High turn limit lacks a visible loop stop",
+            "High agent turn limits need a visible hard loop guardrail so tool thrash stops before it burns time and tokens.",
+            f"max_turns {max_turns} / hard stop not visible",
+            "/config",
+            "Hermes agent.max_turns plus tool_loop_guardrails",
+            f"max_turns >= {MAX_TURNS_REVIEW_THRESHOLD} and hard loop stop disabled or missing",
+        )
+    if browser_private_urls:
+        add(
+            "browser",
+            "warning",
+            "Browser private URL access is enabled",
+            "Private or local browser targets widen the data boundary. Keep this enabled only when local automation needs it.",
+            "browser private URL flag enabled",
+            "/config",
+            "Hermes browser privacy flags",
+        )
+    if browser_recording:
+        add(
+            "browser",
+            "warning",
+            "Browser session recording is enabled",
+            "Recorded browser sessions can capture sensitive local workflow context. Review retention and access before long-running agents use it.",
+            "browser recording flag enabled",
+            "/config",
+            "Hermes browser privacy flags",
+        )
+    if auxiliary_routes and not cost_signal_available:
+        add(
+            "cost",
+            "warning",
+            "Auxiliary route cost is not visible",
+            "Auxiliary or background provider routes are configured, but recent sessions do not expose cost. Background work can hide spend without a usage signal.",
+            f"{auxiliary_routes} auxiliary route signal(s) / 0 costed sessions",
+            "/analytics",
+            "Hermes auxiliary route presence plus per-session cost fields",
+        )
+    if fallback_count and not route_audit_profiles:
+        add(
+            "model",
+            "warning",
+            "Fallback providers lack route audit evidence",
+            "Fallback providers are configured, but profile/session route evidence is not visible. Make routing explicit before tuning model behavior.",
+            f"{fallback_count} fallback provider(s) / 0 visible profile routes",
+            "/config",
+            "Hermes fallback provider config plus profile route metadata",
+        )
+    if fallback_count and route_audit_profiles:
+        add(
+            "model",
+            "info",
+            "Fallback providers have visible route evidence",
+            "Fallback routes are present and profile route metadata is visible, so route changes can be audited from Olympus.",
+            f"{fallback_count} fallback provider(s) / {route_audit_profiles} routed profile(s)",
+            "/config",
+            "Hermes fallback provider config plus profile route metadata",
+        )
+
+    settings = [
+        {
+            "id": "max_turns",
+            "label": "Max Turns",
+            "value": max_turns,
+            "state": "warning" if max_turns >= MAX_TURNS_REVIEW_THRESHOLD and not hard_loop_stop else ("active" if max_turns else "unknown"),
+            "detail": "Highest configured agent or goal turn limit.",
+            "source": "agent.max_turns and Kanban goal_max_turns",
+            "recommended_view": "/config",
+        },
+        {
+            "id": "loop_guard",
+            "label": "Loop Stop",
+            "value": "visible" if hard_loop_stop else "not visible",
+            "state": "ok" if hard_loop_stop else ("warning" if max_turns >= MAX_TURNS_REVIEW_THRESHOLD else "unknown"),
+            "detail": "Hard loop guardrail or repeated-tool stop evidence.",
+            "source": "tool_loop_guardrails",
+            "recommended_view": "/config",
+        },
+        {
+            "id": "fallbacks",
+            "label": "Fallbacks",
+            "value": fallback_count,
+            "state": "active" if fallback_count else "idle",
+            "detail": "Fallback provider routes configured in safe config structure.",
+            "source": "fallback_providers",
+            "recommended_view": "/config",
+        },
+        {
+            "id": "toolsets",
+            "label": "Toolsets",
+            "value": toolset_count,
+            "state": "active" if toolset_count else "unknown",
+            "detail": "Configured toolset collections across root and profile config.",
+            "source": "toolsets",
+            "recommended_view": "/config",
+        },
+        {
+            "id": "browser",
+            "label": "Browser Privacy",
+            "value": (1 if browser_private_urls else 0) + (1 if browser_recording else 0),
+            "state": "warning" if browser_private_urls or browser_recording else "ok",
+            "detail": "Private URL access and browser recording flags.",
+            "source": "browser privacy flags",
+            "recommended_view": "/config",
+        },
+        {
+            "id": "aux_cost",
+            "label": "Aux Cost",
+            "value": total_cost,
+            "unit": "usd",
+            "state": "warning" if auxiliary_routes and not cost_signal_available else ("active" if cost_signal_available else "unknown"),
+            "detail": f"{auxiliary_routes} auxiliary route signal(s), {sessions_with_cost} costed session(s).",
+            "source": "auxiliary route presence and estimated/actual_cost_usd",
+            "recommended_view": "/analytics",
+        },
+    ]
+    findings.sort(key=lambda item: _severity_rank(str(item.get("severity"))))
+    state = "warning" if any(item.get("severity") in ("critical", "warning") for item in findings) else ("info" if findings else ("ok" if root_config_path.exists() or profile_configs else "unknown"))
+    return {
+        "summary": {
+            "state": state,
+            "findings": len(findings),
+            "root_config_present": root_config_path.exists(),
+            "profile_configs": len(profile_configs),
+            "max_turns": max_turns,
+            "hard_loop_stop": hard_loop_stop,
+            "fallback_providers": fallback_count,
+            "toolsets": toolset_count,
+            "compression_enabled": compression_enabled,
+            "browser_private_flags": (1 if browser_private_urls else 0) + (1 if browser_recording else 0),
+            "auxiliary_routes": auxiliary_routes,
+            "costed_sessions": sessions_with_cost,
+            "total_cost_usd": total_cost,
+            "route_audit_profiles": route_audit_profiles,
+            "model_override_tasks": model_override_tasks,
+        },
+        "settings": settings,
+        "findings": findings[:8],
     }
 
 
@@ -2760,6 +3057,7 @@ async def overview() -> Dict[str, Any]:
     profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
     performance = build_performance_tracking(sessions, kanban)
     evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
+    config_policy = collect_config_policy(profiles, sessions, kanban)
     health = collect_health(profiles, cron)
     attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
     tuning = build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)
@@ -2781,6 +3079,7 @@ async def overview() -> Dict[str, Any]:
         "profile_fitness": strip_internal(profile_fitness),
         "performance": strip_internal(performance),
         "evidence_sources": strip_internal(evidence_sources),
+        "config_policy": strip_internal(config_policy),
     }
     payload["diagnostics"] = runtime_diagnostics("/overview", started_at, payload, profiles, sessions, kanban)
     return payload
@@ -2803,6 +3102,7 @@ async def tuning() -> Dict[str, Any]:
     profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
     performance = build_performance_tracking(sessions, kanban)
     evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
+    config_policy = collect_config_policy(profiles, sessions, kanban)
     health = collect_health(profiles, cron)
     attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
     payload = {
@@ -2818,6 +3118,7 @@ async def tuning() -> Dict[str, Any]:
         "profile_fitness": strip_internal(profile_fitness),
         "performance": strip_internal(performance),
         "evidence_sources": strip_internal(evidence_sources),
+        "config_policy": strip_internal(config_policy),
         "tuning": strip_internal(build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)),
     }
     payload["diagnostics"] = runtime_diagnostics("/tuning", started_at, payload, profiles, sessions, kanban)

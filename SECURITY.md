@@ -16,6 +16,9 @@ the public internet.
 - Session titles, Kanban task titles, cron names, and exact model/provider labels
   are hidden by default.
 - Skill names from usage and hub metadata are hashed by default.
+- Config policy responses expose only safe counts, booleans, and generic route
+  evidence. Prompt text, personality text, base URLs, API keys, env values, and
+  local paths are not returned.
 
 ## Local label opt-in
 

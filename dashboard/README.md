@@ -37,6 +37,8 @@ them through the Hermes plugin SDK.
 - Session IDs and private labels are redacted unless local labels are explicitly
   enabled.
 - Gateway configuration detection reads `.env` variable names only, never values.
+- Config policy reports safe counts and flags only. It must not return prompt
+  text, base URLs, API keys, env values, or local paths.
 - Unknown state stays `unknown`.
 - Attention items are severity-sorted before truncation.
 
