@@ -98,14 +98,15 @@ Frontend:
 - Explain the top issue without exposing private local labels by default.
 - Link to the Hermes page that owns the fix.
 
-### 3. Kanban Worker Inspector (open)
+### 3. Kanban Worker Inspector (partially shipped)
 
-- Correlate Kanban `session_id` and `task_runs` to Hermes sessions.
-- Add dispatcher/orchestration settings evidence.
-- Rank task-level tuning recommendations from blocked, stale, retry,
-  tool-heavy, unassigned, and unhealthy-assignee signals.
-- Keep action buttons as handoff links unless a write action is explicitly
-  approved.
+- Shipped: Kanban Intelligence summarizes open, ready, running, blocked, review,
+  active workers, stale workers, failed runs, assignee load, and attention
+  items from Hermes Kanban evidence.
+- Remaining: Trace Spine V0 should correlate Kanban `session_id`, `task_runs`,
+  task events, and Hermes sessions, then summarize tool sequences and failure
+  points without transcript content.
+- Keep action buttons as handoff links unless a write action is explicitly approved.
 
 ### 4. Pantheon V2 Visual Restoration (shipped)
 
@@ -153,9 +154,9 @@ Frontend:
 Run after each implemented item:
 
 ```bash
-python3 -m py_compile dashboard/plugin_api.py
-node --check dashboard/dist/index.js
-git diff --check
+npm run verify
+npm run test:visual
+npm run test:live
 npm run test:security
 ```
 

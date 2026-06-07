@@ -6,7 +6,7 @@
 
 **Architecture:** Keep Olympus read-only for Hermes-owned state. Add small evidence collectors and deterministic scoring helpers around existing Hermes data sources, then render compact panels that link back to Hermes-owned pages. Do not add hosted tracing, external eval calls, or write actions until there is an explicit side-effect contract.
 
-**Tech Stack:** Python FastAPI plugin router in `dashboard/plugin_api.py`, SQLite reads from Hermes state/Kanban databases, JSON/YAML reads from Hermes config and skill metadata, hand-authored React-free dashboard code in `dashboard/dist/index.js`, CSS in `dashboard/dist/style.css`, Playwright fixture and live smoke tests.
+**Tech Stack:** Python FastAPI plugin router in `dashboard/plugin_api.py`, SQLite reads from Hermes state/Kanban databases, JSON/YAML reads from Hermes config and skill metadata, hand-authored SDK React dashboard code in `dashboard/dist/index.js`, CSS in `dashboard/dist/style.css`, Playwright fixture and live smoke tests.
 
 ---
 
@@ -62,6 +62,7 @@ Run these commands before committing any phase:
 npm run verify
 npm run test:visual
 npm run test:live
+npm run test:security
 git diff --check
 ```
 

@@ -21,7 +21,7 @@ controls). Changes that blur that boundary will be sent back.
 | Path | What it is |
 | --- | --- |
 | `dashboard/plugin_api.py` | The read-only FastAPI backend. Most logic lives here. |
-| `dashboard/dist/index.js` | The frontend, **hand-authored** vanilla JS on the Hermes plugin SDK. |
+| `dashboard/dist/index.js` | The frontend, **hand-authored** SDK React on the Hermes plugin SDK. |
 | `dashboard/dist/style.css` | `olympus-*` styles. |
 | `dashboard/manifest.json` | Plugin metadata (tab path, assets, api module, icon). |
 | `dashboard/docs/BUILD_PLAN.md` | Implementation plan. |
@@ -70,8 +70,9 @@ assuming — Hermes details are version-dependent.
   `try/except` only at real I/O boundaries (no defensive wrapping of code that
   cannot fail). Keep new logic in `plugin_api.py` unless it clearly warrants a
   new module.
-- **JavaScript:** vanilla JS via the injected `window.__HERMES_PLUGIN_SDK__`
-  (React, hooks, a small component set, `fetchJSON`). No new runtime
+- **JavaScript:** hand-authored SDK React via the injected
+  `window.__HERMES_PLUGIN_SDK__` (React, hooks, a small component set,
+  `fetchJSON`). No new runtime
   dependencies. Use `el(...)`/`cx(...)` helpers already in the file.
 - Keep diffs scoped to the change. No drive-by reformatting.
 
@@ -82,9 +83,15 @@ npm run verify       # backend compiles, frontend parses, whitespace is clean
 npm run test:visual  # fixture-backed desktop/mobile visual smoke
 ```
 
-When you touch a data path, exercise it for real against a live `$HERMES_HOME`
-(or a temporary SQLite DB / fixture). No mocks — integration against real code
-only.
+When you touch a live data path, security boundary, or route allowlist, also run:
+
+```bash
+npm run test:live
+npm run test:security
+```
+
+Exercise changed data paths against a live `$HERMES_HOME` or a fixture that
+matches Hermes evidence shape. No mocks as proof of completion.
 
 The visual fixture intentionally uses fixed evidence states. It is not a
 substitute for a live Hermes check, but it catches the most common regressions:
@@ -93,11 +100,12 @@ desktop/mobile layout.
 
 ## Commit conventions
 
-[Conventional Commits](https://www.conventionalcommits.org/) with an em dash:
+[Conventional Commits](https://www.conventionalcommits.org/) with a short,
+plain subject:
 
 ```
-feat: short feature — what changed
-fix: short fix — what changed
+feat: short feature
+fix: short fix
 chore: ...
 docs: ...
 ```

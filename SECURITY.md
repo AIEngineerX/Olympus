@@ -25,7 +25,7 @@ the public internet.
 Operators who want richer local labels can start Hermes with:
 
 ```bash
-OLYMPUS_EXPOSE_LOCAL_LABELS=1 hermes dashboard --no-open
+OLYMPUS_EXPOSE_LOCAL_LABELS=1 hermes dashboard --no-open --skip-build
 ```
 
 Only use this on a private machine. With this setting enabled, Olympus may show
@@ -36,12 +36,15 @@ dashboard.
 
 Before publishing or opening a PR:
 
-1. Run the static checks in `TODO.md`.
-2. Run `npm run test:security`.
-3. Search for private paths, tokens, usernames, private model names, and old
+1. Run `npm run verify`.
+2. Run `npm run test:visual`.
+3. Run `npm run test:live` for live route, layout, or plugin mounting changes.
+4. Run `npm run test:security` for payload, redaction, labels, config, skills,
+   or evidence-source changes.
+5. Search for private paths, tokens, usernames, private model names, and old
    project-specific references.
-4. Confirm generated files such as `.DS_Store`, `__pycache__`, screenshots, and
+6. Confirm generated files such as `.DS_Store`, `__pycache__`, screenshots, and
    local database files are not staged.
-5. Confirm Olympus still uses Hermes dashboard auth and does not add direct
+7. Confirm Olympus still uses Hermes dashboard auth and does not add direct
    unauthenticated routes.
-6. Confirm any new write action is gated, explicit, and documented.
+8. Confirm any new write action is gated, explicit, and documented.

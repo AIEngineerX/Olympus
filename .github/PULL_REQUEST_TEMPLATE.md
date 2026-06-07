@@ -15,6 +15,8 @@
 
 - [ ] `npm run verify`
 - [ ] `npm run test:visual`
+- [ ] `npm run test:live` when live data paths, layout, routes, or plugin mounting changed
+- [ ] `npm run test:security` when payload shape, redaction, labels, config, skills, or evidence sources changed
 - [ ] Exercised any changed data path against a real `$HERMES_HOME` (or fixture) — no mocks
 
 ## Read-only & privacy checklist
