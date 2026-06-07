@@ -87,10 +87,10 @@ Complete Olympus phases in documented order. Every phase must add working value,
 - Modify: `dashboard/dist/style.css`
 - Modify: fixtures, visual tests, security smoke, and docs
 
-- [ ] Add failing tests for reliability, routing, skill-use, and efficiency eval signals.
-- [ ] Implement deterministic `ops_evals` from existing sessions, Kanban, skill coverage, skill hygiene, and config policy.
-- [ ] Render eval signals as operational checks, not answer-quality claims.
-- [ ] Run the full gate and commit.
+- [x] Add failing tests for reliability, routing, skill-use, and efficiency eval signals.
+- [x] Implement deterministic `ops_evals` from existing sessions, Kanban, skill coverage, skill hygiene, and config policy.
+- [x] Render eval signals as operational checks, not answer-quality claims.
+- [x] Run the full gate and commit.
 
 ## Phase Gate
 

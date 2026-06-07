@@ -45,7 +45,7 @@ Complete each item in order and test before starting the next.
    - Fallback: document browser-dashboard access if Desktop plugin parity is not accepted.
 
 5. Deterministic Eval Signals
-   - Add local reliability, efficiency, routing, and skill-use eval signals.
+   - Shipped: local reliability, efficiency, routing, and skill-use eval signals.
    - Keep them labeled as operational evals, not answer-quality judgments.
 
 ## Bug-Test Gate
@@ -57,6 +57,7 @@ npm run verify
 npm run test:visual
 npm run test:live
 npm run test:security
+npm run test:desktop
 ```
 
 Then verify the live dashboard:

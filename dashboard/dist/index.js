@@ -417,6 +417,60 @@
     );
   }
 
+  function OpsEvals({ evals }) {
+    const data = evals || {};
+    const summary = data.summary || {};
+    const items = asList(data.items);
+    if (!items.length) return null;
+
+    const tiles = [
+      { label: "Score", value: summary.score || 0, state: summary.state || "unknown" },
+      { label: "Checks", value: summary.checks || items.length, state: items.length ? "active" : "idle" },
+      { label: "Passed", value: summary.passed || 0, state: summary.passed ? "ok" : "idle" },
+      { label: "Warnings", value: summary.warnings || 0, state: summary.warnings ? "warning" : "ok" },
+      { label: "Failures", value: summary.failures || 0, state: summary.failures ? "critical" : "ok" },
+    ];
+
+    return el("section", { className: "olympus-section olympus-ops-evals" },
+      el("div", { className: "olympus-section-head" },
+        el("div", null,
+          el("h2", null, "Operational Evals"),
+          el("p", null, "Deterministic reliability, routing, skill-use, and efficiency checks from current Hermes evidence.")
+        ),
+        el(StatePill, { state: summary.state || "unknown" })
+      ),
+      el("div", { className: "olympus-ops-eval-tiles" },
+        tiles.map((item) => el("div", { key: item.label, className: "olympus-ops-eval-tile" },
+          el("span", null, item.label),
+          el("strong", null, String(item.value)),
+          el(StatePill, { state: item.state })
+        ))
+      ),
+      el("div", { className: "olympus-ops-eval-grid" },
+        items.map((item) => el("article", { key: item.id || item.label, className: cx("olympus-ops-eval-item", "olympus-ops-eval-item-" + String(item.state || "unknown").toLowerCase()) },
+          el("div", { className: "olympus-item-head" },
+            el("div", null,
+              el("span", null, item.id ? String(item.id).replaceAll("_", " ") : "check"),
+              el("h3", null, item.label || "Operational check")
+            ),
+            el(StatePill, { state: item.state || "unknown" })
+          ),
+          el("div", { className: "olympus-ops-eval-score" },
+            el("strong", null, String(item.score || 0)),
+            el("span", null, "score")
+          ),
+          el("p", null, item.detail || ""),
+          item.evidence ? el("small", null, item.evidence) : null,
+          asList(item.signals).length ? el("div", { className: "olympus-ops-eval-signals" },
+            asList(item.signals).slice(0, 4).map((signal) => el("span", { key: signal }, signal))
+          ) : null,
+          item.basis ? el("small", null, item.basis) : null,
+          item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
+        ))
+      )
+    );
+  }
+
   function ToolPolicy({ policy }) {
     const data = policy || {};
     const summary = data.summary || {};
@@ -987,6 +1041,7 @@
       el(AgentHQ, { hq: tuning.agent_hq }),
       el(PerformanceTracking, { performance: data && data.performance, diagnostics: data && data.diagnostics, clientDiagnostics, evidenceSources: data && data.evidence_sources }),
       el(TraceSpine, { trace: data && data.trace_spine }),
+      el(OpsEvals, { evals: data && data.ops_evals }),
       el(ToolPolicy, { policy: data && data.config_policy }),
       el(SkillCoverage, { coverage: data && data.skill_coverage }),
       el(SkillHygiene, { hygiene: data && data.skill_hygiene }),

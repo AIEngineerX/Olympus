@@ -400,6 +400,66 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       }
     ]
   },
+  ops_evals: {
+    summary: {
+      state: "critical",
+      score: 62,
+      checks: 4,
+      passed: 0,
+      warnings: 3,
+      failures: 1
+    },
+    items: [
+      {
+        id: "reliability",
+        label: "Reliability",
+        state: "warning",
+        score: 70,
+        detail: "Worker and session health from recent Hermes evidence.",
+        evidence: "1 failed run, 1 stale session, 0 errored sessions",
+        basis: "Hermes task_runs and session state",
+        signals: ["failed runs: 1", "stale sessions: 1", "errored sessions: 0"],
+        recommended_view: "/kanban",
+        action_label: "Open Kanban"
+      },
+      {
+        id: "routing",
+        label: "Routing",
+        state: "warning",
+        score: 60,
+        detail: "Kanban ownership, blocked work, and unassigned ready work.",
+        evidence: "1 loaded assignee, 1 unassigned ready task, 1 blocked task",
+        basis: "Hermes Kanban assignee load and task status",
+        signals: ["loaded assignees: 1", "unassigned ready: 1", "blocked tasks: 1"],
+        recommended_view: "/kanban",
+        action_label: "Open Kanban"
+      },
+      {
+        id: "skill_use",
+        label: "Skill Use",
+        state: "critical",
+        score: 45,
+        detail: "Coverage, forced-skill metadata, and stored audit results.",
+        evidence: "1 bare profile, 1 forced-skill gap, 1 audit warning, 1 audit fail",
+        basis: "Hermes skill coverage, skill usage metadata, and hub lock metadata",
+        signals: ["bare profiles: 1", "forced-skill tasks: 3", "metadata gaps: 1"],
+        recommended_view: "/skills",
+        action_label: "Open Skills"
+      },
+      {
+        id: "efficiency",
+        label: "Efficiency",
+        state: "warning",
+        score: 74,
+        detail: "Tool pressure, context pressure, long threads, and visible loop guardrails.",
+        evidence: "2 looping sessions, 4 tool-heavy sessions, 1 context-pressure session, 1 long thread",
+        basis: "Hermes session counters plus safe config policy",
+        signals: ["looping: 2", "tool-heavy: 4", "context pressure: 1", "loop stop visible: no"],
+        recommended_view: "/sessions",
+        action_label: "Open Sessions"
+      }
+    ]
+  },
   config_policy: {
     summary: {
       state: "warning",
@@ -730,6 +790,22 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       },
       items: []
     };
+    data.ops_evals = {
+      summary: { state: "ok", score: 100, checks: 4, passed: 4, warnings: 0, failures: 0 },
+      items: data.ops_evals.items.map((item) => ({
+        ...item,
+        state: "ok",
+        score: 100,
+        evidence: item.id === "reliability" ? "0 failed runs, 0 stale sessions, 0 errored sessions" :
+          item.id === "routing" ? "0 loaded assignees, 0 unassigned ready tasks, 0 blocked tasks" :
+          item.id === "skill_use" ? "0 bare profiles, 0 forced-skill gaps, 0 audit warnings, 0 audit fails" :
+          "0 looping sessions, 0 tool-heavy sessions, 0 context-pressure sessions, 0 long threads",
+        signals: item.id === "reliability" ? ["failed runs: 0", "stale sessions: 0", "errored sessions: 0"] :
+          item.id === "routing" ? ["loaded assignees: 0", "unassigned ready: 0", "blocked tasks: 0"] :
+          item.id === "skill_use" ? ["bare profiles: 0", "forced-skill tasks: 0", "metadata gaps: 0"] :
+          ["looping: 0", "tool-heavy: 0", "context pressure: 0", "loop stop visible: yes"]
+      }))
+    };
     data.config_policy = {
       summary: {
         state: "ok",
@@ -871,6 +947,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
     };
     data.performance = { summary: { state: "unknown" }, lanes: [], signals: [], metrics: {} };
     data.trace_spine = { summary: { state: "unknown", tasks: 0, correlated_tasks: 0, sessions: 0, runs: 0, events: 0, failure_points: 0 }, items: [] };
+    data.ops_evals = { summary: { state: "unknown", score: 0, checks: 0, passed: 0, warnings: 0, failures: 0 }, items: [] };
     data.config_policy = { summary: {}, settings: [], findings: [] };
     data.skill_coverage = { summary: {}, suggestions: [], profiles: [] };
     data.skill_hygiene = { summary: {}, signals: [], usage: [], hub: [] };

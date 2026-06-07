@@ -169,6 +169,15 @@ Frontend:
 - The Desktop preflight passes locally with a warning until plugin-tab route
   parity lands.
 
+### 8. Deterministic Operational Evals (shipped)
+
+- Adds `ops_evals` to `/overview` and `/tuning`.
+- Uses fixed reliability, routing, skill-use, and efficiency checks from Hermes
+  sessions, Kanban, skill metadata, and safe config policy.
+- Renders as operational checks with evidence, basis, state, score, and handoff
+  links.
+- Does not claim answer quality, benchmark quality, or model intelligence.
+
 ## Bug-Test Gate
 
 Run after each implemented item:
@@ -178,6 +187,7 @@ npm run verify
 npm run test:visual
 npm run test:live
 npm run test:security
+npm run test:desktop
 ```
 
 Live check:

@@ -10,6 +10,7 @@ const expectedSections = [
   { selector: ".olympus-agent-hq", text: "Agent Monitor", minHeight: 180 },
   { selector: ".olympus-performance", text: "Performance Tracking", minHeight: 180 },
   { selector: ".olympus-trace-spine", text: "Trace Spine", minHeight: 160 },
+  { selector: ".olympus-ops-evals", text: "Operational Evals", minHeight: 180 },
   { selector: ".olympus-policy", text: "Tool Policy & Aux Cost", minHeight: 180 },
   { selector: ".olympus-skill-coverage", text: "Skill Coverage", minHeight: 180 },
   { selector: ".olympus-skill-hygiene", text: "Skill Hygiene", minHeight: 180 },
@@ -52,7 +53,7 @@ const scenarios = [
   {
     name: "empty",
     expectedSections: expectedSections.slice(0, 3),
-    absentSections: [".olympus-trace-spine", ".olympus-policy", ".olympus-skill-coverage", ".olympus-skill-hygiene", ".olympus-profile-fitness", ".olympus-pantheon", ".olympus-kanban"],
+    absentSections: [".olympus-trace-spine", ".olympus-ops-evals", ".olympus-policy", ".olympus-skill-coverage", ".olympus-skill-hygiene", ".olympus-profile-fitness", ".olympus-pantheon", ".olympus-kanban"],
     minAgentCards: 0
   },
   { name: "overloaded", expectedSections, minAgentCards: 5 },
@@ -176,6 +177,7 @@ async function collectVisualMetrics(page) {
       evidenceSourcesVisible: renderedText.includes("Evidence Sources"),
       policyVisible: Boolean(document.querySelector(".olympus-policy") && renderedText.includes("Tool Policy & Aux Cost")),
       traceSpineVisible: Boolean(document.querySelector(".olympus-trace-spine") && renderedText.includes("Trace Spine")),
+      opsEvalsVisible: Boolean(document.querySelector(".olympus-ops-evals") && renderedText.includes("Operational Evals")),
       horizontalOverflow: Math.max(
         document.documentElement.scrollWidth - window.innerWidth,
         document.body.scrollWidth - window.innerWidth
@@ -208,6 +210,7 @@ for (const scenario of scenarios) {
     expect(metrics.evidenceSourcesVisible).toBe(true);
     if (scenario.name !== "empty") expect(metrics.policyVisible).toBe(true);
     if (scenario.name !== "empty") expect(metrics.traceSpineVisible).toBe(true);
+    if (scenario.name !== "empty") expect(metrics.opsEvalsVisible).toBe(true);
     if (scenario.minAgentCards > 0) {
       expect(metrics.pantheonVisible).toBe(true);
       expect(metrics.pantheonButtons).toBeGreaterThanOrEqual(scenario.minAgentCards);
@@ -236,6 +239,7 @@ for (const scenario of scenarios) {
     expect(metrics.evidenceSourcesVisible).toBe(true);
     if (scenario.name !== "empty") expect(metrics.policyVisible).toBe(true);
     if (scenario.name !== "empty") expect(metrics.traceSpineVisible).toBe(true);
+    if (scenario.name !== "empty") expect(metrics.opsEvalsVisible).toBe(true);
     if (scenario.minAgentCards > 0) {
       expect(metrics.pantheonVisible).toBe(true);
       expect(metrics.pantheonButtons).toBeGreaterThanOrEqual(scenario.minAgentCards);

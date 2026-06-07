@@ -61,6 +61,8 @@ OLYMPUS_EXPOSE_LOCAL_LABELS=1 hermes dashboard --no-open --skip-build
 - Empty evidence sections stay hidden instead of rendering filler panels.
 - Refresh and interval loads ignore stale responses so older `/overview` calls
   cannot overwrite newer data.
+- Operational Evals are deterministic checks from Hermes evidence. They do not
+  claim answer quality or benchmark quality.
 - Usage and cost totals stay in Hermes Command Center Usage or Analytics.
   Olympus shows cost only as risk, policy, or handoff evidence.
 - Action links point to Hermes-owned routes: `/analytics`, `/config`, `/cron`,
