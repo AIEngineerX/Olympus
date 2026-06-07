@@ -219,6 +219,188 @@ def runtime_diagnostics(route: str, started_at: float, payload: Dict[str, Any], 
     }
 
 
+def _source_state(present: bool, read_failures: int = 0) -> str:
+    if not present:
+        return "missing"
+    return "warning" if read_failures else "ok"
+
+
+def _sqlite_count(path: Path, table: str) -> Optional[int]:
+    if not path.exists():
+        return None
+    con: Optional[sqlite3.Connection] = None
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1.5)
+        con.row_factory = sqlite3.Row
+        row = con.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
+        return int(row["n"] or 0) if row is not None else 0
+    except Exception:
+        return None
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+
+def _json_object_count(path: Path, key: Optional[str] = None) -> Optional[int]:
+    data = read_json(path)
+    if key and isinstance(data, dict):
+        data = data.get(key)
+    if isinstance(data, dict):
+        return len(data)
+    if isinstance(data, list):
+        return len(data)
+    return None
+
+
+def build_evidence_sources(profiles: List[Dict[str, Any]], sessions: List[Dict[str, Any]], cron: List[Dict[str, Any]], gateways: List[Dict[str, Any]], kanban: Dict[str, Any]) -> Dict[str, Any]:
+    hermes_home = get_hermes_home()
+    state_store = hermes_home / "state.db"
+    config_file = hermes_home / "config.yaml"
+    skill_usage = hermes_home / "skills" / ".usage.json"
+    hub_lock = hermes_home / "skills" / ".hub" / "lock.json"
+    boards = as_list(kanban.get("boards"))
+    board_failures = sum(1 for board in boards if isinstance(board, dict) and board.get("error"))
+
+    session_count = _sqlite_count(state_store, "sessions")
+    message_count = _sqlite_count(state_store, "messages")
+    state_failures = int(state_store.exists() and (session_count is None or message_count is None))
+    skill_usage_count = _json_object_count(skill_usage)
+    hub_installed_count = _json_object_count(hub_lock, "installed")
+
+    items = [
+        {
+            "id": "hermes_state",
+            "label": "Hermes state store",
+            "type": "sqlite",
+            "state": _source_state(state_store.exists(), state_failures),
+            "present": state_store.exists(),
+            "counts": {
+                "sessions_returned": len(sessions),
+                "sessions_recorded": session_count if session_count is not None else 0,
+                "messages_recorded": message_count if message_count is not None else 0,
+            },
+            "fields": [
+                "sessions.started_at",
+                "sessions.ended_at",
+                "sessions.message_count",
+                "sessions.tool_call_count",
+                "sessions.input_tokens",
+                "sessions.output_tokens",
+                "sessions.api_call_count",
+                "sessions.handoff_error",
+            ],
+            "redaction": "Session IDs are hashed and titles are hidden unless local labels are enabled.",
+            "read_failures": state_failures,
+            "recommended_view": "/sessions",
+        },
+        {
+            "id": "hermes_kanban",
+            "label": "Hermes Kanban store",
+            "type": "sqlite",
+            "state": _source_state(bool(boards), board_failures),
+            "present": bool(boards),
+            "counts": {
+                "boards_scanned": len(boards),
+                "open_tasks": int(kanban.get("open") or 0),
+                "attention_items": len(as_list(kanban.get("attention"))),
+                "recent_runs": len(as_list(kanban.get("recent_runs"))),
+            },
+            "fields": [
+                "tasks.status",
+                "tasks.assignee",
+                "tasks.skills",
+                "tasks.session_id",
+                "tasks.model_override",
+                "task_runs.status",
+                "task_runs.outcome",
+                "task_runs.last_heartbeat_at",
+            ],
+            "redaction": "Task IDs and board labels are hashed unless local labels are enabled.",
+            "read_failures": board_failures,
+            "recommended_view": "/kanban",
+        },
+        {
+            "id": "hermes_config",
+            "label": "Hermes config",
+            "type": "yaml",
+            "state": _source_state(config_file.exists(), 0),
+            "present": config_file.exists(),
+            "counts": {
+                "profiles_scanned": len(profiles),
+                "cron_jobs": len(cron),
+                "gateways": len(gateways),
+            },
+            "fields": [
+                "model.provider_presence",
+                "model.default_presence",
+                "profile.gateway_state",
+                "profile.skill_count",
+                "cron.enabled",
+                "cron.last_status",
+            ],
+            "redaction": "Secrets, prompt text, local paths, and exact model labels are not returned by default.",
+            "read_failures": 0,
+            "recommended_view": "/config",
+        },
+        {
+            "id": "skill_usage",
+            "label": "Skill usage metadata",
+            "type": "json",
+            "state": _source_state(skill_usage.exists(), int(skill_usage.exists() and skill_usage_count is None)),
+            "present": skill_usage.exists(),
+            "counts": {
+                "skills_recorded": skill_usage_count if skill_usage_count is not None else 0,
+            },
+            "fields": [
+                "created_at",
+                "last_used_at",
+                "last_viewed_at",
+                "last_patched_at",
+                "use_count",
+                "state",
+                "pinned",
+            ],
+            "redaction": "Skill names are summarized and can be hashed when labels are hidden.",
+            "read_failures": int(skill_usage.exists() and skill_usage_count is None),
+            "recommended_view": "/skills",
+        },
+        {
+            "id": "skill_hub_lock",
+            "label": "Skill hub lock metadata",
+            "type": "json",
+            "state": _source_state(hub_lock.exists(), int(hub_lock.exists() and hub_installed_count is None)),
+            "present": hub_lock.exists(),
+            "counts": {
+                "hub_installed": hub_installed_count if hub_installed_count is not None else 0,
+            },
+            "fields": [
+                "version",
+                "installed",
+                "optional_trust_metadata",
+                "optional_scan_metadata",
+            ],
+            "redaction": "Only local hub metadata presence and counts are shown in Phase 0.",
+            "read_failures": int(hub_lock.exists() and hub_installed_count is None),
+            "recommended_view": "/skills",
+        },
+    ]
+    missing = sum(1 for item in items if item["state"] == "missing")
+    warnings = sum(1 for item in items if item["state"] == "warning")
+    return {
+        "summary": {
+            "sources": len(items),
+            "available": len(items) - missing,
+            "missing": missing,
+            "warnings": warnings,
+            "privacy": "local labels hidden" if not EXPOSE_LOCAL_LABELS else "local labels visible",
+        },
+        "items": items,
+    }
+
+
 def _parse_simple_yaml(text: str) -> Dict[str, Any]:
     """Small fallback for Hermes config.yaml when PyYAML is unavailable."""
     data: Dict[str, Any] = {}
@@ -2318,7 +2500,7 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
                 {"signal": "Stale session", "threshold": "open session older than the freshness window", "why": "Unresolved stale work makes performance evidence unreliable."},
             ],
             "sources": [
-                {"label": "Hermes session store", "detail": "Uses local runtime metadata, message_count, tool_call_count, handoff_error, and timestamps from state.db."},
+                {"label": "Hermes session store", "detail": "Uses local runtime metadata, message_count, tool_call_count, handoff_error, and timestamps from the Hermes state store."},
                 {"label": "Hermes Kanban", "detail": "Uses first-party task status, assignee load, worker heartbeats, retries, and task_runs."},
                 {"label": "HermesOS profiles and skills", "detail": "Uses profile runtime-route metadata, gateway state, and local SKILL.md counts."},
                 {"label": "Provider-neutral agent evaluation", "detail": "Uses traces, tool calls, outcomes, and repeatable signals before changing agents or routes."},
@@ -2354,6 +2536,7 @@ async def overview() -> Dict[str, Any]:
     skill_coverage = build_skill_coverage(profiles, sessions, kanban)
     profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
     performance = build_performance_tracking(sessions, kanban)
+    evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
     health = collect_health(profiles, cron)
     attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
     tuning = build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)
@@ -2373,6 +2556,7 @@ async def overview() -> Dict[str, Any]:
         "skill_coverage": strip_internal(skill_coverage),
         "profile_fitness": strip_internal(profile_fitness),
         "performance": strip_internal(performance),
+        "evidence_sources": strip_internal(evidence_sources),
     }
     payload["diagnostics"] = runtime_diagnostics("/overview", started_at, payload, profiles, sessions, kanban)
     return payload
@@ -2392,6 +2576,7 @@ async def tuning() -> Dict[str, Any]:
     skill_coverage = build_skill_coverage(profiles, sessions, kanban)
     profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
     performance = build_performance_tracking(sessions, kanban)
+    evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
     health = collect_health(profiles, cron)
     attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
     payload = {
@@ -2405,6 +2590,7 @@ async def tuning() -> Dict[str, Any]:
         "skill_coverage": strip_internal(skill_coverage),
         "profile_fitness": strip_internal(profile_fitness),
         "performance": strip_internal(performance),
+        "evidence_sources": strip_internal(evidence_sources),
         "tuning": strip_internal(build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)),
     }
     payload["diagnostics"] = runtime_diagnostics("/tuning", started_at, payload, profiles, sessions, kanban)

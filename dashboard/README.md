@@ -58,7 +58,7 @@ OLYMPUS_EXPOSE_LOCAL_LABELS=1 hermes dashboard --no-open --skip-build
 - Empty evidence sections stay hidden instead of rendering filler panels.
 - Refresh and interval loads ignore stale responses so older `/overview` calls
   cannot overwrite newer data.
-- Action links should point to Hermes-owned routes: `/analytics`, `/cron`,
+- Action links should point to Hermes-owned routes: `/analytics`, `/config`, `/cron`,
   `/kanban`, `/logs`, `/profiles`, `/sessions`, or `/skills`.
 
 ## Verify

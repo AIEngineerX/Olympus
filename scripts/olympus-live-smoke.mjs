@@ -43,7 +43,7 @@ const bannedCopyPhrases = [
   "next-generation",
   "cutting-edge",
 ];
-const allowedHermesRoutes = ["/analytics", "/cron", "/kanban", "/logs", "/profiles", "/sessions", "/skills"];
+const allowedHermesRoutes = ["/analytics", "/config", "/cron", "/kanban", "/logs", "/profiles", "/sessions", "/skills"];
 
 function requestText(url, timeoutMs = 3000) {
   return new Promise((resolve) => {
@@ -225,6 +225,7 @@ async function inspectViewport(browser, viewport, sessionToken) {
         }),
       svgTextCount: pageEl.querySelectorAll("svg text").length,
       diagnosticsVisible: bodyText.includes("Production Diagnostics"),
+      evidenceSourcesVisible: bodyText.includes("Evidence Sources"),
     };
   }, { required: requiredSections, bannedPhrases: bannedCopyPhrases, allowedRoutes: allowedHermesRoutes });
   await context.close();
@@ -255,6 +256,7 @@ async function main() {
       if (result.metrics.badLinks.length) failures.push(`${result.viewport}: bad links ${JSON.stringify(result.metrics.badLinks)}`);
       if (result.metrics.svgTextCount) failures.push(`${result.viewport}: SVG text count ${result.metrics.svgTextCount}`);
       if (!result.metrics.diagnosticsVisible) failures.push(`${result.viewport}: production diagnostics not visible`);
+      if (!result.metrics.evidenceSourcesVisible) failures.push(`${result.viewport}: evidence sources not visible`);
     }
     const summary = { ok: failures.length === 0, url: baseUrl, host, port, sessionTokenDetected: Boolean(sessionToken), results, failures };
     console.log(JSON.stringify(summary, null, 2));

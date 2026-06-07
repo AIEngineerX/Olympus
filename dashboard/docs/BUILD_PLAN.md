@@ -18,10 +18,12 @@ Backend: `plugin_api.py`
 - reads Hermes profile, cron, session, gateway, log, and Kanban metadata
 - computes health, attention, tuning recommendations, score deductions, and Agent HQ tuning items
 - redacts secrets and hides local labels by default
+- returns an Evidence Sources contract for the Hermes stores and safe fields used in each scan
 
 Frontend: `dist/index.js` and `dist/style.css`
 
 - renders the score explanation, Agent HQ, tuning queue, Agent View, conditional Kanban intelligence, and activity events
+- renders Evidence Sources inside Performance Tracking so operators can see the first-party source basis for each scan
 - links actions to existing Hermes pages
 - avoids duplicating Kanban, Sessions, Cron, Profiles, Logs, Models, Config, Keys, MCP, or Memory admin surfaces
 
@@ -42,6 +44,21 @@ Olympus should add the missing tuning layer:
 ## Phase Status
 
 Complete and test each item before starting the next.
+
+### 0. Evidence Contract (shipped)
+
+Backend:
+
+- `evidence_sources` is returned from `/overview` and `/tuning`.
+- Sources include Hermes state, Kanban, config, skill usage metadata, and skill hub lock metadata.
+- The contract reports presence, read state, counts, safe field names, redaction policy, and Hermes-owned fix links.
+- Raw paths, raw session IDs, raw task IDs, prompt text, and secret-like values remain hidden by default.
+
+Frontend:
+
+- Render Evidence Sources in the Performance Tracking diagnostics area.
+- Keep it compact and link only to Hermes-owned pages.
+- Fixture and live smoke checks require the strip to render.
 
 ### 1. Skill Coverage (shipped)
 

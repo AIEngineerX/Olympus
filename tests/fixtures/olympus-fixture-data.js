@@ -45,7 +45,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       sources: [
         {
           label: "Hermes session store",
-          detail: "Uses local runtime metadata, message_count, tool_call_count, handoff_error, and timestamps from state.db."
+          detail: "Uses local runtime metadata, message_count, tool_call_count, handoff_error, and timestamps from the Hermes state store."
         },
         {
           label: "Hermes Kanban",
@@ -734,6 +734,8 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
   }
 
   function withDiagnostics(data, state) {
+    const boardCount = data.kanban && data.kanban.boards ? data.kanban.boards.length : 0;
+    const sourceState = state === "empty" ? "missing" : "ok";
     data.diagnostics = {
       route: "/overview",
       state: state === "empty" ? "ok" : "warning",
@@ -760,6 +762,93 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         version: "fixture",
         home_detected: true
       }
+    };
+    data.evidence_sources = {
+      summary: {
+        sources: 5,
+        available: state === "empty" ? 3 : 5,
+        missing: state === "empty" ? 2 : 0,
+        warnings: 0,
+        privacy: state === "no-labels" ? "local labels hidden" : "fixture labels"
+      },
+      items: [
+        {
+          id: "hermes_state",
+          label: "Hermes state store",
+          type: "sqlite",
+          state: sourceState,
+          present: state !== "empty",
+          counts: {
+            sessions_returned: state === "empty" ? 0 : 12,
+            sessions_recorded: state === "empty" ? 0 : 84,
+            messages_recorded: state === "empty" ? 0 : 1260
+          },
+          fields: ["sessions.started_at", "sessions.tool_call_count", "sessions.input_tokens", "sessions.handoff_error"],
+          redaction: "Session IDs are hashed and titles are hidden unless local labels are enabled.",
+          read_failures: 0,
+          recommended_view: "/sessions"
+        },
+        {
+          id: "hermes_kanban",
+          label: "Hermes Kanban store",
+          type: "sqlite",
+          state: boardCount ? "ok" : "missing",
+          present: Boolean(boardCount),
+          counts: {
+            boards_scanned: boardCount,
+            open_tasks: data.kanban && data.kanban.open || 0,
+            attention_items: data.kanban && data.kanban.attention ? data.kanban.attention.length : 0
+          },
+          fields: ["tasks.status", "tasks.assignee", "tasks.skills", "task_runs.outcome"],
+          redaction: "Task IDs and board labels are hashed unless local labels are enabled.",
+          read_failures: 0,
+          recommended_view: "/kanban"
+        },
+        {
+          id: "hermes_config",
+          label: "Hermes config",
+          type: "yaml",
+          state: "ok",
+          present: true,
+          counts: {
+            profiles_scanned: data.party && data.party.members ? data.party.members.length : 0,
+            cron_jobs: 3,
+            gateways: 2
+          },
+          fields: ["model.provider_presence", "profile.gateway_state", "profile.skill_count", "cron.last_status"],
+          redaction: "Secrets, prompt text, local paths, and exact model labels are not returned by default.",
+          read_failures: 0,
+          recommended_view: "/config"
+        },
+        {
+          id: "skill_usage",
+          label: "Skill usage metadata",
+          type: "json",
+          state: sourceState,
+          present: state !== "empty",
+          counts: {
+            skills_recorded: state === "empty" ? 0 : 48
+          },
+          fields: ["last_used_at", "last_patched_at", "use_count", "state"],
+          redaction: "Skill names are summarized and can be hashed when labels are hidden.",
+          read_failures: 0,
+          recommended_view: "/skills"
+        },
+        {
+          id: "skill_hub_lock",
+          label: "Skill hub lock metadata",
+          type: "json",
+          state: sourceState,
+          present: state !== "empty",
+          counts: {
+            hub_installed: state === "empty" ? 0 : 8
+          },
+          fields: ["version", "installed", "optional_trust_metadata", "optional_scan_metadata"],
+          redaction: "Only local hub metadata presence and counts are shown in Phase 0.",
+          read_failures: 0,
+          recommended_view: "/skills"
+        }
+      ]
     };
     return data;
   }
