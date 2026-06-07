@@ -123,6 +123,7 @@ See [`SECURITY.md`](SECURITY.md) for the full security and privacy posture.
 │   └── README.md                # package notes
 ├── scripts/install-dashboard-link.sh
 ├── scripts/olympus-live-smoke.mjs
+├── scripts/olympus-performance-smoke.mjs
 ├── tests/visual/                 # Playwright fixture checks
 ├── tests/fixtures/                # Olympus browser fixtures
 ├── package.json                   # verification scripts
@@ -143,7 +144,10 @@ build step. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflo
 npm run verify
 npm run test:visual
 npm run test:live
+npm run test:performance
 npm run test:security
+npm run test:desktop
+npm audit --audit-level=moderate
 ```
 
 `npm run test:visual` uses a fixture-backed Playwright harness. It loads the
@@ -155,6 +159,11 @@ sections stay hidden, and catches private-label leaks in the no-labels scenario.
 `http://127.0.0.1:9119/olympus`. It starts Hermes when needed, verifies
 desktop/mobile rendering, and fails on console errors, overflow, tiny labels,
 bad links, SVG text, or missing Production Diagnostics.
+
+`npm run test:performance` checks the real `/overview` and `/tuning` plugin API
+routes through the Hermes session-token flow. It fails on non-2xx responses,
+slow local response time, backend diagnostic budget warnings, or payloads above
+the documented budget.
 
 The live smoke runner reuses an existing Hermes dashboard only when the served
 HTML includes the Hermes session token. If it needs to start Hermes and your
@@ -174,6 +183,8 @@ set `OLYMPUS_SMOKE_RELINK=1` before running the smoke command.
   not scanned or returned.
 - Config policy reads only safe structure, counts, and flags; it does not return
   prompt text, base URLs, API keys, env values, or local paths.
+- Dependencies are exact-pinned in `package.json`, locked in
+  `package-lock.json`, and checked with `npm audit --audit-level=moderate`.
 
 ## Contributing
 

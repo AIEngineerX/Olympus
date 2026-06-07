@@ -39,12 +39,15 @@ Before publishing or opening a PR:
 1. Run `npm run verify`.
 2. Run `npm run test:visual`.
 3. Run `npm run test:live` for live route, layout, or plugin mounting changes.
-4. Run `npm run test:security` for payload, redaction, labels, config, skills,
+4. Run `npm run test:performance` for live `/overview` and `/tuning` response
+   budget checks.
+5. Run `npm run test:security` for payload, redaction, labels, config, skills,
    or evidence-source changes.
-5. Search for private paths, tokens, usernames, private model names, and old
+6. Run `npm audit --audit-level=moderate`.
+7. Search for private paths, tokens, usernames, private model names, and old
    project-specific references.
-6. Confirm generated files such as `.DS_Store`, `__pycache__`, screenshots, and
+8. Confirm generated files such as `.DS_Store`, `__pycache__`, screenshots, and
    local database files are not staged.
-7. Confirm Olympus still uses Hermes dashboard auth and does not add direct
+9. Confirm Olympus still uses Hermes dashboard auth and does not add direct
    unauthenticated routes.
-8. Confirm any new write action is gated, explicit, and documented.
+10. Confirm any new write action is gated, explicit, and documented.

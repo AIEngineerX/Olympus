@@ -82,8 +82,10 @@ Run from the repository root:
 npm run verify
 npm run test:visual
 npm run test:live
+npm run test:performance
 npm run test:security
 npm run test:desktop
+npm audit --audit-level=moderate
 ```
 
 `npm run test:visual` runs fixture-backed desktop/mobile checks across noisy,
@@ -97,6 +99,11 @@ somewhere else, set `OLYMPUS_SMOKE_RELINK=1`.
 `npm run test:security` fetches the live `/overview` payload through the Hermes
 session-token flow and fails on local paths, raw database filenames,
 workspace/cwd keys, or secret-like strings.
+
+`npm run test:performance` fetches the live `/overview` and `/tuning` payloads
+several times through the Hermes session-token flow and fails on non-2xx
+responses, slow local response time, backend diagnostic budget warnings, or
+payloads above the documented budget.
 
 `npm run test:desktop` checks the local Hermes Desktop app, Command Center Usage
 ownership, web dashboard plugin support, and Desktop plugin-tab parity status.

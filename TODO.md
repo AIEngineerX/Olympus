@@ -7,6 +7,7 @@
 - Added Agent Monitor, readiness score, tuning queue, Evidence Sources, Performance Tracking, Trace Spine, Pantheon, Kanban Intelligence, Skill Coverage, Skill Hygiene, Profile Fitness, Tool Policy, and Aux Cost.
 - Redacted local labels, paths, raw IDs, prompt text, and secret-like values by default.
 - Added visual, live, and security smoke gates.
+- Added live performance smoke and dependency audit gates for deployment checks.
 - Kept actions as links to Hermes-owned pages.
 - Tightened hidden-ID privacy for session, cron, Kanban run, worker, and event refs.
 - Changed log health wording to report log-tail scanning instead of inferred recency.
@@ -17,7 +18,7 @@
 Complete each item in order and test before starting the next.
 
 0. Production QA Gate (ongoing)
-   - Keep `npm run verify`, `npm run test:visual`, `npm run test:live`, and `npm run test:security` passing.
+   - Keep `npm run verify`, `npm run test:visual`, `npm run test:live`, `npm run test:performance`, `npm run test:security`, `npm run test:desktop`, and `npm audit --audit-level=moderate` passing.
    - Maintain fixture states for noisy, healthy, empty, overloaded, stale/blocked, high-cost, and hidden-label systems.
    - Track production gaps in `dashboard/docs/PRODUCTION_READINESS.md`.
    - Static checks and fixture visual smoke now run in CI; live Hermes smoke remains a local release gate.
@@ -56,6 +57,7 @@ Run after each implemented item:
 npm run verify
 npm run test:visual
 npm run test:live
+npm run test:performance
 npm run test:security
 npm run test:desktop
 ```
@@ -80,4 +82,5 @@ Visual fixture:
 ```bash
 npm run test:visual
 npm run test:live
+npm run test:performance
 ```

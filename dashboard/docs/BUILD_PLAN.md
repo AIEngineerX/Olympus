@@ -186,8 +186,10 @@ Run after each implemented item:
 npm run verify
 npm run test:visual
 npm run test:live
+npm run test:performance
 npm run test:security
 npm run test:desktop
+npm audit --audit-level=moderate
 ```
 
 Live check:
