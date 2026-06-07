@@ -2769,6 +2769,159 @@ def build_activity_events(sessions: List[Dict[str, Any]], cron: List[Dict[str, A
     return events[:24]
 
 
+def build_trace_spine(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    kanban = kanban or {}
+    session_by_ref = {
+        str(session.get("session_ref") or session.get("id")): session
+        for session in sessions
+        if isinstance(session, dict) and (session.get("session_ref") or session.get("id"))
+    }
+    tasks = kanban_items(kanban, "recent_tasks")
+    runs_by_task: Dict[str, List[Dict[str, Any]]] = {}
+    events_by_task: Dict[str, List[Dict[str, Any]]] = {}
+    for run in kanban_items(kanban, "recent_runs"):
+        task_ref = str(run.get("task_id") or "")
+        if task_ref:
+            runs_by_task.setdefault(task_ref, []).append(run)
+    for event in kanban_items(kanban, "recent_events"):
+        task_ref = str(event.get("task_id") or "")
+        if task_ref:
+            events_by_task.setdefault(task_ref, []).append(event)
+
+    def trace_signal(task: Dict[str, Any], session: Optional[Dict[str, Any]], runs: List[Dict[str, Any]], events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        signals: List[str] = []
+        failed_runs = [run for run in runs if is_failed_run(run) or str(run.get("status") or "").lower() in {"failed", "failure"}]
+        failed_events = [
+            event for event in events
+            if str(event.get("kind") or "").lower() in {"failed", "failure", "crashed", "timed_out", "spawn_failed", "gave_up"}
+        ]
+        if task.get("status") == "blocked":
+            signals.append("blocked")
+        if task.get("status") == "ready" and str(task.get("assignee") or "") == "unassigned":
+            signals.append("unassigned")
+        if int(task.get("consecutive_failures") or 0) > 0:
+            signals.append("retry")
+        if task_stale_reason(task):
+            signals.append("stale")
+        if failed_runs:
+            signals.append("failed_run")
+        if failed_events:
+            signals.append("failed_event")
+        if session and session.get("handoff_error"):
+            signals.append("handoff_failure")
+        tool_count = int((session or {}).get("tool_call_count") or 0)
+        if tool_count >= RUNAWAY_TOOLS_THRESHOLD:
+            signals.append("tool_pressure")
+
+        if "blocked" in signals:
+            return {
+                "severity": "warning",
+                "label": "Clarify blocked task",
+                "detail": "Blocked work needs a decision, dependency, or acceptance criteria before more worker runs add noise.",
+                "signals": signals,
+                "recommended_view": "/kanban",
+            }
+        if "failed_run" in signals or "failed_event" in signals or "retry" in signals:
+            return {
+                "severity": "warning",
+                "label": "Review failed task run",
+                "detail": "Task run or event history shows failure pressure. Inspect the Kanban item before rerouting.",
+                "signals": signals,
+                "recommended_view": "/kanban",
+            }
+        if "stale" in signals:
+            return {
+                "severity": "warning",
+                "label": "Recover stale running work",
+                "detail": "The running task has stale worker evidence. Reclaim, close, or resume it in Kanban.",
+                "signals": signals,
+                "recommended_view": "/kanban",
+            }
+        if "unassigned" in signals:
+            return {
+                "severity": "warning",
+                "label": "Assign ready work",
+                "detail": "Ready work without an assignee cannot be claimed by a profile-specific worker.",
+                "signals": signals,
+                "recommended_view": "/kanban",
+            }
+        if "handoff_failure" in signals:
+            return {
+                "severity": "warning",
+                "label": "Review session handoff",
+                "detail": "The linked session reports handoff trouble. Check delivery or cancellation behavior.",
+                "signals": signals,
+                "recommended_view": "/sessions",
+            }
+        if "tool_pressure" in signals:
+            return {
+                "severity": "info",
+                "label": "Reduce trace tool pressure",
+                "detail": "The linked session crossed the runaway tool threshold. Add a checklist, split the task, or tighten the route.",
+                "signals": signals,
+                "recommended_view": "/sessions",
+            }
+        return {
+            "severity": "ok",
+            "label": "Trace linked",
+            "detail": "Task, run, event, and session evidence are linked without an urgent threshold.",
+            "signals": signals,
+            "recommended_view": "/kanban",
+        }
+
+    items: List[Dict[str, Any]] = []
+    failure_points = 0
+    for task in tasks[:24]:
+        task_ref = str(task.get("id") or "")
+        if not task_ref:
+            continue
+        session_ref = task.get("session_ref")
+        session = session_by_ref.get(str(session_ref or "")) if session_ref else None
+        runs = runs_by_task.get(task_ref, [])
+        events = events_by_task.get(task_ref, [])
+        signal = trace_signal(task, session, runs, events)
+        failure_points += sum(1 for name in signal["signals"] if name in {"blocked", "retry", "stale", "failed_run", "failed_event", "handoff_failure", "unassigned"})
+        item = {
+            "task_ref": task_ref,
+            "board": task.get("board"),
+            "title": task.get("title") or task_ref,
+            "status": task.get("status") or "unknown",
+            "assignee": task.get("assignee") or "unassigned",
+            "session_ref": session_ref,
+            "session_state": session.get("state") if session else None,
+            "session_tools": int(session.get("tool_call_count") or 0) if session else 0,
+            "session_messages": int(session.get("message_count") or 0) if session else 0,
+            "run_refs": [run.get("id") for run in runs[:4] if run.get("id")],
+            "event_refs": [event.get("id") for event in events[:6] if event.get("id")],
+            "run_count": len(runs),
+            "event_count": len(events),
+            "signals": signal["signals"],
+            "severity": signal["severity"],
+            "recommendation": signal["label"],
+            "detail": signal["detail"],
+            "recommended_view": signal["recommended_view"],
+            "action_label": _action_label_for_view(str(signal["recommended_view"])),
+            "basis": "Hermes sessions, Kanban tasks, task_runs, and task_events",
+        }
+        items.append(item)
+
+    items.sort(key=lambda item: (_severity_rank(str(item.get("severity"))), -len(as_list(item.get("signals"))), str(item.get("task_ref"))))
+    correlated = sum(1 for item in items if item.get("session_ref") or item.get("run_count") or item.get("event_count"))
+    state = "warning" if any(item.get("severity") == "warning" for item in items) else ("active" if items else "unknown")
+    return {
+        "summary": {
+            "state": state,
+            "tasks": len(tasks),
+            "correlated_tasks": correlated,
+            "sessions": len(session_by_ref),
+            "runs": sum(len(value) for value in runs_by_task.values()),
+            "events": sum(len(value) for value in events_by_task.values()),
+            "failure_points": failure_points,
+        },
+        "items": items[:8],
+    }
+
+
 def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]], cron: List[Dict[str, Any]], sessions: List[Dict[str, Any]], health: Dict[str, Any], attention: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     failed_cron = [j for j in cron if j.get("state") == "error"]
     paused_cron = [j for j in cron if j.get("state") == "paused"]
@@ -3066,6 +3219,7 @@ async def overview() -> Dict[str, Any]:
     skill_hygiene = build_skill_hygiene(skill_metadata, skill_coverage, kanban)
     profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
     performance = build_performance_tracking(sessions, kanban)
+    trace_spine = build_trace_spine(sessions, kanban)
     evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
     config_policy = collect_config_policy(profiles, sessions, kanban)
     health = collect_health(profiles, cron)
@@ -3088,6 +3242,7 @@ async def overview() -> Dict[str, Any]:
         "skill_hygiene": strip_internal(skill_hygiene),
         "profile_fitness": strip_internal(profile_fitness),
         "performance": strip_internal(performance),
+        "trace_spine": strip_internal(trace_spine),
         "evidence_sources": strip_internal(evidence_sources),
         "config_policy": strip_internal(config_policy),
     }
@@ -3111,6 +3266,7 @@ async def tuning() -> Dict[str, Any]:
     skill_hygiene = build_skill_hygiene(skill_metadata, skill_coverage, kanban)
     profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
     performance = build_performance_tracking(sessions, kanban)
+    trace_spine = build_trace_spine(sessions, kanban)
     evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
     config_policy = collect_config_policy(profiles, sessions, kanban)
     health = collect_health(profiles, cron)
@@ -3127,6 +3283,7 @@ async def tuning() -> Dict[str, Any]:
         "skill_hygiene": strip_internal(skill_hygiene),
         "profile_fitness": strip_internal(profile_fitness),
         "performance": strip_internal(performance),
+        "trace_spine": strip_internal(trace_spine),
         "evidence_sources": strip_internal(evidence_sources),
         "config_policy": strip_internal(config_policy),
         "tuning": strip_internal(build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)),

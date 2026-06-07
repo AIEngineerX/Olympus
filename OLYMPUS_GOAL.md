@@ -57,10 +57,12 @@ that evidence only to explain risk, routing, skill hygiene, or the next action.
 
 ## Next Direction
 
-Build Trace Spine V0 from first-party Hermes evidence:
+Complete the next phases without drifting from the monitor boundary:
 
-1. Correlate sessions, messages, Kanban tasks, task runs, and task events.
-2. Summarize tool sequences and failure points without transcript content.
-3. Rank task-level recommendations by blocked, stale, retry, tool-heavy,
-   unassigned, handoff failure, and unhealthy-assignee signals.
-4. Keep action buttons as handoff links unless a write action is approved.
+1. Keep Trace Spine V0 green in visual, live, and security checks.
+2. Finish the remaining skill-hygiene evidence only when Hermes stores it
+   locally.
+3. Add Desktop preflight for dashboard plugin-tab parity.
+4. Add deterministic operational eval signals for reliability, efficiency,
+   routing, and skill use.
+5. Keep action buttons as handoff links unless a write action is approved.

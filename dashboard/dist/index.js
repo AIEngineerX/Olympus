@@ -352,6 +352,71 @@
     );
   }
 
+  function TraceSpine({ trace }) {
+    const data = trace || {};
+    const summary = data.summary || {};
+    const items = asList(data.items);
+    const hasEvidence = items.length || summary.tasks || summary.sessions || summary.runs || summary.events;
+    if (!hasEvidence) return null;
+
+    const tiles = [
+      { label: "Tasks", value: formatCount(summary.tasks || 0), state: summary.tasks ? "active" : "idle" },
+      { label: "Linked", value: formatCount(summary.correlated_tasks || 0), state: summary.correlated_tasks ? "active" : "idle" },
+      { label: "Failures", value: formatCount(summary.failure_points || 0), state: summary.failure_points ? "warning" : "ok" },
+      { label: "Sessions", value: formatCount(summary.sessions || 0), state: summary.sessions ? "active" : "idle" },
+      { label: "Runs", value: formatCount(summary.runs || 0), state: summary.runs ? "active" : "idle" },
+      { label: "Events", value: formatCount(summary.events || 0), state: summary.events ? "active" : "idle" },
+    ];
+    const visibleItems = items.slice(0, 4);
+
+    function refLine(label, refs) {
+      const safeRefs = asList(refs).slice(0, 3);
+      if (!safeRefs.length) return null;
+      return el("small", null, label + ": " + safeRefs.join(" / "));
+    }
+
+    return el("section", { className: "olympus-section olympus-trace-spine" },
+      el("div", { className: "olympus-section-head" },
+        el("div", null,
+          el("h2", null, "Trace Spine"),
+          el("p", null, "Task, session, run, and event correlation without transcript content.")
+        ),
+        el(StatePill, { state: summary.state || "unknown" })
+      ),
+      el("div", { className: "olympus-trace-tiles" },
+        tiles.map((item) => el("div", { key: item.label, className: "olympus-trace-tile" },
+          el("span", null, item.label),
+          el("strong", null, item.value),
+          el(StatePill, { state: item.state })
+        ))
+      ),
+      visibleItems.length ? el("div", { className: "olympus-trace-list" },
+        visibleItems.map((item, idx) => el("article", { key: item.task_ref || idx, className: cx("olympus-trace-item", "olympus-trace-item-" + String(item.severity || "info").toLowerCase()) },
+          el("div", { className: "olympus-item-head" },
+            el("div", null,
+              el("span", null, [item.board || "board", item.status || "task"].filter(Boolean).join(" / ")),
+              el("h3", null, item.title || "Trace item")
+            ),
+            el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
+          ),
+          el("p", null, item.recommendation || item.detail || "Review the linked Hermes view."),
+          el("div", { className: "olympus-trace-signals" },
+            asList(item.signals).slice(0, 5).map((signal) => el("span", { key: signal }, signal.replaceAll("_", " ")))
+          ),
+          el("div", { className: "olympus-trace-refs" },
+            item.task_ref ? el("small", null, "Task ref: " + item.task_ref) : null,
+            item.session_ref ? el("small", null, "Session ref: " + item.session_ref) : null,
+            refLine("Runs", item.run_refs),
+            refLine("Events", item.event_refs),
+            item.basis ? el("small", null, item.basis) : null
+          ),
+          item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
+        ))
+      ) : el("p", { className: "olympus-muted" }, "No correlated task failures in this scan."),
+      items.length > visibleItems.length ? el("p", { className: "olympus-trace-more" }, "Showing the top " + visibleItems.length + " traces by severity.") : null
+    );
+  }
+
   function ToolPolicy({ policy }) {
     const data = policy || {};
     const summary = data.summary || {};
@@ -918,6 +983,7 @@
       error ? el("div", { className: "olympus-error" }, error) : null,
       el(AgentHQ, { hq: tuning.agent_hq }),
       el(PerformanceTracking, { performance: data && data.performance, diagnostics: data && data.diagnostics, clientDiagnostics, evidenceSources: data && data.evidence_sources }),
+      el(TraceSpine, { trace: data && data.trace_spine }),
       el(ToolPolicy, { policy: data && data.config_policy }),
       el(SkillCoverage, { coverage: data && data.skill_coverage }),
       el(SkillHygiene, { hygiene: data && data.skill_hygiene }),
