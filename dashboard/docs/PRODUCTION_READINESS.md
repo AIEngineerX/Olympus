@@ -33,6 +33,7 @@ npm run verify
 npm run test:visual
 npm run test:live
 npm run test:security
+npm run test:desktop
 ```
 
 For live Hermes validation:
@@ -77,6 +78,11 @@ workspace keys, and secret-like strings. Both commands reuse an existing Hermes
 dashboard only when the served HTML includes the Hermes session token. If the
 plugin target already points somewhere else, set `OLYMPUS_SMOKE_RELINK=1`
 before using the smoke runner to replace it.
+
+`npm run test:desktop` is a read-only preflight. It checks the Olympus plugin
+manifest and link, Hermes web plugin support, local Hermes Desktop presence,
+Command Center Usage ownership, Desktop Python dashboard dependencies, and
+whether Desktop already exposes dashboard plugin-tab route signals.
 
 ## Compatibility Notes
 
