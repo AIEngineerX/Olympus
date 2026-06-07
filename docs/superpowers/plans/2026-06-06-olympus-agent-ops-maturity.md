@@ -1,5 +1,9 @@
 # Olympus Agent Ops Maturity Implementation Plan
 
+> Historical plan. The current completed phase ledger is
+> `docs/superpowers/plans/2026-06-07-olympus-complete-phases.md`.
+> Use this file as background context, not as the active TODO list.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Improve Olympus from a read-only Hermes dashboard into a stronger local agent operations and trust console, with quick wins first and every feature grounded in concrete Hermes evidence.

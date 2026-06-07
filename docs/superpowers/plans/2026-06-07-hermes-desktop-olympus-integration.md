@@ -1,5 +1,10 @@
 # Hermes Desktop Olympus Integration Implementation Plan
 
+> Historical plan. The Olympus-side Desktop preflight, Trace Spine, stored skill
+> audits, and Operational Evals have shipped on
+> `codex/olympus-complete-phases`. The remaining active work is the upstream
+> Hermes Desktop plugin-tab parity PR.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make Olympus a first-class Hermes operations plugin that is packaged, tested, and ready to surface from Hermes Dashboard and Hermes Desktop without duplicating Hermes-owned controls.

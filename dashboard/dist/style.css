@@ -185,7 +185,6 @@
 
 .olympus-viewport-head > div:first-child span,
 .olympus-trigger-card span,
-.olympus-agent-card-head span,
 .olympus-viewport-stat span {
   color: rgba(246, 240, 223, 0.58);
   font-size: 12px;
@@ -252,12 +251,6 @@
   font-size: 13px;
 }
 
-.olympus-agent-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
 .olympus-agent-card {
   min-width: 0;
   min-height: 178px;
@@ -290,76 +283,6 @@
 .olympus-agent-card-running,
 .olympus-agent-card-active {
   border-color: rgba(67, 201, 191, 0.34);
-}
-
-.olympus-agent-card-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.olympus-agent-card-head strong {
-  display: block;
-  min-width: 0;
-  margin-top: 3px;
-  color: #f6f0df;
-  font-size: 18px;
-  line-height: 1.15;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.olympus-agent-card-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.olympus-agent-card-metrics span {
-  min-height: 50px;
-  padding: 7px 6px;
-  border: 1px solid rgba(246, 240, 223, 0.09);
-  border-radius: 4px;
-  color: rgba(246, 240, 223, 0.64);
-  background: rgba(0, 0, 0, 0.18);
-  font-size: 12px;
-  line-height: 1.2;
-  text-align: center;
-  display: grid;
-  gap: 3px;
-}
-
-.olympus-agent-card-metrics b {
-  color: #f6f0df;
-  font-size: 20px;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-.olympus-agent-card-foot,
-.olympus-agent-card-flags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.olympus-agent-card-foot span,
-.olympus-agent-card-flags em {
-  padding: 5px 7px;
-  border: 1px solid rgba(246, 240, 223, 0.1);
-  border-radius: 4px;
-  color: rgba(246, 240, 223, 0.7);
-  background: rgba(246, 240, 223, 0.04);
-  font-size: 12px;
-  line-height: 1.1;
-  font-style: normal;
-}
-
-.olympus-agent-card-flags em {
-  color: #bdf5ef;
-  border-color: rgba(67, 201, 191, 0.22);
-  background: rgba(67, 201, 191, 0.08);
 }
 
 .olympus-pantheon-map {
@@ -1950,8 +1873,7 @@
   }
 
   .olympus-viewport-head,
-  .olympus-trigger-lanes,
-  .olympus-agent-grid {
+  .olympus-trigger-lanes {
     grid-template-columns: 1fr;
   }
 
