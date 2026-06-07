@@ -17,6 +17,7 @@ Backend: `plugin_api.py`
 
 - reads Hermes profile, cron, session, gateway, log, and Kanban metadata
 - computes health, attention, tuning recommendations, score deductions, Agent HQ tuning items, and skill hygiene signals
+- computes safe config policy, browser privacy, fallback, toolset, and auxiliary cost visibility signals
 - redacts secrets and hides local labels by default
 - returns an Evidence Sources contract for the Hermes stores and safe fields used in each scan
 
@@ -24,6 +25,7 @@ Frontend: `dist/index.js` and `dist/style.css`
 
 - renders the score explanation, Agent HQ, tuning queue, Pantheon, conditional Kanban intelligence, and activity events
 - renders Evidence Sources inside Performance Tracking so operators can see the first-party source basis for each scan
+- renders Tool Policy & Aux Cost from safe Hermes config fields and session cost metadata
 - renders Skill Hygiene from local skill usage and hub provenance metadata
 - links actions to existing Hermes pages
 - avoids duplicating Kanban, Sessions, Cron, Profiles, Logs, Models, Config, Keys, MCP, or Memory admin surfaces
@@ -133,11 +135,18 @@ Frontend:
 - Do not install, scan, delete, archive, restore, or mutate skills from Olympus v1.
 - Remaining: show stored skills.sh audit fields when Hermes persists them and add a Curator-specific route once Hermes exposes one.
 
-### 6. Auxiliary Cost Watch (open)
+### 6. Tool Policy & Auxiliary Cost Watch (shipped)
 
-- Detect background or auxiliary work causing token pressure.
-- Highlight expensive routes used for background tasks.
-- Stay provider and model agnostic.
+- Reads only safe config structure: route presence, fallback counts, toolset
+  counts, agent turn limits, loop guardrail presence, compression presence,
+  browser privacy flags, and auxiliary route presence.
+- Correlates auxiliary route presence with Hermes session cost visibility.
+- Flags high turn limits without a visible hard loop stop, browser private URL
+  or recording flags, fallback routes without route audit evidence, and
+  auxiliary routes without cost evidence.
+- Links only to Hermes-owned `/config`, `/analytics`, and `/sessions` routes.
+- Does not return prompt text, personality text, base URLs, API keys, env
+  values, provider secrets, local paths, or exact route labels by default.
 
 ## Bug-Test Gate
 

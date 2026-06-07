@@ -15,6 +15,7 @@ owns vs. what Hermes owns).
 - Ranks agent optimization items with the evidence behind each one.
 - Compares profile readiness, route metadata, skill coverage, gateway state, and workload.
 - Summarizes Kanban pressure: blocked work, active workers, retries, and assignee load.
+- Surfaces safe config policy risks: turn limits, loop guardrails, browser privacy flags, fallbacks, toolsets, and auxiliary cost visibility.
 - Computes a transparent heuristic readiness score with a full deduction breakdown.
 - Keeps v1 read-only: every action is a link to the Hermes page that owns it.
 
@@ -153,6 +154,8 @@ set `OLYMPUS_SMOKE_RELINK=1` before running the smoke command.
 - Attention items are sorted by severity before truncation.
 - Gateway configuration detection parses `.env` variable names only; values are
   not scanned or returned.
+- Config policy reads only safe structure, counts, and flags; it does not return
+  prompt text, base URLs, API keys, env values, or local paths.
 
 ## Contributing
 

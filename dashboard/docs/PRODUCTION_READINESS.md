@@ -13,6 +13,7 @@ is mounted into.
 | Fixture coverage | Add more edge cases as new panels ship. | Fixture states cover noisy, healthy, empty, overloaded, stale/blocked, high-cost, and hidden-label cases. |
 | Performance tracking | Budgets are lightweight and need real release history. | Track render time, API response time, payload size, tool-call pressure, token pressure, loop count, and worker failures. |
 | Evidence source contract | Evidence Sources now shows source presence and safe fields, but each new source must stay pathless and read-only. | Every panel should cite Hermes-owned evidence without raw paths, raw IDs, prompt text, or secret-like values. |
+| Config policy | Tool Policy & Aux Cost reads safe config structure only. | No prompt/personality text, base URLs, API keys, env values, local paths, or exact route labels in public payloads. |
 | Security/privacy gate | Static and live payload checks exist, but publishing still needs human review. Skills.sh audit fields are shown only if Hermes stores them locally. | Keep read-only routes, redacted session IDs, no local paths, no shell execution, hidden labels, and skill-hub scan/trust signals as merge blockers where applicable. |
 | Browser console gate | CI should keep both fixture and live smoke outputs visible. | Visual and live smoke tests fail on console/page errors. |
 | Design source | Keep PRODUCT.md and DESIGN.md current when the surface changes. | Maintain a Viewport strategy, fixture screenshots, and a small set of accepted states. |
@@ -55,6 +56,9 @@ Confirm:
   payload, fetch, render, board, and Hermes-version signals.
 - The Evidence Sources strip shows Hermes state, Kanban, config, skill usage,
   and hub lock metadata without local paths or raw IDs.
+- The Tool Policy & Aux Cost panel shows only safe config counts, browser
+  privacy flags, route audit presence, and cost visibility. It must not expose
+  prompt text, base URLs, API keys, env values, or local paths.
 - The Skill Hygiene panel shows usage, stale/archive/patch counts, and hub
   trust/scan gaps without raw skill names unless labels are explicitly enabled.
 
@@ -116,6 +120,18 @@ Skill performance:
   `~/.hermes/skills/.hub/lock.json`.
 - Stored skills.sh security audit status when Hermes has recorded it locally.
 - Skill recommendation acceptance once write actions are approved outside v1.
+
+Config policy:
+
+- Root and profile config presence.
+- Highest safe `agent.max_turns` or Kanban goal turn limit.
+- Visible tool-loop guardrail presence.
+- Fallback provider count.
+- Toolset count.
+- Compression presence.
+- Browser private URL and recording flags.
+- Auxiliary route presence.
+- Sessions with visible cost data.
 
 ## Production Follow-Ups
 

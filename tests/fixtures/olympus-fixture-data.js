@@ -354,6 +354,97 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       failed_kanban_runs: 1
     }
   },
+  config_policy: {
+    summary: {
+      state: "warning",
+      findings: 3,
+      root_config_present: true,
+      profile_configs: 5,
+      max_turns: 120,
+      hard_loop_stop: false,
+      fallback_providers: 2,
+      toolsets: 6,
+      compression_enabled: true,
+      browser_private_flags: 1,
+      auxiliary_routes: 2,
+      costed_sessions: 0,
+      total_cost_usd: 0,
+      route_audit_profiles: 4,
+      model_override_tasks: 1
+    },
+    settings: [
+      {
+        id: "max_turns",
+        label: "Max Turns",
+        value: 120,
+        state: "warning",
+        detail: "Highest configured agent or goal turn limit.",
+        source: "agent.max_turns and Kanban goal_max_turns",
+        recommended_view: "/config"
+      },
+      {
+        id: "loop_guard",
+        label: "Loop Stop",
+        value: "not visible",
+        state: "warning",
+        detail: "Hard loop guardrail or repeated-tool stop evidence.",
+        source: "tool_loop_guardrails",
+        recommended_view: "/config"
+      },
+      {
+        id: "fallbacks",
+        label: "Fallbacks",
+        value: 2,
+        state: "active",
+        detail: "Fallback provider routes configured in safe config structure.",
+        source: "fallback_providers",
+        recommended_view: "/config"
+      },
+      {
+        id: "aux_cost",
+        label: "Aux Cost",
+        value: 0,
+        unit: "usd",
+        state: "warning",
+        detail: "2 auxiliary route signals, 0 costed sessions.",
+        source: "auxiliary route presence and estimated/actual_cost_usd",
+        recommended_view: "/analytics"
+      }
+    ],
+    findings: [
+      {
+        kind: "policy",
+        severity: "warning",
+        title: "High turn limit lacks a visible loop stop",
+        detail: "High agent turn limits need a visible hard loop guardrail so tool thrash stops before it burns time and tokens.",
+        evidence: "max_turns 120 / hard stop not visible",
+        threshold: "max_turns >= 80 and hard loop stop disabled or missing",
+        basis: "Hermes agent.max_turns plus tool_loop_guardrails",
+        recommended_view: "/config",
+        action_label: "Open Config"
+      },
+      {
+        kind: "browser",
+        severity: "warning",
+        title: "Browser private URL access is enabled",
+        detail: "Private or local browser targets widen the data boundary. Keep this enabled only when local automation needs it.",
+        evidence: "browser private URL flag enabled",
+        basis: "Hermes browser privacy flags",
+        recommended_view: "/config",
+        action_label: "Open Config"
+      },
+      {
+        kind: "cost",
+        severity: "warning",
+        title: "Auxiliary route cost is not visible",
+        detail: "Auxiliary or background provider routes are configured, but recent sessions do not expose cost.",
+        evidence: "2 auxiliary route signals / 0 costed sessions",
+        basis: "Hermes auxiliary route presence plus per-session cost fields",
+        recommended_view: "/analytics",
+        action_label: "Open Analytics"
+      }
+    ]
+  },
   party: {
     summary: {
       members: 5,
@@ -581,6 +672,56 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       detail: lane.id === "speed" ? "median 180s / p90 540s" : lane.id === "tools" ? "0 looping / 0 tool-heavy" : lane.id === "context" ? "0 pressure sessions" : lane.id === "reliability" ? "0 failed runs / 0 stale / 0 errored" : "cost below review threshold"
     }));
     data.performance.signals = [];
+    data.config_policy = {
+      summary: {
+        state: "ok",
+        findings: 0,
+        root_config_present: true,
+        profile_configs: 5,
+        max_turns: 40,
+        hard_loop_stop: true,
+        fallback_providers: 1,
+        toolsets: 6,
+        compression_enabled: true,
+        browser_private_flags: 0,
+        auxiliary_routes: 1,
+        costed_sessions: 6,
+        total_cost_usd: 0.18,
+        route_audit_profiles: 5,
+        model_override_tasks: 0
+      },
+      settings: [
+        {
+          id: "max_turns",
+          label: "Max Turns",
+          value: 40,
+          state: "active",
+          detail: "Highest configured agent or goal turn limit.",
+          source: "agent.max_turns and Kanban goal_max_turns",
+          recommended_view: "/config"
+        },
+        {
+          id: "loop_guard",
+          label: "Loop Stop",
+          value: "visible",
+          state: "ok",
+          detail: "Hard loop guardrail or repeated-tool stop evidence.",
+          source: "tool_loop_guardrails",
+          recommended_view: "/config"
+        },
+        {
+          id: "aux_cost",
+          label: "Aux Cost",
+          value: 0.18,
+          unit: "usd",
+          state: "active",
+          detail: "1 auxiliary route signal, 6 costed sessions.",
+          source: "auxiliary route presence and estimated/actual_cost_usd",
+          recommended_view: "/analytics"
+        }
+      ],
+      findings: []
+    };
     data.skill_coverage.summary.zero_skill_profiles = 0;
     data.skill_coverage.summary.looping_sessions = 0;
     data.skill_coverage.summary.tool_heavy_sessions = 0;
@@ -668,6 +809,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       opportunities: []
     };
     data.performance = { summary: { state: "unknown" }, lanes: [], signals: [], metrics: {} };
+    data.config_policy = { summary: {}, settings: [], findings: [] };
     data.skill_coverage = { summary: {}, suggestions: [], profiles: [] };
     data.skill_hygiene = { summary: {}, signals: [], usage: [], hub: [] };
     data.profile_fitness = { summary: {}, profiles: [] };
@@ -761,6 +903,15 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       detail: "3 sessions crossed the cost review threshold",
       recommended_view: "/analytics"
     });
+    data.config_policy.summary.costed_sessions = 3;
+    data.config_policy.summary.total_cost_usd = 32.75;
+    data.config_policy.settings = data.config_policy.settings.map((item) => (
+      item.id === "aux_cost"
+        ? { ...item, value: 32.75, state: "active", detail: "2 auxiliary route signals, 3 costed sessions." }
+        : item
+    ));
+    data.config_policy.findings = data.config_policy.findings.filter((item) => item.kind !== "cost");
+    data.config_policy.summary.findings = data.config_policy.findings.length;
     return data;
   }
 

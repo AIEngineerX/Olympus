@@ -81,9 +81,37 @@
   border-radius: 6px !important;
   background: rgba(239, 196, 92, 0.12) !important;
   color: #f6f0df !important;
-  min-height: 36px;
+  min-height: 44px;
   align-items: center;
   justify-content: center;
+  font: inherit !important;
+  font-weight: 700 !important;
+  line-height: 1.1 !important;
+  letter-spacing: 0 !important;
+  padding: 0 12px !important;
+  text-transform: none !important;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+  white-space: nowrap;
+}
+
+.olympus-refresh:hover,
+.olympus-link:hover {
+  border-color: rgba(239, 196, 92, 0.66) !important;
+  background: rgba(239, 196, 92, 0.2) !important;
+}
+
+.olympus-refresh:active,
+.olympus-link:active {
+  background: rgba(239, 196, 92, 0.26) !important;
+}
+
+.olympus-refresh:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.olympus-refresh {
+  min-width: 112px;
 }
 
 .olympus-refresh:focus-visible,
@@ -546,6 +574,8 @@
 .olympus-score-grid,
 .olympus-hq-tiles,
 .olympus-hq-grid,
+.olympus-policy-tiles,
+.olympus-policy-grid,
 .olympus-kanban-summary,
 .olympus-kanban-grid {
   display: grid;
@@ -556,6 +586,8 @@
 .olympus-hq-tile,
 .olympus-hq-pane,
 .olympus-tuning-item,
+.olympus-policy-tile,
+.olympus-policy-pane,
 .olympus-kanban-tile,
 .olympus-section,
 .olympus-evidence-pane {
@@ -617,7 +649,12 @@
   flex-wrap: wrap;
   gap: 8px;
   align-items: flex-start;
+  align-self: flex-start;
   justify-content: flex-end;
+}
+
+.olympus-section-head > .olympus-link {
+  align-self: flex-start;
 }
 
 .olympus-section h2,
@@ -979,6 +1016,132 @@
 .olympus-evidence-source em {
   color: rgba(67, 201, 191, 0.78);
   font-style: normal;
+}
+
+.olympus-policy {
+  background:
+    linear-gradient(180deg, rgba(24, 31, 40, 0.92), rgba(10, 12, 18, 0.96)),
+    linear-gradient(90deg, rgba(239, 196, 92, 0.05), rgba(67, 201, 191, 0.04));
+}
+
+.olympus-policy-tiles {
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.olympus-policy-tile {
+  min-height: 78px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.olympus-policy-tile span,
+.olympus-policy-setting span {
+  color: rgba(246, 240, 223, 0.58);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.olympus-policy-tile strong {
+  min-width: 0;
+  font-size: 22px;
+  line-height: 1;
+  overflow-wrap: anywhere;
+}
+
+.olympus-policy-grid {
+  grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.95fr);
+  align-items: start;
+}
+
+.olympus-policy-pane {
+  min-width: 0;
+  padding: 12px;
+}
+
+.olympus-policy-pane h3 {
+  font-size: 16px;
+  margin-bottom: 10px;
+}
+
+.olympus-policy-setting {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 10px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(246, 240, 223, 0.08);
+}
+
+.olympus-policy-setting:first-of-type {
+  border-top: 0;
+}
+
+.olympus-policy-setting > .olympus-state {
+  align-self: start;
+  justify-self: end;
+}
+
+.olympus-policy-setting strong,
+.olympus-policy-setting small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.olympus-policy-setting strong {
+  margin-top: 3px;
+  color: #f6f0df;
+  font-size: 18px;
+  line-height: 1.1;
+}
+
+.olympus-policy-setting small {
+  margin-top: 5px;
+  color: rgba(246, 240, 223, 0.58);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.olympus-policy-finding {
+  padding: 14px;
+  border: 1px solid rgba(246, 240, 223, 0.1);
+  border-radius: 6px;
+  background: rgba(12, 15, 22, 0.58);
+}
+
+.olympus-policy-finding + .olympus-policy-finding {
+  margin-top: 10px;
+}
+
+.olympus-policy-finding-warning {
+  border-color: rgba(239, 196, 92, 0.36);
+}
+
+.olympus-policy-finding-critical,
+.olympus-policy-finding-error {
+  border-color: rgba(239, 107, 90, 0.42);
+}
+
+.olympus-policy-finding h4 {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.olympus-policy-finding p {
+  color: rgba(246, 240, 223, 0.74);
+}
+
+.olympus-policy-finding small {
+  display: block;
+  margin-top: 8px;
+  padding: 9px;
+  border-radius: 4px;
+  background: rgba(6, 9, 14, 0.5);
+  color: rgba(246, 240, 223, 0.58);
+  overflow-wrap: anywhere;
 }
 
 .olympus-hq-pane {
@@ -1483,6 +1646,10 @@
   .olympus-kanban-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .olympus-policy-tiles {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -1504,6 +1671,7 @@
 
   .olympus-score-grid,
   .olympus-hq-grid,
+  .olympus-policy-grid,
   .olympus-skill-grid,
   .olympus-skill-hygiene-grid,
   .olympus-command-viewport,
@@ -1576,6 +1744,7 @@
   }
 
   .olympus-skill-tiles,
+  .olympus-policy-tiles,
   .olympus-skill-hygiene-tiles,
   .olympus-fitness-tiles {
     grid-template-columns: repeat(2, minmax(0, 1fr));

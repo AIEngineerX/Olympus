@@ -312,6 +312,81 @@
     );
   }
 
+  function ToolPolicy({ policy }) {
+    const data = policy || {};
+    const summary = data.summary || {};
+    const settings = asList(data.settings);
+    const findings = asList(data.findings);
+    if (!settings.length && !findings.length && !summary.root_config_present && !summary.profile_configs) return null;
+
+    function settingValue(item) {
+      if (item.unit === "usd") return formatMoney(item.value);
+      if (typeof item.value === "number") return formatCount(item.value);
+      return String(item.value || "none");
+    }
+
+    const tiles = [
+      { label: "Config", value: summary.root_config_present ? "root" : summary.profile_configs ? "profile" : "missing", state: summary.root_config_present || summary.profile_configs ? "active" : "unknown" },
+      { label: "Findings", value: summary.findings || 0, state: summary.findings ? "warning" : "ok" },
+      { label: "Max Turns", value: summary.max_turns || 0, state: summary.max_turns >= 80 && !summary.hard_loop_stop ? "warning" : summary.max_turns ? "active" : "unknown" },
+      { label: "Loop Stop", value: summary.hard_loop_stop ? "visible" : "not visible", state: summary.hard_loop_stop ? "ok" : summary.max_turns >= 80 ? "warning" : "unknown" },
+      { label: "Fallbacks", value: summary.fallback_providers || 0, state: summary.fallback_providers ? "active" : "idle" },
+      { label: "Aux Signals", value: summary.auxiliary_routes || 0, state: summary.auxiliary_routes ? "active" : "idle" },
+      { label: "Costed Runs", value: summary.costed_sessions || 0, state: summary.costed_sessions ? "active" : summary.auxiliary_routes ? "warning" : "unknown" },
+      { label: "Browser Flags", value: summary.browser_private_flags || 0, state: summary.browser_private_flags ? "warning" : "ok" },
+    ];
+
+    return el("section", { className: "olympus-section olympus-policy" },
+      el("div", { className: "olympus-section-head" },
+        el("div", null,
+          el("h2", null, "Tool Policy & Aux Cost"),
+          el("p", null, "Read-only config policy, route audit, browser privacy, and background cost visibility from safe Hermes evidence.")
+        ),
+        el("div", { className: "olympus-section-actions" },
+          el(StatePill, { state: summary.state || "unknown" }),
+          el("a", { className: "olympus-link", href: "/config" }, "Open Config")
+        )
+      ),
+      el("div", { className: "olympus-policy-tiles" },
+        tiles.map((item) => el("div", { key: item.label, className: "olympus-policy-tile" },
+          el("span", null, item.label),
+          el("strong", null, String(item.value)),
+          el(StatePill, { state: item.state })
+        ))
+      ),
+      el("div", { className: "olympus-policy-grid" },
+        el("div", { className: "olympus-policy-pane" },
+          el("h3", null, "Policy Signals"),
+          settings.length ? settings.map((item) => el("div", { key: item.id || item.label, className: "olympus-policy-setting" },
+            el("div", null,
+              el("span", null, item.label || "Policy"),
+              el("strong", null, settingValue(item)),
+              el("small", null, [item.detail, item.source].filter(Boolean).join(" / "))
+            ),
+            el(StatePill, { state: item.state || "unknown" })
+          )) : el("p", { className: "olympus-muted" }, "No config policy evidence in this scan.")
+        ),
+        el("div", { className: "olympus-policy-pane" },
+          el("h3", null, "Findings"),
+          findings.length ? findings.map((item, idx) => el("article", { key: idx, className: cx("olympus-policy-finding", "olympus-policy-finding-" + String(item.severity || "info").toLowerCase()) },
+            el("div", { className: "olympus-item-head" },
+              el("div", null,
+                el("span", null, String(item.kind || "policy")),
+                el("h4", null, item.title || "Policy finding")
+              ),
+              el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
+            ),
+            el("p", null, item.detail || ""),
+            item.evidence ? el("small", null, item.evidence) : null,
+            item.threshold ? el("small", null, "Trigger: " + item.threshold) : null,
+            item.basis ? el("small", null, item.basis) : null,
+            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || "Open Hermes view") : null
+          )) : el("p", { className: "olympus-muted" }, "No config policy risks in this scan.")
+        )
+      )
+    );
+  }
+
   function SkillCoverage({ coverage }) {
     const data = coverage || {};
     const summary = data.summary || {};
@@ -803,6 +878,7 @@
       error ? el("div", { className: "olympus-error" }, error) : null,
       el(AgentHQ, { hq: tuning.agent_hq }),
       el(PerformanceTracking, { performance: data && data.performance, diagnostics: data && data.diagnostics, clientDiagnostics, evidenceSources: data && data.evidence_sources }),
+      el(ToolPolicy, { policy: data && data.config_policy }),
       el(SkillCoverage, { coverage: data && data.skill_coverage }),
       el(SkillHygiene, { hygiene: data && data.skill_hygiene }),
       el(ProfileFitness, { fitness: data && data.profile_fitness }),
