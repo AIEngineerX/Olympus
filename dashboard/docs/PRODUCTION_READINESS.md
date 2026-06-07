@@ -11,7 +11,7 @@ is mounted into.
 | Visual QA | Keep screenshots and fixture coverage current as the dashboard changes. | Desktop and mobile fixture tests run in CI and attach screenshots. |
 | Hermes compatibility | Hermes dashboard, Kanban, skill, and plugin behavior is moving quickly. | Track the Hermes version tested and rerun plugin smoke tests after each Hermes upgrade. |
 | Fixture coverage | Add more edge cases as new panels ship. | Fixture states cover noisy, healthy, empty, overloaded, stale/blocked, high-cost, and hidden-label cases. |
-| Performance tracking | Budgets are lightweight and need real release history. | Track render time, API response time, payload size, tool-call pressure, context pressure, cost risk, loop count, and worker failures. |
+| Performance tracking | Budgets now have a live smoke gate; thresholds still need release history. | Track render time, API response time, payload size, tool-call pressure, context pressure, cost risk, loop count, and worker failures. |
 | Desktop compatibility | Hermes Desktop has Command Center Usage but does not yet expose dashboard plugin tabs. | Olympus must stay an operations monitor, link to Usage/Analytics for ledgers, and pass Desktop preflight before an upstream PR. |
 | Evidence source contract | Evidence Sources now shows source presence and safe fields, but each new source must stay pathless and read-only. | Every panel cites Hermes-owned evidence without raw paths, raw IDs, prompt text, or secret-like values. |
 | Config policy | Tool Policy & Aux Cost reads safe config structure only. | No prompt/personality text, base URLs, API keys, env values, local paths, or exact route labels in public payloads. |
@@ -32,8 +32,10 @@ Run before shipping or opening a PR:
 npm run verify
 npm run test:visual
 npm run test:live
+npm run test:performance
 npm run test:security
 npm run test:desktop
+npm audit --audit-level=moderate
 ```
 
 For live Hermes validation:
@@ -87,12 +89,48 @@ manifest and link, Hermes web plugin support, local Hermes Desktop presence,
 Command Center Usage ownership, Desktop Python dashboard dependencies, and
 whether Desktop already exposes dashboard plugin-tab route signals.
 
+`npm run test:performance` is a live local budget gate. It calls `/overview` and
+`/tuning` through the Hermes session-token flow several times and fails on
+non-2xx responses, response-time budget breaches, backend diagnostic warnings,
+or payloads over the documented byte budget.
+
+## Rollback Path
+
+For local deployment, rollback is the previous Git revision plus the Hermes
+plugin symlink:
+
+1. Stop the dashboard process.
+2. Check out the last known-good Olympus commit or branch.
+3. Re-run `scripts/install-dashboard-link.sh` so
+   `$HERMES_HOME/plugins/olympus/dashboard` points at that checkout.
+4. Start `hermes dashboard --no-open --skip-build`.
+5. Run `npm run test:live`, `npm run test:performance`, and
+   `npm run test:security`.
+
+The plugin has no write routes, migrations, task mutations, profile edits, or
+external data stores, so rollback does not require data restoration.
+
+## Monitoring And Alerts
+
+Olympus monitoring is local and dashboard-owned:
+
+- Production Diagnostics reports backend generation time, payload size, client
+  budget status, scanned profiles, scanned sessions, Kanban board read failures,
+  and Hermes home detection.
+- Evidence Sources reports which Hermes sources were present and which had read
+  failures.
+- Attention, Trace Spine, Operational Evals, Skill Hygiene, and Tool Policy
+  panels surface warning or critical states from Hermes evidence.
+- `npm run test:live`, `npm run test:performance`, and
+  `npm run test:security` act as release alerts by exiting non-zero when the
+  monitor disappears, budgets are exceeded, or privacy checks fail.
+
 ## Compatibility Notes
 
 | Date | Hermes version | Check | Result |
 | --- | --- | --- | --- |
 | 2026-06-06 | Hermes Agent v0.16.0 (2026.6.5), upstream `1c218983`, OpenAI SDK 2.24.0 | `npm run test:live` | Passed on desktop and mobile. |
-| 2026-06-07 | Local Hermes dashboard on `127.0.0.1:9119` | `npm run test:live`, `npm run test:security` | Passed on desktop/mobile live smoke and overview payload redaction. |
+| 2026-06-07 | Local Hermes dashboard on `127.0.0.1:9119` | `npm run test:live`, `npm run test:performance`, `npm run test:security`, `npm audit --audit-level=moderate` | Passed on desktop/mobile live smoke, API budget smoke, overview payload redaction, and dependency audit. |
 
 ## Production Metrics To Track
 

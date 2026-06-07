@@ -9,11 +9,12 @@
     "test:visual": "playwright test",
     "test:visual:artifacts": "playwright test",
     "test:live": "node scripts/olympus-live-smoke.mjs",
+    "test:performance": "node scripts/olympus-performance-smoke.mjs",
     "test:security": "node scripts/olympus-security-smoke.mjs",
     "test:desktop": "node scripts/olympus-desktop-preflight.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "^1.60.0",
+    "@playwright/test": "1.60.0",
     "react": "18.2.0",
     "react-dom": "18.2.0"
   }
