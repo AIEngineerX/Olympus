@@ -69,6 +69,7 @@ Run from the repository root:
 npm run verify
 npm run test:visual
 npm run test:live
+npm run test:security
 ```
 
 `npm run test:visual` runs fixture-backed desktop/mobile checks across noisy,
@@ -78,3 +79,7 @@ healthy, empty, overloaded, stale, high-cost, and no-labels states.
 existing Hermes dashboard only when the served HTML includes the Hermes session
 token. If it needs to start Hermes and your plugin target already points
 somewhere else, set `OLYMPUS_SMOKE_RELINK=1`.
+
+`npm run test:security` fetches the live `/overview` payload through the Hermes
+session-token flow and fails on local paths, raw database filenames,
+workspace/cwd keys, or secret-like strings.

@@ -378,6 +378,85 @@
     );
   }
 
+  function SkillHygiene({ hygiene }) {
+    const data = hygiene || {};
+    const summary = data.summary || {};
+    const signals = asList(data.signals);
+    const usage = asList(data.usage);
+    const hub = asList(data.hub);
+    if (!signals.length && !usage.length && !hub.length && !summary.total_skills && !summary.hub_installed) return null;
+    const tiles = [
+      { label: "Total Skills", value: summary.total_skills || 0, state: summary.total_skills ? "active" : "idle" },
+      { label: "Issues", value: summary.issues || 0, state: summary.issues ? "warning" : "ok" },
+      { label: "Stale", value: summary.stale || 0, state: summary.stale ? "warning" : "ok" },
+      { label: "Never Used", value: summary.never_used || 0, state: summary.never_used ? "info" : "ok" },
+      { label: "Patched", value: summary.recently_patched || 0, state: summary.recently_patched ? "info" : "ok" },
+      { label: "Hub Skills", value: summary.hub_installed || 0, state: summary.hub_installed ? "active" : "idle" },
+      { label: "Trust Gaps", value: (summary.hub_missing_trust || 0) + (summary.hub_missing_scan || 0), state: (summary.hub_missing_trust || summary.hub_missing_scan) ? "warning" : "ok" },
+    ];
+
+    return el("section", { className: "olympus-section olympus-skill-hygiene" },
+      el("div", { className: "olympus-section-head" },
+        el("div", null,
+          el("h2", null, "Skill Hygiene"),
+          el("p", null, "Read-only skill usage, archive, patch, hub trust, and scan signals from local Hermes metadata.")
+        ),
+        el("div", { className: "olympus-section-actions" },
+          el(StatePill, { state: summary.state || "unknown" }),
+          el("a", { className: "olympus-link", href: "/skills" }, "Open Skills")
+        )
+      ),
+      el("div", { className: "olympus-skill-hygiene-tiles" },
+        tiles.map((item) => el("div", { key: item.label, className: "olympus-skill-hygiene-tile" },
+          el("span", null, item.label),
+          el("strong", null, String(item.value)),
+          el(StatePill, { state: item.state })
+        ))
+      ),
+      el("div", { className: "olympus-skill-hygiene-grid" },
+        el("div", { className: "olympus-skill-hygiene-pane" },
+          el("h3", null, "Hygiene Signals"),
+          signals.length ? signals.map((item, idx) => el("article", { key: idx, className: cx("olympus-skill-suggestion", "olympus-skill-suggestion-" + String(item.severity || "info").toLowerCase()) },
+            el("div", { className: "olympus-item-head" },
+              el("div", null,
+                el("span", null, String(item.kind || "skill")),
+                el("h4", null, item.title || "Skill hygiene item")
+              ),
+              el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
+            ),
+            el("p", null, item.detail || ""),
+            item.evidence ? el("small", null, item.evidence) : null,
+            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || "Open Hermes view") : null
+          )) : el("p", { className: "olympus-muted" }, "No skill hygiene issues in this scan.")
+        ),
+        el("div", { className: "olympus-skill-hygiene-pane" },
+          el("h3", null, "Usage"),
+          usage.length ? usage.slice(0, 6).map((item) => el("div", { key: item.id || item.label, className: "olympus-mini-row" },
+            el("span", null, item.label || "Skill"),
+            el("small", null, [
+              (item.use_count || 0) + " uses",
+              (item.patch_count || 0) + " patches",
+              item.pinned ? "pinned" : "unpinned",
+              item.stale ? "stale" : null,
+            ].filter(Boolean).join(" / ")),
+            el(StatePill, { state: item.archived ? "warning" : item.stale ? "info" : "active" })
+          )) : el("p", { className: "olympus-muted" }, "No usage metadata recorded.")
+        ),
+        el("div", { className: "olympus-skill-hygiene-pane" },
+          el("h3", null, "Hub Provenance"),
+          hub.length ? hub.slice(0, 6).map((item) => el("div", { key: item.id || item.label, className: "olympus-mini-row" },
+            el("span", null, item.label || "Hub skill"),
+            el("small", null, [
+              item.trust_level ? "trust: " + item.trust_level : "trust missing",
+              item.scan_verdict ? "scan: " + item.scan_verdict : "scan missing",
+            ].join(" / ")),
+            el(StatePill, { state: item.state || "unknown" })
+          )) : el("p", { className: "olympus-muted" }, "No hub lock metadata recorded.")
+        )
+      )
+    );
+  }
+
   function ProfileFitness({ fitness }) {
     const data = fitness || {};
     const summary = data.summary || {};
@@ -722,6 +801,7 @@
       el(AgentHQ, { hq: tuning.agent_hq }),
       el(PerformanceTracking, { performance: data && data.performance, diagnostics: data && data.diagnostics, clientDiagnostics, evidenceSources: data && data.evidence_sources }),
       el(SkillCoverage, { coverage: data && data.skill_coverage }),
+      el(SkillHygiene, { hygiene: data && data.skill_hygiene }),
       el(ProfileFitness, { fitness: data && data.profile_fitness }),
       el(PartyView, { party: data && data.party, orchestration: data && data.orchestration, events: data && data.activity_events }),
       el(KanbanIntelligence, { kanban: data && data.kanban }),

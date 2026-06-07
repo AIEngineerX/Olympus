@@ -13,7 +13,7 @@ is mounted into.
 | Fixture coverage | Add more edge cases as new panels ship. | Fixture states cover noisy, healthy, empty, overloaded, stale/blocked, high-cost, and hidden-label cases. |
 | Performance tracking | Budgets are lightweight and need real release history. | Track render time, API response time, payload size, tool-call pressure, token pressure, loop count, and worker failures. |
 | Evidence source contract | Evidence Sources now shows source presence and safe fields, but each new source must stay pathless and read-only. | Every panel should cite Hermes-owned evidence without raw paths, raw IDs, prompt text, or secret-like values. |
-| Security/privacy gate | Static checks exist, but publishing checks are manual. Skill security/provenance evidence is not fully surfaced yet. | Keep read-only routes, redacted session IDs, no local paths, no shell execution, hidden labels, and skill-hub scan/trust signals as merge blockers where applicable. |
+| Security/privacy gate | Static and live payload checks exist, but publishing still needs human review. Skills.sh audit fields are shown only if Hermes stores them locally. | Keep read-only routes, redacted session IDs, no local paths, no shell execution, hidden labels, and skill-hub scan/trust signals as merge blockers where applicable. |
 | Browser console gate | CI should keep both fixture and live smoke outputs visible. | Visual and live smoke tests fail on console/page errors. |
 | Design source | Keep PRODUCT.md and DESIGN.md current when the surface changes. | Maintain a Viewport strategy, fixture screenshots, and a small set of accepted states. |
 
@@ -25,6 +25,7 @@ Run before shipping or opening a PR:
 npm run verify
 npm run test:visual
 npm run test:live
+npm run test:security
 ```
 
 For live Hermes validation:
@@ -54,12 +55,16 @@ Confirm:
   payload, fetch, render, board, and Hermes-version signals.
 - The Evidence Sources strip shows Hermes state, Kanban, config, skill usage,
   and hub lock metadata without local paths or raw IDs.
+- The Skill Hygiene panel shows usage, stale/archive/patch counts, and hub
+  trust/scan gaps without raw skill names unless labels are explicitly enabled.
 
-`npm run test:live` performs this smoke check automatically. It reuses an
-existing Hermes dashboard only when the served HTML includes the Hermes session
-token, then checks desktop and mobile render state. If the plugin target already
-points somewhere else, set `OLYMPUS_SMOKE_RELINK=1` before using the smoke
-runner to replace it.
+`npm run test:live` performs the render smoke check automatically. `npm run
+test:security` fetches the live `/overview` payload through the Hermes
+session-token flow and fails on local paths, raw database filenames, cwd or
+workspace keys, and secret-like strings. Both commands reuse an existing Hermes
+dashboard only when the served HTML includes the Hermes session token. If the
+plugin target already points somewhere else, set `OLYMPUS_SMOKE_RELINK=1`
+before using the smoke runner to replace it.
 
 ## Compatibility Notes
 
@@ -121,9 +126,9 @@ Skill performance:
 3. Track release history for API build time, payload size, client fetch time,
    and render time so the current budgets can be tightened from evidence.
 4. Add a compatibility note for each Hermes version tested.
-5. Add a read-only Skill Hygiene panel from Hermes Curator and Skills Hub
-   metadata. Do not trigger hub scans, installs, archives, restores, or deletes
-   from Olympus v1.
+5. Extend the read-only Skill Hygiene panel with Curator-specific audit fields
+   once Hermes persists them. Do not trigger hub scans, installs, archives,
+   restores, or deletes from Olympus v1.
 6. Decide whether Olympus should eventually use D3, visx, React Flow, PixiJS, or
    Three.js for richer visuals. Do not add one until the target visual behavior is
    clear enough to test.

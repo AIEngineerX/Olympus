@@ -401,6 +401,226 @@ def build_evidence_sources(profiles: List[Dict[str, Any]], sessions: List[Dict[s
     }
 
 
+def _epoch_seconds(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            raw = float(value)
+            return raw / 1000 if raw > 10_000_000_000 else raw
+        text = str(value).strip()
+        if not text:
+            return None
+        if re.match(r"^\d+(\.\d+)?$", text):
+            raw = float(text)
+            return raw / 1000 if raw > 10_000_000_000 else raw
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def _public_skill_label(name: Any) -> str:
+    raw = str(name or "")
+    if EXPOSE_LOCAL_LABELS:
+        return redact_text(raw, 120)
+    return safe_id(raw, "skill")
+
+
+def collect_skill_metadata() -> Dict[str, Any]:
+    skills_dir = get_hermes_home() / "skills"
+    usage_path = skills_dir / ".usage.json"
+    hub_lock_path = skills_dir / ".hub" / "lock.json"
+    usage_data = read_json(usage_path)
+    hub_data = read_json(hub_lock_path)
+    usage = usage_data if isinstance(usage_data, dict) else {}
+    installed = hub_data.get("installed") if isinstance(hub_data, dict) and isinstance(hub_data.get("installed"), dict) else {}
+    now_ts = time.time()
+
+    usage_items: List[Dict[str, Any]] = []
+    for name, meta in sorted(usage.items()):
+        if not isinstance(meta, dict):
+            continue
+        use_count = int(meta.get("use_count") or 0)
+        view_count = int(meta.get("view_count") or 0)
+        patch_count = int(meta.get("patch_count") or 0)
+        last_used_ts = _epoch_seconds(meta.get("last_used_at"))
+        last_patched_ts = _epoch_seconds(meta.get("last_patched_at"))
+        archived = bool(meta.get("archived_at")) or str(meta.get("state") or "").lower() == "archived"
+        stale = not last_used_ts or now_ts - last_used_ts > 90 * 24 * 60 * 60
+        recently_patched = bool(last_patched_ts and now_ts - last_patched_ts <= 14 * 24 * 60 * 60)
+        usage_items.append({
+            "_name": str(name),
+            "id": _public_skill_label(name),
+            "label": _public_skill_label(name),
+            "state": "archived" if archived else (str(meta.get("state") or "active")),
+            "use_count": use_count,
+            "view_count": view_count,
+            "patch_count": patch_count,
+            "pinned": bool(meta.get("pinned")),
+            "archived": archived,
+            "stale": stale,
+            "recently_patched": recently_patched,
+            "created_at": ts_to_iso(meta.get("created_at")),
+            "last_used_at": ts_to_iso(meta.get("last_used_at")),
+            "last_viewed_at": ts_to_iso(meta.get("last_viewed_at")),
+            "last_patched_at": ts_to_iso(meta.get("last_patched_at")),
+        })
+
+    hub_items: List[Dict[str, Any]] = []
+    for name, meta in sorted(installed.items()):
+        if not isinstance(meta, dict):
+            continue
+        trust_level = meta.get("trust_level")
+        scan_verdict = meta.get("scan_verdict")
+        hub_items.append({
+            "_name": str(name),
+            "id": _public_skill_label(name),
+            "label": _public_skill_label(name),
+            "trust_level": str(trust_level) if trust_level not in (None, "") else None,
+            "scan_verdict": str(scan_verdict) if scan_verdict not in (None, "") else None,
+            "state": "warning" if not trust_level or not scan_verdict else "ok",
+            "installed_at": ts_to_iso(meta.get("installed_at")),
+            "updated_at": ts_to_iso(meta.get("updated_at")),
+        })
+
+    archived = [item for item in usage_items if item.get("archived")]
+    stale = [item for item in usage_items if item.get("stale")]
+    never_used = [item for item in usage_items if int(item.get("use_count") or 0) == 0]
+    recently_patched = [item for item in usage_items if item.get("recently_patched")]
+    hub_missing_trust = [item for item in hub_items if not item.get("trust_level")]
+    hub_missing_scan = [item for item in hub_items if not item.get("scan_verdict")]
+    return {
+        "summary": {
+            "usage_present": usage_path.exists(),
+            "hub_lock_present": hub_lock_path.exists(),
+            "total_skills": len(usage_items),
+            "archived": len(archived),
+            "pinned": sum(1 for item in usage_items if item.get("pinned")),
+            "never_used": len(never_used),
+            "stale": len(stale),
+            "recently_patched": len(recently_patched),
+            "hub_installed": len(hub_items),
+            "hub_missing_trust": len(hub_missing_trust),
+            "hub_missing_scan": len(hub_missing_scan),
+            "read_failures": int(usage_path.exists() and not isinstance(usage_data, dict)) + int(hub_lock_path.exists() and not isinstance(hub_data, dict)),
+        },
+        "usage_items": usage_items,
+        "hub_items": hub_items,
+    }
+
+
+def build_skill_hygiene(skill_metadata: Dict[str, Any], skill_coverage: Dict[str, Any], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    kanban = kanban or {}
+    summary = skill_metadata.get("summary") if isinstance(skill_metadata.get("summary"), dict) else {}
+    usage_items = [item for item in as_list(skill_metadata.get("usage_items")) if isinstance(item, dict)]
+    hub_items = [item for item in as_list(skill_metadata.get("hub_items")) if isinstance(item, dict)]
+    usage_names = {str(item.get("_name")) for item in usage_items if item.get("_name")}
+    hub_names = {str(item.get("_name")) for item in hub_items if item.get("_name")}
+    findings: List[Dict[str, Any]] = []
+
+    def add_signal(severity: str, title: str, detail: str, evidence: str, view: str = "/skills", basis: str = "Hermes skill metadata") -> None:
+        findings.append(_tuning_item(
+            "skill",
+            severity,
+            title,
+            detail,
+            evidence,
+            view,
+            "Open Skills" if view == "/skills" else "Open Hermes view",
+            "Apollo",
+            basis,
+        ))
+
+    if not summary.get("usage_present"):
+        add_signal("info", "Skill usage metadata is not present", "Hermes has not recorded skill usage metadata on this machine yet.", "usage metadata missing")
+    if not summary.get("hub_lock_present"):
+        add_signal("info", "Skill hub lock metadata is not present", "Hub install provenance is unavailable until Hermes records a skill hub lock.", "hub lock missing")
+
+    heavily_used_unpinned = sorted(
+        [item for item in usage_items if int(item.get("use_count") or 0) >= 10 and not item.get("pinned")],
+        key=lambda item: int(item.get("use_count") or 0),
+        reverse=True,
+    )
+    if heavily_used_unpinned:
+        add_signal(
+            "warning",
+            "Pin heavily used skills",
+            "Frequently used skills are part of the operating surface. Pinning or reviewing them makes drift easier to spot.",
+            ", ".join(f"{item.get('label')}: {item.get('use_count')} uses" for item in heavily_used_unpinned[:3]),
+        )
+
+    archived_recent = [
+        item for item in usage_items
+        if item.get("archived") and item.get("last_used_at") and not item.get("stale")
+    ]
+    if archived_recent:
+        add_signal(
+            "warning",
+            "Archived skills still show recent use metadata",
+            "An archived skill with use evidence may indicate stale provenance or a workflow depending on an archived procedure.",
+            ", ".join(str(item.get("label")) for item in archived_recent[:3]),
+        )
+
+    frequently_patched = sorted(
+        [item for item in usage_items if int(item.get("patch_count") or 0) >= 3 or item.get("recently_patched")],
+        key=lambda item: (int(item.get("patch_count") or 0), str(item.get("last_patched_at") or "")),
+        reverse=True,
+    )
+    if frequently_patched:
+        add_signal(
+            "info",
+            "Recently changed skills need review",
+            "Frequently patched skills should be reviewed before treating their recommendations as stable operating procedure.",
+            ", ".join(f"{item.get('label')}: {item.get('patch_count')} patches" for item in frequently_patched[:3]),
+        )
+
+    hub_missing = [item for item in hub_items if not item.get("trust_level") or not item.get("scan_verdict")]
+    if hub_missing:
+        add_signal(
+            "warning",
+            "Hub skills are missing trust or scan metadata",
+            "Hub-installed skills should show trust and scan evidence when Hermes has recorded it locally.",
+            ", ".join(str(item.get("label")) for item in hub_missing[:3]),
+        )
+
+    forced_skill_names: set[str] = set()
+    for task in kanban_items(kanban, "recent_tasks"):
+        for name in as_list(task.get("_skills")):
+            if name:
+                forced_skill_names.add(str(name))
+    missing_forced = sorted(name for name in forced_skill_names if name not in usage_names and name not in hub_names)
+    if missing_forced:
+        add_signal(
+            "warning",
+            "Forced-skill Kanban work lacks local metadata",
+            "Kanban references skills that do not appear in local usage or hub metadata. Review the task or skill install.",
+            ", ".join(_public_skill_label(name) for name in missing_forced[:4]),
+            "/kanban",
+            "Hermes Kanban tasks.skills plus local skill metadata",
+        )
+
+    coverage_summary = skill_coverage.get("summary") if isinstance(skill_coverage.get("summary"), dict) else {}
+    state = "warning" if any(item.get("severity") == "warning" for item in findings) else ("active" if usage_items or hub_items else "unknown")
+    return {
+        "summary": {
+            "state": state,
+            "issues": len(findings),
+            "total_skills": summary.get("total_skills") or coverage_summary.get("total_skills") or 0,
+            "archived": summary.get("archived") or 0,
+            "stale": summary.get("stale") or 0,
+            "never_used": summary.get("never_used") or 0,
+            "recently_patched": summary.get("recently_patched") or 0,
+            "hub_installed": summary.get("hub_installed") or 0,
+            "hub_missing_trust": summary.get("hub_missing_trust") or 0,
+            "hub_missing_scan": summary.get("hub_missing_scan") or 0,
+            "forced_skill_metadata_gaps": len(missing_forced),
+        },
+        "signals": findings[:8],
+        "usage": sorted(usage_items, key=lambda item: int(item.get("use_count") or 0), reverse=True)[:8],
+        "hub": hub_items[:8],
+    }
+
+
 def _parse_simple_yaml(text: str) -> Dict[str, Any]:
     """Small fallback for Hermes config.yaml when PyYAML is unavailable."""
     data: Dict[str, Any] = {}
@@ -1017,6 +1237,7 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                         "consecutive_failures": failures,
                         "goal_mode": bool(row_value(t, "goal_mode", 0)),
                         "goal_max_turns": row_value(t, "goal_max_turns"),
+                        "_skills": forced_skills,
                         "forced_skill_count": len(forced_skills),
                         "model_override": row_value(t, "model_override") if EXPOSE_LOCAL_LABELS else ("override" if row_value(t, "model_override") else None),
                         "session_id": row_value(t, "session_id") if EXPOSE_LOCAL_LABELS else (safe_id(row_value(t, "session_id"), "session") if row_value(t, "session_id") else None),
@@ -2534,6 +2755,8 @@ async def overview() -> Dict[str, Any]:
     party = build_party(profiles, gateways, cron, sessions, kanban, orchestration)
     activity_events = build_activity_events(sessions, cron, gateways, kanban)
     skill_coverage = build_skill_coverage(profiles, sessions, kanban)
+    skill_metadata = collect_skill_metadata()
+    skill_hygiene = build_skill_hygiene(skill_metadata, skill_coverage, kanban)
     profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
     performance = build_performance_tracking(sessions, kanban)
     evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
@@ -2554,6 +2777,7 @@ async def overview() -> Dict[str, Any]:
         "party": strip_internal(party),
         "activity_events": strip_internal(activity_events),
         "skill_coverage": strip_internal(skill_coverage),
+        "skill_hygiene": strip_internal(skill_hygiene),
         "profile_fitness": strip_internal(profile_fitness),
         "performance": strip_internal(performance),
         "evidence_sources": strip_internal(evidence_sources),
@@ -2574,6 +2798,8 @@ async def tuning() -> Dict[str, Any]:
     party = build_party(profiles, gateways, cron, sessions, kanban, orchestration)
     activity_events = build_activity_events(sessions, cron, gateways, kanban)
     skill_coverage = build_skill_coverage(profiles, sessions, kanban)
+    skill_metadata = collect_skill_metadata()
+    skill_hygiene = build_skill_hygiene(skill_metadata, skill_coverage, kanban)
     profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
     performance = build_performance_tracking(sessions, kanban)
     evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
@@ -2588,6 +2814,7 @@ async def tuning() -> Dict[str, Any]:
         "party": strip_internal(party),
         "activity_events": strip_internal(activity_events),
         "skill_coverage": strip_internal(skill_coverage),
+        "skill_hygiene": strip_internal(skill_hygiene),
         "profile_fitness": strip_internal(profile_fitness),
         "performance": strip_internal(performance),
         "evidence_sources": strip_internal(evidence_sources),

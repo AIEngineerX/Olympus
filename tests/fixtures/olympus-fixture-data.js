@@ -151,6 +151,61 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       }
     ]
   },
+  skill_hygiene: {
+    summary: {
+      state: "warning",
+      issues: 4,
+      total_skills: 48,
+      archived: 2,
+      stale: 9,
+      never_used: 6,
+      recently_patched: 3,
+      hub_installed: 8,
+      hub_missing_trust: 2,
+      hub_missing_scan: 1,
+      forced_skill_metadata_gaps: 1
+    },
+    signals: [
+      {
+        kind: "skill",
+        severity: "warning",
+        title: "Pin heavily used skills",
+        detail: "Frequently used skills are part of the operating surface. Pinning or reviewing them makes drift easier to spot.",
+        evidence: "skill:3c9a18f042: 21 uses, skill:90ff0d121b: 14 uses",
+        recommended_view: "/skills",
+        action_label: "Open Skills"
+      },
+      {
+        kind: "skill",
+        severity: "warning",
+        title: "Hub skills are missing trust or scan metadata",
+        detail: "Hub-installed skills should show trust and scan evidence when Hermes has recorded it locally.",
+        evidence: "skill:60cf2824b9, skill:ac52bb9910",
+        recommended_view: "/skills",
+        action_label: "Open Skills"
+      },
+      {
+        kind: "skill",
+        severity: "warning",
+        title: "Forced-skill Kanban work lacks local metadata",
+        detail: "Kanban references skills that do not appear in local usage or hub metadata.",
+        evidence: "skill:4c823a88b1",
+        recommended_view: "/kanban",
+        action_label: "Open Hermes view"
+      }
+    ],
+    usage: [
+      { id: "skill:3c9a18f042", label: "skill:3c9a18f042", state: "active", use_count: 21, view_count: 28, patch_count: 1, pinned: false, archived: false, stale: false, recently_patched: false },
+      { id: "skill:90ff0d121b", label: "skill:90ff0d121b", state: "active", use_count: 14, view_count: 19, patch_count: 4, pinned: false, archived: false, stale: false, recently_patched: true },
+      { id: "skill:7d0ff89435", label: "skill:7d0ff89435", state: "archived", use_count: 2, view_count: 8, patch_count: 0, pinned: false, archived: true, stale: true, recently_patched: false },
+      { id: "skill:f1b094399e", label: "skill:f1b094399e", state: "active", use_count: 0, view_count: 1, patch_count: 0, pinned: false, archived: false, stale: true, recently_patched: false }
+    ],
+    hub: [
+      { id: "skill:3c9a18f042", label: "skill:3c9a18f042", trust_level: "local", scan_verdict: "pass", state: "ok" },
+      { id: "skill:60cf2824b9", label: "skill:60cf2824b9", trust_level: null, scan_verdict: "warn", state: "warning" },
+      { id: "skill:ac52bb9910", label: "skill:ac52bb9910", trust_level: "community", scan_verdict: null, state: "warning" }
+    ]
+  },
   profile_fitness: {
     summary: {
       profiles: 5,
@@ -539,6 +594,30 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       recommended_view: "/skills",
       action_label: "Open Skills"
     }];
+    data.skill_hygiene = {
+      summary: {
+        state: "ok",
+        issues: 0,
+        total_skills: 48,
+        archived: 0,
+        stale: 0,
+        never_used: 1,
+        recently_patched: 1,
+        hub_installed: 8,
+        hub_missing_trust: 0,
+        hub_missing_scan: 0,
+        forced_skill_metadata_gaps: 0
+      },
+      signals: [],
+      usage: [
+        { id: "skill:3c9a18f042", label: "skill:3c9a18f042", state: "active", use_count: 21, view_count: 28, patch_count: 1, pinned: true, archived: false, stale: false, recently_patched: false },
+        { id: "skill:90ff0d121b", label: "skill:90ff0d121b", state: "active", use_count: 14, view_count: 19, patch_count: 1, pinned: true, archived: false, stale: false, recently_patched: false }
+      ],
+      hub: [
+        { id: "skill:3c9a18f042", label: "skill:3c9a18f042", trust_level: "local", scan_verdict: "pass", state: "ok" },
+        { id: "skill:90ff0d121b", label: "skill:90ff0d121b", trust_level: "local", scan_verdict: "pass", state: "ok" }
+      ]
+    };
     data.profile_fitness.summary.needs_review = 0;
     data.profile_fitness.summary.average_score = 96;
     data.profile_fitness.summary.lowest_score = 92;
@@ -590,6 +669,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
     };
     data.performance = { summary: { state: "unknown" }, lanes: [], signals: [], metrics: {} };
     data.skill_coverage = { summary: {}, suggestions: [], profiles: [] };
+    data.skill_hygiene = { summary: {}, signals: [], usage: [], hub: [] };
     data.profile_fitness = { summary: {}, profiles: [] };
     data.party = { summary: { members: 0, working: 0, queued: 0, workers: 0, blocked: 0 }, members: [] };
     data.orchestration = { summary: { boards: 0, open: 0, ready: 0, running: 0, blocked: 0, review: 0, active_workers: 0, failed_runs: 0, stale_workers: 0, ready_unassigned: 0 }, workers: [], pressure: [], failed_runs: [], stale_workers: [], attention: [] };

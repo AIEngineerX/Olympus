@@ -15,6 +15,7 @@ the public internet.
 - Full local filesystem paths are not returned by public plugin responses.
 - Session titles, Kanban task titles, cron names, and exact model/provider labels
   are hidden by default.
+- Skill names from usage and hub metadata are hashed by default.
 
 ## Local label opt-in
 
@@ -33,10 +34,11 @@ dashboard.
 Before publishing or opening a PR:
 
 1. Run the static checks in `TODO.md`.
-2. Search for private paths, tokens, usernames, private model names, and old
+2. Run `npm run test:security`.
+3. Search for private paths, tokens, usernames, private model names, and old
    project-specific references.
-3. Confirm generated files such as `.DS_Store`, `__pycache__`, screenshots, and
+4. Confirm generated files such as `.DS_Store`, `__pycache__`, screenshots, and
    local database files are not staged.
-4. Confirm Olympus still uses Hermes dashboard auth and does not add direct
+5. Confirm Olympus still uses Hermes dashboard auth and does not add direct
    unauthenticated routes.
-5. Confirm any new write action is gated, explicit, and documented.
+6. Confirm any new write action is gated, explicit, and documented.
