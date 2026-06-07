@@ -155,6 +155,11 @@ Olympus uses bordered tonal layering with hard offset shadows on dense cards. So
 
 Navigation is inherited from the Hermes dashboard shell. Olympus does not clone Hermes admin navigation. Handoff links are short, explicit, and point to Hermes-owned routes.
 
+Inside Olympus, mode tabs divide work by intent. Brief is the default and owns
+hero status, score details, and Agent Monitor. Agents, Skills, Kanban, Policy,
+and Diagnostics hold deeper panels. Mobile tabs use short labels and a
+two-column layout.
+
 ### Pantheon / Agent View
 
 The Agent View uses trigger lanes, agent cards, a selected profile inspector, and an activity feed. It answers which profiles are active, idle, blocked, or risky without shrinking a graph. Mobile stacks the view rather than compressing the whole surface.

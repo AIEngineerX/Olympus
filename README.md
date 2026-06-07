@@ -17,6 +17,7 @@ owns vs. what Hermes owns).
 - Summarizes Kanban pressure: blocked work, active workers, retries, and assignee load.
 - Surfaces safe config policy risks: turn limits, loop guardrails, browser privacy flags, fallbacks, toolsets, and auxiliary cost visibility.
 - Computes a transparent heuristic readiness score with a full deduction breakdown.
+- Opens with a Brief view for the next action, then stages deeper panels behind Agents, Skills, Kanban, Policy, and Diagnostics tabs.
 - Keeps v1 read-only: every action is a link to the Hermes page that owns it.
 
 ## What It Does Not Do
@@ -65,6 +66,17 @@ Then open:
 ```text
 http://127.0.0.1:9119/olympus
 ```
+
+## Dashboard Modes
+
+Olympus opens in Brief mode: hero status, score details, and Agent Monitor.
+Deeper inspection is split into purpose-built tabs:
+
+- Agents: Performance Tracking, Profile Fitness, and Pantheon.
+- Skills: Skill Coverage and Skill Hygiene.
+- Kanban: Trace Spine and Kanban Intelligence.
+- Policy: Tool Policy & Aux Cost.
+- Diagnostics: Operational Evals, Production Diagnostics, and Evidence Sources.
 
 ## Hermes Desktop
 
@@ -153,12 +165,13 @@ npm audit --audit-level=moderate
 `npm run test:visual` uses a fixture-backed Playwright harness. It loads the
 hand-authored dashboard assets directly, checks desktop/mobile readability across
 multiple fixture states, validates link destinations, verifies empty evidence
-sections stay hidden, and catches private-label leaks in the no-labels scenario.
+sections stay hidden, verifies staged dashboard modes, and catches private-label
+leaks in the no-labels scenario.
 
 `npm run test:live` checks the real Hermes dashboard route at
 `http://127.0.0.1:9119/olympus`. It starts Hermes when needed, verifies
-desktop/mobile rendering, and fails on console errors, overflow, tiny labels,
-bad links, SVG text, or missing Production Diagnostics.
+desktop/mobile rendering, clicks each dashboard mode, and fails on console
+errors, overflow, tiny labels, bad links, SVG text, or missing staged panels.
 
 `npm run test:performance` checks the real `/overview` and `/tuning` plugin API
 routes through the Hermes session-token flow. It fails on non-2xx responses,
@@ -174,6 +187,8 @@ set `OLYMPUS_SMOKE_RELINK=1` before running the smoke command.
 
 - API responses redact session IDs, private labels, paths, and secrets unless
   `OLYMPUS_EXPOSE_LOCAL_LABELS=1` is explicitly set.
+- Brief mode hides deep panels by default; visual and live smoke tests click the
+  tabs that own Agents, Skills, Kanban, Policy, and Diagnostics.
 - Pantheon uses HTML text and accessible profile buttons rather than SVG text or an
   image-role wrapper.
 - Frontend refreshes ignore stale `/overview` responses so an older request

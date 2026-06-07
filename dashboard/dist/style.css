@@ -116,9 +116,98 @@
 
 .olympus-refresh:focus-visible,
 .olympus-link:focus-visible,
+.olympus-mode-tab:focus-visible,
 .olympus-agent-card:focus-visible {
   outline: 2px solid #43c9bf;
   outline-offset: 2px;
+}
+
+.olympus-mode-shell {
+  margin-top: 14px;
+}
+
+.olympus-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(246, 240, 223, 0.1);
+  border-radius: 8px;
+  background: rgba(6, 9, 14, 0.38);
+}
+
+.olympus-mode-tab {
+  min-width: 0;
+  min-height: 54px;
+  padding: 8px 10px;
+  border: 1px solid rgba(246, 240, 223, 0.1);
+  border-radius: 6px;
+  color: rgba(246, 240, 223, 0.72);
+  background: rgba(15, 17, 25, 0.72);
+  cursor: pointer;
+  display: grid;
+  gap: 3px;
+  align-content: center;
+  text-align: left;
+  font: inherit;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+
+.olympus-mode-tab:hover {
+  color: #f6f0df;
+  border-color: rgba(67, 201, 191, 0.28);
+  background: rgba(24, 32, 40, 0.82);
+}
+
+.olympus-mode-tab-active {
+  color: #f6f0df;
+  border-color: rgba(239, 196, 92, 0.52);
+  background:
+    linear-gradient(180deg, rgba(40, 35, 28, 0.74), rgba(12, 15, 20, 0.9));
+}
+
+.olympus-mode-tab span {
+  font-weight: 800;
+  line-height: 1.1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.olympus-mode-tab small {
+  color: rgba(246, 240, 223, 0.56);
+  font-size: 12px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.olympus-mode-panel {
+  min-width: 0;
+}
+
+.olympus-mode-intro {
+  min-height: 46px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(67, 201, 191, 0.16);
+  border-radius: 6px;
+  background: rgba(67, 201, 191, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.olympus-mode-intro span {
+  color: #43c9bf;
+  font-weight: 800;
+}
+
+.olympus-mode-intro p {
+  margin: 0;
+  color: rgba(246, 240, 223, 0.66);
+  font-size: 13px;
 }
 
 .olympus-oracle {
@@ -600,6 +689,23 @@
 
 .olympus-section-head p {
   margin: 4px 0 0;
+}
+
+.olympus-score-card-compact {
+  padding-bottom: 12px;
+}
+
+.olympus-score-card-compact .olympus-section-head {
+  margin-bottom: 8px;
+}
+
+.olympus-score-details {
+  margin-top: 8px;
+}
+
+.olympus-score-details[open] {
+  display: grid;
+  gap: 12px;
 }
 
 .olympus-score-grid {
@@ -1839,6 +1945,22 @@
 @media (max-width: 760px) {
   .olympus-page {
     padding: 14px;
+  }
+
+  .olympus-mode-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .olympus-mode-tab {
+    min-height: 46px;
+  }
+
+  .olympus-mode-tab small {
+    display: none;
+  }
+
+  .olympus-mode-intro {
+    display: grid;
   }
 
   .olympus-hero {

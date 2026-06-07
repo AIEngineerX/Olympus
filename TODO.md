@@ -12,6 +12,8 @@
 - Tightened hidden-ID privacy for session, cron, Kanban run, worker, and event refs.
 - Changed log health wording to report log-tail scanning instead of inferred recency.
 - Reduced Agent Monitor first-screen density with collapsed secondary signals.
+- Shipped Brief, Agents, Skills, Kanban, Policy, and Diagnostics modes so deep
+  panels no longer crowd the first screen.
 
 ## Phase Ledger
 
@@ -23,6 +25,7 @@ Complete each item in order and test before starting the next.
    - Track production gaps in `dashboard/docs/PRODUCTION_READINESS.md`.
    - Static checks and fixture visual smoke now run in CI; live Hermes smoke remains a local release gate.
    - Privacy regression checks now run in `npm run verify`.
+   - Live smoke verifies Brief mode first, then clicks each staged dashboard mode.
 
 1. Kanban Worker Inspector (partial)
    - Shipped: board pressure, blocked work, active workers, stale workers, failed runs, and assignee load.
@@ -70,6 +73,7 @@ Then verify the live dashboard:
 - Links go to Hermes-owned pages.
 - Evidence Sources renders without local paths, raw database paths, raw IDs, or secret-like values.
 - Local names and paths stay hidden unless `OLYMPUS_EXPOSE_LOCAL_LABELS=1`.
+- Brief mode stays lean, and each staged mode reveals its owned panels.
 
 Browser check:
 
