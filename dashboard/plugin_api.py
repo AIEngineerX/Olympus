@@ -1305,11 +1305,11 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
         except (TypeError, ValueError):
             cost_usd = 0.0
         cost_estimated = actual_cost in (None, "") and estimated_cost not in (None, "")
-        public_session_id = str(session_id) if EXPOSE_LOCAL_LABELS else safe_id(session_id, "session")
+        public_session_ref = str(session_id) if EXPOSE_LOCAL_LABELS else safe_id(session_id, "session")
         out.append({
-            "id": f"session:{public_session_id}" if EXPOSE_LOCAL_LABELS else public_session_id,
+            "id": f"session:{public_session_ref}" if EXPOSE_LOCAL_LABELS else public_session_ref,
             "kind": "session",
-            "session_id": public_session_id,
+            "session_ref": public_session_ref,
             "label": public_label(row_value(r, "title"), str(row_value(r, "source") or safe_id(session_id, "session")), "session"),
             "state": state,
             "source": row_value(r, "source"),
@@ -1535,7 +1535,7 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                         "_skills": forced_skills,
                         "forced_skill_count": len(forced_skills),
                         "model_override": row_value(t, "model_override") if EXPOSE_LOCAL_LABELS else ("override" if row_value(t, "model_override") else None),
-                        "session_id": row_value(t, "session_id") if EXPOSE_LOCAL_LABELS else (safe_id(row_value(t, "session_id"), "session") if row_value(t, "session_id") else None),
+                        "session_ref": row_value(t, "session_id") if EXPOSE_LOCAL_LABELS else (safe_id(row_value(t, "session_id"), "session") if row_value(t, "session_id") else None),
                     })
 
             if run_cols:
@@ -2238,7 +2238,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "warning",
             "Resolve stale sessions so the monitor reflects reality",
             "Stale work makes tuning noisy. Close, resume, or annotate it.",
-            ", ".join(str(s.get("label") or s.get("session_id")) for s in stale_sessions[:3]),
+            ", ".join(str(s.get("label") or s.get("session_ref")) for s in stale_sessions[:3]),
             "/sessions",
             "Open Sessions",
             "Chronos",
@@ -2814,7 +2814,7 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
             "warning",
             "Review handoff failures",
             f"{len(errored_sessions)} recent session(s) contain handoff errors. Check delivery and cancellation behavior.",
-            ", ".join(str(s.get("label") or s.get("session_id")) for s in errored_sessions[:3]),
+            ", ".join(str(s.get("label") or s.get("session_ref")) for s in errored_sessions[:3]),
             "/sessions",
             "Hermes",
             "Open Sessions",
@@ -2825,7 +2825,7 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
             "warning",
             "Inspect stale work",
             f"{len(stale_sessions)} recent session(s) are stale. Close, resume, or annotate them.",
-            ", ".join(str(s.get("label") or s.get("session_id")) for s in stale_sessions[:3]),
+            ", ".join(str(s.get("label") or s.get("session_ref")) for s in stale_sessions[:3]),
             "/sessions",
             "Chronos",
             "Open Sessions",

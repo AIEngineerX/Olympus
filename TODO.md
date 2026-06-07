@@ -8,7 +8,7 @@
 - Redacted local labels, paths, raw IDs, prompt text, and secret-like values by default.
 - Added visual, live, and security smoke gates.
 - Kept actions as links to Hermes-owned pages.
-- Tightened hidden-ID privacy for cron, Kanban run, worker, and event refs.
+- Tightened hidden-ID privacy for session, cron, Kanban run, worker, and event refs.
 - Changed log health wording to report log-tail scanning instead of inferred recency.
 - Reduced Agent Monitor first-screen density with collapsed secondary signals.
 
