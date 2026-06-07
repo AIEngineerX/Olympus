@@ -91,11 +91,11 @@ Current backend shape:
 }
 ```
 
-Next skill-hygiene work adds read-only curator and hub evidence: local
-usage/provenance, hub install scan verdicts, trust level, and any stored
-skills.sh security audit status. Olympus reports those signals and links
-to Hermes Skills or Curator surfaces; it does not install, scan, archive, or
-mutate skills in v1.
+Skill Hygiene now reports read-only curator and hub evidence: local
+usage/provenance, hub install scan verdicts, trust level, and stored
+skills.sh security audit status when Hermes has recorded it. Olympus reports
+those signals and links to Hermes Skills; it does not install, scan, archive,
+or mutate skills in v1.
 
 ## Performance Tracking
 

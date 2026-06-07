@@ -29,8 +29,8 @@ Complete each item in order and test before starting the next.
    - Remaining: dispatcher/orchestration settings evidence.
 
 2. Curator and Skill Hygiene (partial)
-   - Shipped: usage/provenance, stale/archive/patch counts, hub trust, and scan gaps.
-   - Remaining: stored skills.sh audit status when Hermes records it, plus a Curator route when Hermes exposes one.
+   - Shipped: usage/provenance, stale/archive/patch counts, hub trust, scan gaps, and stored skills.sh audit status when Hermes records it.
+   - Remaining: a Curator route when Hermes exposes one.
 
 3. Trace Spine V0 (shipped)
    - Correlates sessions, Kanban tasks, task runs, and task events.

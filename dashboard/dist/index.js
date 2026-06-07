@@ -573,6 +573,8 @@
       { label: "Patched", value: summary.recently_patched || 0, state: summary.recently_patched ? "info" : "ok" },
       { label: "Hub Skills", value: summary.hub_installed || 0, state: summary.hub_installed ? "active" : "idle" },
       { label: "Trust Gaps", value: (summary.hub_missing_trust || 0) + (summary.hub_missing_scan || 0), state: (summary.hub_missing_trust || summary.hub_missing_scan) ? "warning" : "ok" },
+      { label: "Audit Warn", value: summary.hub_audit_warn || 0, state: summary.hub_audit_warn ? "warning" : "ok" },
+      { label: "Audit Fail", value: summary.hub_audit_fail || 0, state: summary.hub_audit_fail ? "critical" : "ok" },
     ];
 
     return el("section", { className: "olympus-section olympus-skill-hygiene" },
@@ -629,7 +631,8 @@
             el("small", null, [
               item.trust_level ? "trust: " + item.trust_level : "trust missing",
               item.scan_verdict ? "scan: " + item.scan_verdict : "scan missing",
-            ].join(" / ")),
+              item.audit_summary ? "audit: " + item.audit_summary : null,
+            ].filter(Boolean).join(" / ")),
             el(StatePill, { state: item.state || "unknown" })
           )) : el("p", { className: "olympus-muted" }, "No hub lock metadata recorded.")
         )

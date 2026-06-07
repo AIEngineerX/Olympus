@@ -5,7 +5,7 @@
   "description": "Read-only HermesOS Agent Monitor dashboard plugin.",
   "scripts": {
     "dev": "scripts/install-dashboard-link.sh && hermes dashboard --no-open --skip-build",
-    "verify": "python3 -m py_compile dashboard/plugin_api.py && python3 -m unittest tests.test_privacy_contract tests.test_trace_spine && node --check dashboard/dist/index.js && git diff --check",
+    "verify": "python3 -m py_compile dashboard/plugin_api.py && python3 -m unittest tests.test_privacy_contract tests.test_trace_spine tests.test_skill_hygiene && node --check dashboard/dist/index.js && git diff --check",
     "test:visual": "playwright test",
     "test:visual:artifacts": "playwright test",
     "test:live": "node scripts/olympus-live-smoke.mjs",

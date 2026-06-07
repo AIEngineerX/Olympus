@@ -152,9 +152,8 @@ Config policy:
 3. Track release history for API build time, payload size, client fetch time,
    and render time so the current budgets can be tightened from evidence.
 4. Add a compatibility note for each Hermes version tested.
-5. Extend the read-only Skill Hygiene panel with Curator-specific audit fields
-   once Hermes persists them. Do not trigger hub scans, installs, archives,
-   restores, or deletes from Olympus v1.
+5. Add a Curator-specific handoff route once Hermes exposes one. Do not trigger
+   hub scans, installs, archives, restores, or deletes from Olympus v1.
 6. Decide whether Olympus needs D3, visx, React Flow, PixiJS, or
    Three.js for richer visuals. Do not add one until the target visual behavior is
    clear enough to test.
