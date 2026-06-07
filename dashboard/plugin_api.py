@@ -2336,7 +2336,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
     return {
         "summary": {
             "agents": len(agents),
-            "opportunities": len(tuning_items),
+            "recommendations": len(tuning_items),
             "active_sessions": len(active_sessions),
             "tool_heavy_sessions": len(tool_heavy),
             "long_threads": len(message_heavy),
@@ -2348,7 +2348,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "context_pressure_sessions": metrics["context_pressure_sessions"],
         },
         "agents": agents,
-        "opportunities": tuning_items[:8],
+        "recommendations": tuning_items[:8],
         "metrics": metrics,
     }
 

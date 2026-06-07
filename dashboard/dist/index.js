@@ -161,14 +161,14 @@
     const summary = data.summary || {};
     const metrics = data.metrics || {};
     const agents = asList(data.agents);
-    const tuningItems = asList(data.opportunities);
+    const tuningItems = asList(data.recommendations);
     const costRisks = Number(summary.expensive_sessions || metrics.expensive_sessions || 0);
     const failedRuns = Number(metrics.failed_kanban_runs || 0);
     const medianDuration = Number(metrics.median_duration_seconds || 0);
     const p90Duration = Number(metrics.p90_duration_seconds || 0);
     const tiles = [
       { label: "Agents", value: summary.agents || agents.length || 0, state: agents.length ? "active" : "unknown" },
-      { label: "Tuning Items", value: summary.opportunities || tuningItems.length || 0, state: tuningItems.length ? "warning" : "ok" },
+      { label: "Tuning Items", value: summary.recommendations || tuningItems.length || 0, state: tuningItems.length ? "warning" : "ok" },
       { label: "Median Speed", value: formatDuration(medianDuration), state: medianDuration > 900 ? "warning" : medianDuration ? "active" : "idle" },
       { label: "P90 Speed", value: formatDuration(p90Duration), state: p90Duration > 1800 ? "warning" : p90Duration ? "active" : "idle" },
       { label: "Tool Calls", value: formatCount(metrics.total_tool_calls), state: metrics.total_tool_calls ? "active" : "idle" },
@@ -459,12 +459,11 @@
             el("strong", null, String(item.score || 0)),
             el("span", null, "score")
           ),
-          el("p", null, item.detail || ""),
-          item.evidence ? el("small", null, item.evidence) : null,
-          asList(item.signals).length ? el("div", { className: "olympus-ops-eval-signals" },
-            asList(item.signals).slice(0, 4).map((signal) => el("span", { key: signal }, signal))
-          ) : null,
-          item.basis ? el("small", null, item.basis) : null,
+          el("p", null, item.evidence || item.detail || ""),
+          asList(item.signals).length || item.basis ? el("small", null, [
+            asList(item.signals).length ? "Signals: " + asList(item.signals).slice(0, 4).join(" / ") : null,
+            item.basis || null,
+          ].filter(Boolean).join(" / ")) : null,
           item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
         ))
       )

@@ -1224,7 +1224,7 @@
 
 .olympus-ops-eval-item {
   min-width: 0;
-  min-height: 250px;
+  min-height: 210px;
   padding: 14px;
   display: grid;
   gap: 10px;
@@ -1273,23 +1273,6 @@
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
-}
-
-.olympus-ops-eval-signals {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.olympus-ops-eval-signals span {
-  min-height: 26px;
-  padding: 5px 8px;
-  border: 1px solid rgba(246, 240, 223, 0.12);
-  border-radius: 999px;
-  background: rgba(6, 9, 14, 0.38);
-  color: rgba(246, 240, 223, 0.72);
-  font-size: 12px;
-  line-height: 1.15;
 }
 
 .olympus-policy {
