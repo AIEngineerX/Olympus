@@ -113,7 +113,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         kind: "skill",
         severity: "warning",
         title: "Bundle visual QA and browser checks",
-        detail: "Repeated browser, screenshot, and layout work should be a named operating procedure.",
+        detail: "Repeated browser, screenshot, and layout work needs a named operating procedure.",
         evidence: "4 tool-heavy visual sessions",
         recommended_view: "/skills",
         action_label: "Open Skills"
@@ -179,7 +179,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         kind: "skill",
         severity: "warning",
         title: "Hub skills are missing trust or scan metadata",
-        detail: "Hub-installed skills should show trust and scan evidence when Hermes has recorded it locally.",
+        detail: "Hub-installed skills need trust and scan evidence when Hermes has recorded it locally.",
         evidence: "skill:60cf2824b9, skill:ac52bb9910",
         recommended_view: "/skills",
         action_label: "Open Skills"
@@ -191,7 +191,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         detail: "Kanban references skills that do not appear in local usage or hub metadata.",
         evidence: "skill:4c823a88b1",
         recommended_view: "/kanban",
-        action_label: "Open Hermes view"
+        action_label: "Open Kanban"
       }
     ],
     usage: [
@@ -310,13 +310,12 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         recommended_view: "/kanban"
       },
       {
-        id: "cost",
-        label: "Cost",
-        value: 7.42,
-        unit: "usd",
-        state: "active",
-        detail: "1 expensive session",
-        source: "Hermes estimated/actual_cost_usd",
+        id: "cost_risk",
+        label: "Cost Risk",
+        value: 1,
+        state: "warning",
+        detail: "1 session over $4.00",
+        source: "Hermes per-session cost fields; Usage/Analytics owns totals",
         recommended_view: "/analytics"
       }
     ],
@@ -667,9 +666,9 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
     data.performance.summary.avg_tokens_per_call = 1200;
     data.performance.lanes = data.performance.lanes.map((lane) => ({
       ...lane,
-      state: lane.id === "reliability" ? "ok" : "active",
-      value: lane.id === "speed" ? 540 : lane.id === "tools" ? 72 : lane.id === "context" ? 1200 : lane.id === "reliability" ? 0 : 0.18,
-      detail: lane.id === "speed" ? "median 180s / p90 540s" : lane.id === "tools" ? "0 looping / 0 tool-heavy" : lane.id === "context" ? "0 pressure sessions" : lane.id === "reliability" ? "0 failed runs / 0 stale / 0 errored" : "cost below review threshold"
+      state: lane.id === "reliability" || lane.id === "cost_risk" ? "ok" : "active",
+      value: lane.id === "speed" ? 540 : lane.id === "tools" ? 72 : lane.id === "context" ? 1200 : 0,
+      detail: lane.id === "speed" ? "median 180s / p90 540s" : lane.id === "tools" ? "0 looping / 0 tool-heavy" : lane.id === "context" ? "0 pressure sessions" : lane.id === "reliability" ? "0 failed runs / 0 stale / 0 errored" : "0 sessions over $4.00"
     }));
     data.performance.signals = [];
     data.config_policy = {
@@ -893,7 +892,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
     data.performance.summary.total_cost_usd = 32.75;
     data.performance.summary.avg_tokens_per_call = 64000;
     data.performance.lanes = data.performance.lanes.map((lane) => {
-      if (lane.id === "cost") return { ...lane, value: 32.75, state: "warning", detail: "3 expensive sessions" };
+      if (lane.id === "cost_risk") return { ...lane, value: 3, state: "warning", detail: "3 sessions over $4.00" };
       if (lane.id === "context") return { ...lane, value: 64000, state: "warning", detail: "3 pressure sessions" };
       return lane;
     });

@@ -1,6 +1,6 @@
 ---
 name: Olympus
-description: Read-only HermesOS Agent HQ for operational tuning.
+description: Read-only HermesOS Agent Monitor for operational tuning.
 colors:
   surface-night: "#08070b"
   surface-panel: "#151923"
@@ -64,7 +64,7 @@ components:
 
 **Creative North Star: "Operator Evidence Console"**
 
-Olympus uses a dense dark command surface with warm text, restrained gold controls, and cyan operational highlights. The visual system should feel specific to Hermes agent operations while staying quiet enough for repeated diagnostic use.
+Olympus uses a dense dark command surface with warm text, restrained gold controls, and cyan operational highlights. The visual system feels specific to Hermes agent operations while staying quiet enough for repeated diagnostic use.
 
 The system explicitly rejects generic AI tool marketing, decorative visual elements that do not clarify operational state, a shrunk network diagram with unreadable SVG labels, SaaS landing-page composition, oversized hero copy, dark purple or blue gradient dashboards used as a one-note theme, and any treatment that exposes private local labels by default.
 
@@ -107,7 +107,7 @@ The palette is a dark operational base with two restrained accents: cyan for liv
 
 ### Hierarchy
 - **Display** (700, 56px desktop and 42px mobile, 0.95): page title only.
-- **Headline** (700, 21px, 1.2): section titles such as Agent HQ and Agent View.
+- **Headline** (700, 21px, 1.2): section titles such as Agent Monitor and Agent View.
 - **Title** (700, 16px to 24px, 1.15): panel titles, selected profile names, and operational state labels.
 - **Body** (400, 13px to 16px, 1.45): explanatory copy, evidence, and panel text.
 - **Label** (700, 12px, 0, uppercase): short metric labels only.
@@ -118,7 +118,7 @@ The palette is a dark operational base with two restrained accents: cyan for liv
 
 ## 4. Elevation
 
-Olympus uses bordered tonal layering with hard offset shadows on dense cards. Soft floating-card shadows should be rare; depth is usually carried by surface contrast, 1px borders, and compact spacing.
+Olympus uses bordered tonal layering with hard offset shadows on dense cards. Soft floating-card shadows are rare; depth is carried by surface contrast, 1px borders, and compact spacing.
 
 ### Shadow Vocabulary
 - **Command Offset** (`box-shadow: 4px 4px 0 rgba(8, 7, 11, 0.34)`): repeated operational cards and panes.
@@ -126,7 +126,7 @@ Olympus uses bordered tonal layering with hard offset shadows on dense cards. So
 
 ### Named Rules
 
-**The Flat Workbench Rule.** Panels should look placed on the dashboard, not floating as marketing cards.
+**The Flat Workbench Rule.** Panels look placed on the dashboard, not floating as marketing cards.
 
 ## 5. Components
 
@@ -137,7 +137,7 @@ Olympus uses bordered tonal layering with hard offset shadows on dense cards. So
 
 ### Chips
 - **Style:** small state pills with semantic color, compact padding, and readable labels.
-- **State:** state names should be short and operational: ok, warning, running, idle, active, unknown.
+- **State:** state names are short and operational: ok, warning, running, idle, active, unknown.
 
 ### Cards / Containers
 - **Corner Style:** 4px to 8px depending on density.
@@ -148,16 +148,16 @@ Olympus uses bordered tonal layering with hard offset shadows on dense cards. So
 
 ### Inputs / Fields
 - **Style:** no dedicated input system exists yet.
-- **Focus:** future fields should use a clear cyan or gold focus outline.
+- **Focus:** future fields use a clear cyan or gold focus outline.
 - **Error / Disabled:** use Warning Red for error text and reduced contrast for disabled states.
 
 ### Navigation
 
-Navigation is inherited from the Hermes dashboard shell. Olympus should not clone Hermes admin navigation. Handoff links should be short, explicit, and point to Hermes-owned routes.
+Navigation is inherited from the Hermes dashboard shell. Olympus does not clone Hermes admin navigation. Handoff links are short, explicit, and point to Hermes-owned routes.
 
 ### Pantheon / Agent View
 
-The Agent View uses trigger lanes, agent cards, a selected profile inspector, and an activity feed. It must answer which profiles are active, idle, blocked, or risky without shrinking a graph. Mobile should stack the view rather than compressing the whole surface.
+The Agent View uses trigger lanes, agent cards, a selected profile inspector, and an activity feed. It answers which profiles are active, idle, blocked, or risky without shrinking a graph. Mobile stacks the view rather than compressing the whole surface.
 
 ## 6. Do's and Don'ts
 
@@ -167,11 +167,13 @@ The Agent View uses trigger lanes, agent cards, a selected profile inspector, an
 - **Do** preserve the dark operational canvas with warm text, cyan state, and gold action ownership.
 - **Do** keep Agent View labels readable on desktop and mobile.
 - **Do** use real fixture states before adding visual complexity.
+- **Do** treat tokens, model usage, and spend as evidence for risk, not as a replacement for Hermes Usage.
 
 ### Don't:
 - **Don't** use generic AI tool marketing, buzzwords, or feature theater.
 - **Don't** add decorative visual elements that do not clarify operational state.
 - **Don't** return to a shrunk network diagram with unreadable SVG labels.
+- **Don't** rebuild Desktop Command Center Usage or web Analytics.
 - **Don't** use SaaS landing-page composition, oversized hero copy, or marketing card grids.
 - **Don't** make the dashboard a dark purple or blue gradient one-note theme.
 - **Don't** expose hidden local paths, secrets, or raw private labels by default.

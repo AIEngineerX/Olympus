@@ -11,6 +11,7 @@ Hermes uses to mount the tab.
 - `dist/index.js`: hand-authored SDK React frontend registered with the Hermes plugin SDK.
 - `dist/style.css`: `olympus-*` styles for the dashboard surface.
 - `docs/BUILD_PLAN.md`: implementation plan and product boundary notes.
+- `docs/HERMES_DESKTOP_INTEGRATION.md`: Desktop plugin parity and Usage boundary notes.
 - `docs/PRODUCTION_READINESS.md`: production gates, risks, and compatibility.
 - `docs/VIEWPORT_STRATEGY.md`: visual QA strategy for Pantheon and mobile.
 - `docs/FRONTEND_SKILL_RESEARCH.md`: design/QA skill decision record.
@@ -60,7 +61,9 @@ OLYMPUS_EXPOSE_LOCAL_LABELS=1 hermes dashboard --no-open --skip-build
 - Empty evidence sections stay hidden instead of rendering filler panels.
 - Refresh and interval loads ignore stale responses so older `/overview` calls
   cannot overwrite newer data.
-- Action links should point to Hermes-owned routes: `/analytics`, `/config`, `/cron`,
+- Usage and cost totals stay in Hermes Command Center Usage or Analytics.
+  Olympus shows cost only as risk, policy, or handoff evidence.
+- Action links point to Hermes-owned routes: `/analytics`, `/config`, `/cron`,
   `/kanban`, `/logs`, `/profiles`, `/sessions`, or `/skills`.
 
 ## Verify

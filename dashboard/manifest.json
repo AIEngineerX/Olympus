@@ -1,7 +1,7 @@
 {
   "name": "olympus",
   "label": "Olympus",
-  "description": "Read-only HermesOS Agent HQ: profiles, routes, skills, Kanban, gateways, sessions, and health.",
+  "description": "Read-only HermesOS Agent Monitor: profiles, routes, skills, Kanban, gateways, sessions, and health.",
   "icon": "Activity",
   "version": "0.1.0",
   "tab": { "path": "/olympus", "position": "end" },

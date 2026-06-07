@@ -22,7 +22,7 @@ const viewports = [
 const requiredSections = [
   [".olympus-hero", "Olympus"],
   [".olympus-score-card", "What the Score Means"],
-  [".olympus-agent-hq", "Agent HQ"],
+  [".olympus-agent-hq", "Agent Monitor"],
   [".olympus-performance", "Performance Tracking"],
   [".olympus-policy", "Tool Policy & Aux Cost"],
   [".olympus-skill-hygiene", "Skill Hygiene"],
@@ -34,6 +34,9 @@ const bannedCopyPhrases = [
   "opportunity",
   "opportunities",
   "Open owner",
+  "Open Hermes",
+  "Open Hermes view",
+  "Agent HQ",
   "Party View",
   "Selected Agent",
   "AI",
@@ -95,13 +98,6 @@ function commandExists(command) {
   return result.status === 0;
 }
 
-function installLink() {
-  const result = spawnSync(path.join(repoRoot, "scripts", "install-dashboard-link.sh"), [], { cwd: repoRoot, encoding: "utf8" });
-  if (result.status !== 0) {
-    throw new Error(`install-dashboard-link.sh failed:\n${result.stderr || result.stdout}`);
-  }
-}
-
 function linkAlreadyTargetsRepo() {
   try {
     const stat = fs.lstatSync(dashboardTargetDir);
@@ -116,7 +112,10 @@ function ensureDashboardLink() {
   if (fs.existsSync(dashboardTargetDir) && process.env.OLYMPUS_SMOKE_RELINK !== "1") {
     throw new Error(`Hermes already has an Olympus dashboard at ${dashboardTargetDir}. Set OLYMPUS_SMOKE_RELINK=1 to replace it for this smoke run.`);
   }
-  installLink();
+  const result = spawnSync(path.join(repoRoot, "scripts", "install-dashboard-link.sh"), [], { cwd: repoRoot, encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error(`install-dashboard-link.sh failed:\n${result.stderr || result.stdout}`);
+  }
 }
 
 async function startHermesIfNeeded() {

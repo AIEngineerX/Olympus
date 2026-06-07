@@ -7,7 +7,7 @@ const fixtureBaseUrl = pathToFileURL(path.join(__dirname, "../fixtures/olympus-f
 const expectedSections = [
   { selector: ".olympus-hero", text: "Olympus", minHeight: 120 },
   { selector: ".olympus-score-card", text: "What the Score Means", minHeight: 120 },
-  { selector: ".olympus-agent-hq", text: "Agent HQ", minHeight: 180 },
+  { selector: ".olympus-agent-hq", text: "Agent Monitor", minHeight: 180 },
   { selector: ".olympus-performance", text: "Performance Tracking", minHeight: 180 },
   { selector: ".olympus-policy", text: "Tool Policy & Aux Cost", minHeight: 180 },
   { selector: ".olympus-skill-coverage", text: "Skill Coverage", minHeight: 180 },
@@ -21,6 +21,9 @@ const bannedCopyPhrases = [
   "opportunity",
   "opportunities",
   "Open owner",
+  "Open Hermes",
+  "Open Hermes view",
+  "Agent HQ",
   "Party View",
   "Selected Agent",
   "AI",
