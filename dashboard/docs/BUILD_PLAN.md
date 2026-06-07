@@ -16,7 +16,7 @@ Olympus stays read-only until a control has a clear side-effect contract.
 Backend: `plugin_api.py`
 
 - reads Hermes profile, cron, session, gateway, log, and Kanban metadata
-- computes health, attention, tuning recommendations, score deductions, and Agent HQ tuning items
+- computes health, attention, tuning recommendations, score deductions, Agent HQ tuning items, and skill hygiene signals
 - redacts secrets and hides local labels by default
 - returns an Evidence Sources contract for the Hermes stores and safe fields used in each scan
 
@@ -24,6 +24,7 @@ Frontend: `dist/index.js` and `dist/style.css`
 
 - renders the score explanation, Agent HQ, tuning queue, Agent View, conditional Kanban intelligence, and activity events
 - renders Evidence Sources inside Performance Tracking so operators can see the first-party source basis for each scan
+- renders Skill Hygiene from local skill usage and hub provenance metadata
 - links actions to existing Hermes pages
 - avoids duplicating Kanban, Sessions, Cron, Profiles, Logs, Models, Config, Keys, MCP, or Memory admin surfaces
 
@@ -104,18 +105,18 @@ Frontend:
 - Keep action buttons as handoff links unless a write action is explicitly
   approved.
 
-### 4. Curator and Skill Hygiene (open)
+### 4. Curator and Skill Hygiene (partially shipped)
 
 - Surface unused, heavily used, stale, archived, or recently changed skills from
   local Hermes evidence.
-- Read skill usage/provenance from `~/.hermes/skills/.usage.json`.
-- Read hub install trust, scan verdict, and stored metadata from
-  `~/.hermes/skills/.hub/lock.json`.
+- Read skill usage/provenance from Hermes skill usage metadata.
+- Read hub install trust, scan verdict, and stored metadata from Hermes hub lock metadata.
 - Treat skills.sh security audit metadata (`agent-trust-hub`, `socket`, `snyk`
   Pass/Warn/Fail) as optional local evidence only when Hermes has already stored
   it.
 - Link to Hermes Skills or Curator surfaces.
 - Do not install, scan, delete, archive, restore, or mutate skills from Olympus v1.
+- Remaining: show stored skills.sh audit fields when Hermes persists them and add a Curator-specific route once Hermes exposes one.
 
 ### 5. Auxiliary Cost Watch (open)
 
@@ -131,6 +132,7 @@ Run after each implemented item:
 python3 -m py_compile dashboard/plugin_api.py
 node --check dashboard/dist/index.js
 git diff --check
+npm run test:security
 ```
 
 Live check:

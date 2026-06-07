@@ -24,6 +24,7 @@ const requiredSections = [
   [".olympus-score-card", "What the Score Means"],
   [".olympus-agent-hq", "Agent HQ"],
   [".olympus-performance", "Performance Tracking"],
+  [".olympus-skill-hygiene", "Skill Hygiene"],
   [".olympus-party", "Agent View"],
   [".olympus-kanban", "Kanban Intelligence"],
 ];
@@ -226,6 +227,7 @@ async function inspectViewport(browser, viewport, sessionToken) {
       svgTextCount: pageEl.querySelectorAll("svg text").length,
       diagnosticsVisible: bodyText.includes("Production Diagnostics"),
       evidenceSourcesVisible: bodyText.includes("Evidence Sources"),
+      skillHygieneVisible: bodyText.includes("Skill Hygiene"),
     };
   }, { required: requiredSections, bannedPhrases: bannedCopyPhrases, allowedRoutes: allowedHermesRoutes });
   await context.close();
@@ -257,6 +259,7 @@ async function main() {
       if (result.metrics.svgTextCount) failures.push(`${result.viewport}: SVG text count ${result.metrics.svgTextCount}`);
       if (!result.metrics.diagnosticsVisible) failures.push(`${result.viewport}: production diagnostics not visible`);
       if (!result.metrics.evidenceSourcesVisible) failures.push(`${result.viewport}: evidence sources not visible`);
+      if (!result.metrics.skillHygieneVisible) failures.push(`${result.viewport}: skill hygiene not visible`);
     }
     const summary = { ok: failures.length === 0, url: baseUrl, host, port, sessionTokenDetected: Boolean(sessionToken), results, failures };
     console.log(JSON.stringify(summary, null, 2));

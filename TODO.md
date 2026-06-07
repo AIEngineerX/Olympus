@@ -10,6 +10,8 @@
 - Added Skill Coverage from profile skill counts, forced-skill Kanban work, session tool pressure, long threads, and context pressure.
 - Added Profile Fitness scoring from workload, route metadata, gateway state, skill count, cron load, blocked work, failed runs, and stale workers.
 - Added Evidence Sources so each scan shows which Hermes stores, metadata files, and safe fields grounded the result.
+- Added Skill Hygiene from Hermes skill usage metadata and hub lock provenance, including stale/archive/patch counts and trust/scan gaps.
+- Added a live security smoke test for `/overview` payload redaction.
 - Kept actions as links to Hermes-owned pages.
 - Added privacy defaults for local labels, private paths, route labels, and secrets.
 - Kept copy model/provider agnostic and HermesOS-native.
@@ -20,7 +22,7 @@
 Complete each item in order and test before starting the next.
 
 0. Production QA Gate (ongoing)
-   - Keep `npm run verify`, `npm run test:visual`, and `npm run test:live` passing.
+   - Keep `npm run verify`, `npm run test:visual`, `npm run test:live`, and `npm run test:security` passing.
    - Maintain fixture states for noisy, healthy, empty, overloaded, stale/blocked, high-cost, and hidden-label systems.
    - Track production gaps in `dashboard/docs/PRODUCTION_READINESS.md`.
    - Static checks and fixture visual smoke now run in CI; live Hermes smoke remains a local release gate.
@@ -32,9 +34,10 @@ Complete each item in order and test before starting the next.
    - Remaining: add dispatcher/orchestration settings evidence and deeper task-to-session correlation.
 
 2. Curator and Skill Hygiene
-   - Read Hermes skill usage/provenance from `~/.hermes/skills/.usage.json` and hub install metadata from `~/.hermes/skills/.hub/lock.json`.
-   - Surface unused, heavily used, stale, archived, or recently changed skills if the evidence exists locally.
-   - Surface hub trust level, install scan verdict, and stored skills.sh security audit status when available.
+   - Shipped v0: read Hermes skill usage/provenance and hub install metadata.
+   - Shipped v0: surface unused, heavily used, stale, archived, or recently changed skills if the evidence exists locally.
+   - Shipped v0: surface hub trust level and install scan verdict gaps.
+   - Remaining: surface stored skills.sh security audit status when Hermes records it.
    - Keep the panel read-only and link to Hermes Skills or Curator surfaces.
 
 3. Auxiliary Cost Watch
@@ -49,6 +52,7 @@ Run after each implemented item:
 npm run verify
 npm run test:visual
 npm run test:live
+npm run test:security
 ```
 
 Then verify the live dashboard:

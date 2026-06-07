@@ -7,7 +7,8 @@
     "verify": "python3 -m py_compile dashboard/plugin_api.py && node --check dashboard/dist/index.js && git diff --check",
     "test:visual": "playwright test",
     "test:visual:artifacts": "playwright test",
-    "test:live": "node scripts/olympus-live-smoke.mjs"
+    "test:live": "node scripts/olympus-live-smoke.mjs",
+    "test:security": "node scripts/olympus-security-smoke.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

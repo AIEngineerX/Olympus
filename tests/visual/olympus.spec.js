@@ -10,6 +10,7 @@ const expectedSections = [
   { selector: ".olympus-agent-hq", text: "Agent HQ", minHeight: 180 },
   { selector: ".olympus-performance", text: "Performance Tracking", minHeight: 180 },
   { selector: ".olympus-skill-coverage", text: "Skill Coverage", minHeight: 180 },
+  { selector: ".olympus-skill-hygiene", text: "Skill Hygiene", minHeight: 180 },
   { selector: ".olympus-profile-fitness", text: "Profile Fitness", minHeight: 180 },
   { selector: ".olympus-party", text: "Agent View", minHeight: 240 },
   { selector: ".olympus-kanban", text: "Kanban Intelligence", minHeight: 180 }
@@ -46,7 +47,7 @@ const scenarios = [
   {
     name: "empty",
     expectedSections: expectedSections.slice(0, 3),
-    absentSections: [".olympus-skill-coverage", ".olympus-profile-fitness", ".olympus-party", ".olympus-kanban"],
+    absentSections: [".olympus-skill-coverage", ".olympus-skill-hygiene", ".olympus-profile-fitness", ".olympus-party", ".olympus-kanban"],
     minAgentCards: 0
   },
   { name: "overloaded", expectedSections, minAgentCards: 5 },

@@ -497,6 +497,14 @@
   margin-bottom: 14px;
 }
 
+.olympus-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+  justify-content: flex-end;
+}
+
 .olympus-section h2,
 .olympus-section h3 {
   margin: 0;
@@ -1058,6 +1066,65 @@
   grid-column: 1 / -1;
 }
 
+.olympus-skill-hygiene {
+  background: linear-gradient(180deg, rgba(25, 35, 42, 0.9), rgba(10, 13, 18, 0.96));
+}
+
+.olympus-skill-hygiene-tiles,
+.olympus-skill-hygiene-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.olympus-skill-hygiene-tiles {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.olympus-skill-hygiene-tile,
+.olympus-skill-hygiene-pane {
+  border: 1px solid rgba(67, 201, 191, 0.18);
+  border-radius: 6px;
+  background: rgba(6, 9, 14, 0.42);
+}
+
+.olympus-skill-hygiene-tile {
+  min-height: 72px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.olympus-skill-hygiene-tile span {
+  color: rgba(246, 240, 223, 0.58);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.olympus-skill-hygiene-tile strong {
+  font-size: 24px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.olympus-skill-hygiene-grid {
+  grid-template-columns: minmax(0, 1.15fr) repeat(2, minmax(240px, 0.75fr));
+  align-items: start;
+}
+
+.olympus-skill-hygiene-pane {
+  min-width: 0;
+  min-height: 220px;
+  padding: 12px;
+}
+
+.olympus-skill-hygiene-pane h3 {
+  font-size: 16px;
+  margin-bottom: 10px;
+}
+
 .olympus-profile-fitness {
   background: linear-gradient(180deg, rgba(28, 30, 39, 0.92), rgba(10, 12, 18, 0.96));
 }
@@ -1281,6 +1348,7 @@
   .olympus-score-grid,
   .olympus-hq-grid,
   .olympus-skill-grid,
+  .olympus-skill-hygiene-grid,
   .olympus-command-viewport,
   .olympus-kanban-grid {
     grid-template-columns: 1fr;
@@ -1295,6 +1363,7 @@
   .olympus-diagnostic-grid,
   .olympus-evidence-source-grid,
   .olympus-skill-tiles,
+  .olympus-skill-hygiene-tiles,
   .olympus-fitness-tiles,
   .olympus-kanban-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1321,6 +1390,7 @@
   .olympus-score-grid,
   .olympus-hq-grid,
   .olympus-skill-grid,
+  .olympus-skill-hygiene-grid,
   .olympus-command-viewport,
   .olympus-kanban-summary,
   .olympus-kanban-grid {
@@ -1368,6 +1438,7 @@
   }
 
   .olympus-skill-tiles,
+  .olympus-skill-hygiene-tiles,
   .olympus-fitness-tiles {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
