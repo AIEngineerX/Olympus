@@ -177,6 +177,30 @@
       { label: "Outcome Risks", value: failedRuns || 0, state: failedRuns ? "warning" : "ok" },
       { label: "Cost Risks", value: costRisks, state: costRisks ? "warning" : "ok" },
     ];
+    const primaryTiles = tiles.slice(0, 6);
+    const secondaryTiles = tiles.slice(6);
+    const primaryTuningItems = tuningItems.slice(0, 3);
+    const backlogTuningItems = tuningItems.slice(3);
+
+    function renderTuningItem(item, idx) {
+      return el("article", { key: idx, className: cx("olympus-tuning-item", "olympus-tuning-item-" + String(item.severity || "info").toLowerCase()) },
+        el("div", { className: "olympus-item-head" },
+          el("div", null,
+            el("span", null, String(item.kind || "signal")),
+            el("h4", null, item.title || "Tuning item")
+          ),
+          el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
+        ),
+        el("p", null, item.detail || ""),
+        (item.evidence || item.threshold || item.basis) ? el("details", { className: "olympus-details" },
+          el("summary", null, "Evidence"),
+          item.evidence ? el("small", null, "Observed: " + item.evidence) : null,
+          item.threshold ? el("small", { className: "olympus-threshold" }, "Trigger: " + item.threshold) : null,
+          item.basis ? el("small", { className: "olympus-basis" }, item.basis) : null
+        ) : null,
+        item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
+      );
+    }
 
     return el("section", { className: "olympus-section olympus-agent-hq" },
       el("div", { className: "olympus-section-head" },
@@ -186,32 +210,34 @@
         )
       ),
       el("div", { className: "olympus-hq-tiles" },
-        tiles.map((item) => el("div", { key: item.label, className: "olympus-hq-tile" },
+        primaryTiles.map((item) => el("div", { key: item.label, className: "olympus-hq-tile" },
           el("span", null, item.label),
           el("strong", null, String(item.value)),
           el(StatePill, { state: item.state })
         ))
       ),
+      secondaryTiles.length ? el("details", { className: "olympus-details olympus-backlog-details olympus-metric-backlog" },
+        el("summary", null, "More monitor signals (" + secondaryTiles.length + ")"),
+        el("div", { className: "olympus-hq-mini-grid" },
+          secondaryTiles.map((item) => el("div", { key: item.label, className: "olympus-hq-mini-tile" },
+            el("span", null, item.label),
+            el("strong", null, String(item.value)),
+            el(StatePill, { state: item.state })
+          ))
+        )
+      ) : null,
       el("div", { className: "olympus-hq-grid" },
         el("div", { className: "olympus-hq-pane olympus-hq-tuning-items" },
           el("h3", null, "Tuning Queue"),
-          tuningItems.length ? tuningItems.map((item, idx) => el("article", { key: idx, className: cx("olympus-tuning-item", "olympus-tuning-item-" + String(item.severity || "info").toLowerCase()) },
-            el("div", { className: "olympus-item-head" },
-              el("div", null,
-                el("span", null, String(item.kind || "signal")),
-                el("h4", null, item.title || "Tuning item")
-              ),
-              el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
-            ),
-            el("p", null, item.detail || ""),
-            (item.evidence || item.threshold || item.basis) ? el("details", { className: "olympus-details" },
-              el("summary", null, "Evidence"),
-              item.evidence ? el("small", null, "Observed: " + item.evidence) : null,
-              item.threshold ? el("small", { className: "olympus-threshold" }, "Trigger: " + item.threshold) : null,
-              item.basis ? el("small", { className: "olympus-basis" }, item.basis) : null
-            ) : null,
-            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
-          )) : el("p", { className: "olympus-muted" }, "No tuning items in this scan.")
+          primaryTuningItems.length ? primaryTuningItems.map(renderTuningItem) : el("p", { className: "olympus-muted" }, "No tuning items in this scan."),
+          backlogTuningItems.length ? el("details", { className: "olympus-details olympus-backlog-details" },
+            el("summary", null, "More tuning items (" + backlogTuningItems.length + ")"),
+            backlogTuningItems.map((item, idx) => el("div", { key: idx, className: "olympus-mini-row" },
+              el("span", null, item.title || "Tuning item"),
+              el("small", null, [item.severity, item.kind, item.evidence].filter(Boolean).join(" / ")),
+              item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
+            ))
+          ) : null
         )
       )
     );

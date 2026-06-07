@@ -167,6 +167,9 @@ async function collectVisualMetrics(page) {
       .filter((item) => item.width < 32 || item.height < 32);
     return {
       agentCards: agentCards.length,
+      agentMonitorTiles: Array.from(pageEl.querySelectorAll(".olympus-agent-hq .olympus-hq-tile")).filter(visible).length,
+      visibleTuningItems: Array.from(pageEl.querySelectorAll(".olympus-agent-hq .olympus-tuning-item")).filter(visible).length,
+      collapsedBacklog: Boolean(pageEl.querySelector(".olympus-agent-hq .olympus-backlog-details")),
       badCopyPhrases,
       badLinks,
       evidenceSourcesVisible: renderedText.includes("Evidence Sources"),
@@ -207,6 +210,8 @@ for (const scenario of scenarios) {
       expect(metrics.pantheonButtons).toBeGreaterThanOrEqual(scenario.minAgentCards);
     }
     expect(metrics.badLinks).toEqual([]);
+    expect(metrics.agentMonitorTiles).toBeLessThanOrEqual(6);
+    expect(metrics.visibleTuningItems).toBeLessThanOrEqual(3);
     expect(metrics.horizontalOverflow).toBeLessThanOrEqual(2);
     expect(metrics.sectionCount).toBeGreaterThanOrEqual(scenario.expectedSections.length);
     expect(metrics.smallControls).toEqual([]);
@@ -232,6 +237,8 @@ for (const scenario of scenarios) {
       expect(metrics.pantheonButtons).toBeGreaterThanOrEqual(scenario.minAgentCards);
     }
     expect(metrics.badLinks).toEqual([]);
+    expect(metrics.agentMonitorTiles).toBeLessThanOrEqual(6);
+    expect(metrics.visibleTuningItems).toBeLessThanOrEqual(3);
     expect(metrics.horizontalOverflow).toBeLessThanOrEqual(2);
     expect(metrics.sectionCount).toBeGreaterThanOrEqual(scenario.expectedSections.length);
     expect(metrics.smallControls).toEqual([]);
