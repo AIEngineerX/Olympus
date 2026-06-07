@@ -63,6 +63,9 @@ Confirm:
   payload, fetch, render, board, and Hermes-version signals.
 - The Trace Spine panel links task, session, run, and event evidence without
   transcript content or raw ID keys.
+- The Operational Evals panel shows deterministic reliability, routing,
+  skill-use, and efficiency checks from Hermes evidence. It must not present
+  answer-quality or benchmark claims.
 - The Evidence Sources strip shows Hermes state, Kanban, config, skill usage,
   and hub lock metadata without local paths or raw IDs.
 - The Tool Policy & Aux Cost panel shows only safe config counts, browser
@@ -124,6 +127,14 @@ Kanban and worker performance:
 - Ready-unassigned work.
 - Repeated retries per task.
 - Assignee concentration.
+
+Operational evals:
+
+- Reliability check state and score.
+- Routing check state and score.
+- Skill-use check state and score.
+- Efficiency check state and score.
+- Count of warnings and failures across fixed operational checks.
 
 Skill performance:
 

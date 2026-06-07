@@ -576,6 +576,8 @@
 .olympus-hq-grid,
 .olympus-trace-tiles,
 .olympus-trace-list,
+.olympus-ops-eval-tiles,
+.olympus-ops-eval-grid,
 .olympus-policy-tiles,
 .olympus-policy-grid,
 .olympus-kanban-summary,
@@ -590,6 +592,8 @@
 .olympus-tuning-item,
 .olympus-trace-tile,
 .olympus-trace-item,
+.olympus-ops-eval-tile,
+.olympus-ops-eval-item,
 .olympus-policy-tile,
 .olympus-policy-pane,
 .olympus-kanban-tile,
@@ -1178,6 +1182,114 @@
   margin: 10px 0 0;
   color: rgba(246, 240, 223, 0.58);
   font-size: 12px;
+}
+
+.olympus-ops-evals {
+  background:
+    linear-gradient(180deg, rgba(23, 30, 36, 0.92), rgba(9, 12, 17, 0.96)),
+    linear-gradient(90deg, rgba(239, 196, 92, 0.04), rgba(67, 201, 191, 0.04));
+}
+
+.olympus-ops-eval-tiles {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.olympus-ops-eval-tile {
+  min-height: 76px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.olympus-ops-eval-tile span,
+.olympus-ops-eval-score span {
+  color: rgba(246, 240, 223, 0.58);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.olympus-ops-eval-tile strong {
+  color: #f6f0df;
+  font-size: 24px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.olympus-ops-eval-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.olympus-ops-eval-item {
+  min-width: 0;
+  min-height: 250px;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.olympus-ops-eval-item-warning {
+  border-color: rgba(239, 196, 92, 0.36);
+}
+
+.olympus-ops-eval-item-critical,
+.olympus-ops-eval-item-error {
+  border-color: rgba(239, 107, 90, 0.42);
+}
+
+.olympus-ops-eval-item h3 {
+  font-size: 16px;
+}
+
+.olympus-ops-eval-score {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.olympus-ops-eval-score strong {
+  color: #43c9bf;
+  font-size: 30px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.olympus-ops-eval-item p {
+  margin: 0;
+  color: rgba(246, 240, 223, 0.72);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.olympus-ops-eval-item small {
+  min-width: 0;
+  padding: 8px;
+  border-radius: 4px;
+  background: rgba(6, 9, 14, 0.45);
+  color: rgba(246, 240, 223, 0.58);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.olympus-ops-eval-signals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.olympus-ops-eval-signals span {
+  min-height: 26px;
+  padding: 5px 8px;
+  border: 1px solid rgba(246, 240, 223, 0.12);
+  border-radius: 999px;
+  background: rgba(6, 9, 14, 0.38);
+  color: rgba(246, 240, 223, 0.72);
+  font-size: 12px;
+  line-height: 1.15;
 }
 
 .olympus-policy {
@@ -1802,6 +1914,8 @@
   .olympus-hq-mini-grid,
   .olympus-performance-grid,
   .olympus-trace-tiles,
+  .olympus-ops-eval-tiles,
+  .olympus-ops-eval-grid,
   .olympus-diagnostic-grid,
   .olympus-evidence-source-grid,
   .olympus-skill-tiles,
@@ -1836,6 +1950,7 @@
   .olympus-score-grid,
   .olympus-hq-grid,
   .olympus-trace-list,
+  .olympus-ops-eval-grid,
   .olympus-policy-grid,
   .olympus-skill-grid,
   .olympus-skill-hygiene-grid,
@@ -1918,6 +2033,7 @@
 
   .olympus-skill-tiles,
   .olympus-trace-tiles,
+  .olympus-ops-eval-tiles,
   .olympus-policy-tiles,
   .olympus-skill-hygiene-tiles,
   .olympus-fitness-tiles {

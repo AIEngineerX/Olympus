@@ -89,8 +89,8 @@ Hermes mounts Olympus at `/api/plugins/olympus/`:
 | Route | Purpose |
 | --- | --- |
 | `GET /health` | Liveness and a coarse runtime status summary |
-| `GET /overview` | Full dashboard read model: health, tuning, profiles, gateways, cron, sessions, Kanban, performance, skill hygiene, config policy, and evidence sources |
-| `GET /tuning` | Tuning-focused read model with score breakdown, Kanban intelligence, skill hygiene, config policy, performance, and evidence sources |
+| `GET /overview` | Full dashboard read model: health, tuning, profiles, gateways, cron, sessions, Kanban, performance, Trace Spine, Operational Evals, skill hygiene, config policy, and evidence sources |
+| `GET /tuning` | Tuning-focused read model with score breakdown, Kanban intelligence, Trace Spine, Operational Evals, skill hygiene, config policy, performance, and evidence sources |
 
 Routes sit behind the Hermes dashboard session-token middleware. The frontend
 calls them through the plugin SDK's `fetchJSON`, which injects the token.

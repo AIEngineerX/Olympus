@@ -2995,6 +2995,178 @@ def build_trace_spine(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str,
     }
 
 
+def build_ops_evals(
+    sessions: List[Dict[str, Any]],
+    kanban: Optional[Dict[str, Any]],
+    skill_coverage: Dict[str, Any],
+    skill_hygiene: Dict[str, Any],
+    config_policy: Dict[str, Any],
+) -> Dict[str, Any]:
+    kanban = kanban or {}
+    kanban_totals = kanban.get("totals") if isinstance(kanban.get("totals"), dict) else {}
+    coverage_summary = skill_coverage.get("summary") if isinstance(skill_coverage.get("summary"), dict) else {}
+    hygiene_summary = skill_hygiene.get("summary") if isinstance(skill_hygiene.get("summary"), dict) else {}
+    policy_summary = config_policy.get("summary") if isinstance(config_policy.get("summary"), dict) else {}
+    has_evidence = bool(
+        sessions or
+        kanban.get("open") or
+        kanban.get("totals") or
+        kanban_items(kanban, "recent_runs") or
+        kanban_items(kanban, "recent_tasks") or
+        coverage_summary or
+        hygiene_summary or
+        policy_summary
+    )
+    if not has_evidence:
+        return {
+            "summary": {"state": "unknown", "score": 0, "checks": 0, "passed": 0, "warnings": 0, "failures": 0},
+            "items": [],
+        }
+
+    failed_runs = [item for item in kanban_items(kanban, "recent_runs") if is_failed_run(item)]
+    stale_sessions = [item for item in sessions if item.get("state") == "stale"]
+    errored_sessions = [item for item in sessions if item.get("state") == "error"]
+    blocked_tasks = int(kanban_totals.get("blocked") or 0)
+    ready_unassigned = [
+        item for item in kanban_items(kanban, "recent_tasks")
+        if item.get("status") == "ready" and (not item.get("assignee") or item.get("assignee") == "unassigned")
+    ]
+    overloaded_assignees = [
+        item for item in as_list(kanban.get("assignee_load"))
+        if isinstance(item, dict) and (
+            int(item.get("open") or 0) >= OVERLOADED_OPEN_THRESHOLD or
+            int(item.get("running") or 0) >= OVERLOADED_RUNNING_THRESHOLD or
+            int(item.get("blocked") or 0) >= 2
+        )
+    ]
+    looping_sessions = [item for item in sessions if int(item.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD]
+    tool_heavy = [
+        item for item in sessions
+        if TOOL_HEAVY_THRESHOLD <= int(item.get("tool_call_count") or 0) < RUNAWAY_TOOLS_THRESHOLD
+    ]
+    context_pressure = [item for item in sessions if int(item.get("avg_input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS]
+    long_threads = [item for item in sessions if int(item.get("message_count") or 0) >= LONG_THREAD_THRESHOLD]
+    high_turn_limit = int(policy_summary.get("max_turns") or 0) >= MAX_TURNS_REVIEW_THRESHOLD and not policy_summary.get("hard_loop_stop")
+
+    def item_state(critical: int, warning: int) -> str:
+        if critical:
+            return "critical"
+        if warning:
+            return "warning"
+        return "ok"
+
+    reliability_state = item_state(len(failed_runs), len(stale_sessions) + len(errored_sessions))
+    routing_state = item_state(0, len(overloaded_assignees) + len(ready_unassigned) + blocked_tasks)
+    skill_state = item_state(
+        int(hygiene_summary.get("hub_audit_fail") or 0),
+        int(coverage_summary.get("zero_skill_profiles") or 0) +
+        int(coverage_summary.get("forced_skill_tasks") or 0) +
+        int(hygiene_summary.get("forced_skill_metadata_gaps") or 0) +
+        int(hygiene_summary.get("hub_audit_warn") or 0),
+    )
+    efficiency_state = item_state(len(looping_sessions), len(tool_heavy) + len(context_pressure) + len(long_threads) + int(high_turn_limit))
+
+    reliability_view = "/kanban" if failed_runs else "/sessions"
+    items = [
+        {
+            "id": "reliability",
+            "label": "Reliability",
+            "state": reliability_state,
+            "score": 100 - min(60, len(failed_runs) * 30 + len(stale_sessions) * 10 + len(errored_sessions) * 12),
+            "detail": "Worker and session health from recent Hermes evidence.",
+            "evidence": f"{len(failed_runs)} failed run(s), {len(stale_sessions)} stale session(s), {len(errored_sessions)} errored session(s)",
+            "basis": "Hermes task_runs and session state",
+            "signals": [
+                f"failed runs: {len(failed_runs)}",
+                f"stale sessions: {len(stale_sessions)}",
+                f"errored sessions: {len(errored_sessions)}",
+            ],
+            "recommended_view": reliability_view,
+            "action_label": _action_label_for_view(reliability_view),
+        },
+        {
+            "id": "routing",
+            "label": "Routing",
+            "state": routing_state,
+            "score": 100 - min(55, len(overloaded_assignees) * 20 + len(ready_unassigned) * 15 + blocked_tasks * 5),
+            "detail": "Kanban ownership, blocked work, and unassigned ready work.",
+            "evidence": f"{len(overloaded_assignees)} loaded assignee(s), {len(ready_unassigned)} unassigned ready task(s), {blocked_tasks} blocked task(s)",
+            "basis": "Hermes Kanban assignee load and task status",
+            "signals": [
+                f"loaded assignees: {len(overloaded_assignees)}",
+                f"unassigned ready: {len(ready_unassigned)}",
+                f"blocked tasks: {blocked_tasks}",
+            ],
+            "recommended_view": "/kanban",
+            "action_label": _action_label_for_view("/kanban"),
+        },
+        {
+            "id": "skill_use",
+            "label": "Skill Use",
+            "state": skill_state,
+            "score": 100 - min(
+                55,
+                int(coverage_summary.get("zero_skill_profiles") or 0) * 18 +
+                int(hygiene_summary.get("forced_skill_metadata_gaps") or 0) * 16 +
+                int(hygiene_summary.get("hub_audit_fail") or 0) * 25 +
+                int(hygiene_summary.get("hub_audit_warn") or 0) * 12 +
+                int(coverage_summary.get("forced_skill_tasks") or 0) * 3,
+            ),
+            "detail": "Coverage, forced-skill metadata, and stored audit results.",
+            "evidence": (
+                f"{int(coverage_summary.get('zero_skill_profiles') or 0)} bare profile(s), "
+                f"{int(hygiene_summary.get('forced_skill_metadata_gaps') or 0)} forced-skill gap(s), "
+                f"{int(hygiene_summary.get('hub_audit_warn') or 0)} audit warning(s), "
+                f"{int(hygiene_summary.get('hub_audit_fail') or 0)} audit fail(s)"
+            ),
+            "basis": "Hermes skill coverage, skill usage metadata, and hub lock metadata",
+            "signals": [
+                f"bare profiles: {int(coverage_summary.get('zero_skill_profiles') or 0)}",
+                f"forced-skill tasks: {int(coverage_summary.get('forced_skill_tasks') or 0)}",
+                f"metadata gaps: {int(hygiene_summary.get('forced_skill_metadata_gaps') or 0)}",
+            ],
+            "recommended_view": "/skills",
+            "action_label": _action_label_for_view("/skills"),
+        },
+        {
+            "id": "efficiency",
+            "label": "Efficiency",
+            "state": efficiency_state,
+            "score": 100 - min(60, len(looping_sessions) * 25 + len(tool_heavy) * 10 + len(context_pressure) * 14 + len(long_threads) * 6 + int(high_turn_limit) * 10),
+            "detail": "Tool pressure, context pressure, long threads, and visible loop guardrails.",
+            "evidence": (
+                f"{len(looping_sessions)} looping session(s), {len(tool_heavy)} tool-heavy session(s), "
+                f"{len(context_pressure)} context-pressure session(s), {len(long_threads)} long thread(s)"
+            ),
+            "basis": "Hermes session counters plus safe config policy",
+            "signals": [
+                f"looping: {len(looping_sessions)}",
+                f"tool-heavy: {len(tool_heavy)}",
+                f"context pressure: {len(context_pressure)}",
+                f"loop stop visible: {'no' if high_turn_limit else 'yes'}",
+            ],
+            "recommended_view": "/sessions",
+            "action_label": _action_label_for_view("/sessions"),
+        },
+    ]
+
+    warnings = sum(1 for item in items if item["state"] == "warning")
+    failures = sum(1 for item in items if item["state"] == "critical")
+    score = max(0, int(sum(int(item["score"]) for item in items) / len(items))) if items else 100
+    state = "critical" if failures else ("warning" if warnings else "ok")
+    return {
+        "summary": {
+            "state": state,
+            "score": score,
+            "checks": len(items),
+            "passed": sum(1 for item in items if item["state"] == "ok"),
+            "warnings": warnings,
+            "failures": failures,
+        },
+        "items": items,
+    }
+
+
 def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]], cron: List[Dict[str, Any]], sessions: List[Dict[str, Any]], health: Dict[str, Any], attention: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     failed_cron = [j for j in cron if j.get("state") == "error"]
     paused_cron = [j for j in cron if j.get("state") == "paused"]
@@ -3295,6 +3467,7 @@ async def overview() -> Dict[str, Any]:
     trace_spine = build_trace_spine(sessions, kanban)
     evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
     config_policy = collect_config_policy(profiles, sessions, kanban)
+    ops_evals = build_ops_evals(sessions, kanban, skill_coverage, skill_hygiene, config_policy)
     health = collect_health(profiles, cron)
     attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
     tuning = build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)
@@ -3316,6 +3489,7 @@ async def overview() -> Dict[str, Any]:
         "profile_fitness": strip_internal(profile_fitness),
         "performance": strip_internal(performance),
         "trace_spine": strip_internal(trace_spine),
+        "ops_evals": strip_internal(ops_evals),
         "evidence_sources": strip_internal(evidence_sources),
         "config_policy": strip_internal(config_policy),
     }
@@ -3342,6 +3516,7 @@ async def tuning() -> Dict[str, Any]:
     trace_spine = build_trace_spine(sessions, kanban)
     evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
     config_policy = collect_config_policy(profiles, sessions, kanban)
+    ops_evals = build_ops_evals(sessions, kanban, skill_coverage, skill_hygiene, config_policy)
     health = collect_health(profiles, cron)
     attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
     payload = {
@@ -3357,6 +3532,7 @@ async def tuning() -> Dict[str, Any]:
         "profile_fitness": strip_internal(profile_fitness),
         "performance": strip_internal(performance),
         "trace_spine": strip_internal(trace_spine),
+        "ops_evals": strip_internal(ops_evals),
         "evidence_sources": strip_internal(evidence_sources),
         "config_policy": strip_internal(config_policy),
         "tuning": strip_internal(build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)),

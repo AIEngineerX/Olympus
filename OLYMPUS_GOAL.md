@@ -57,10 +57,9 @@ that evidence only to explain risk, routing, skill hygiene, or the next action.
 
 ## Next Direction
 
-Complete the next phases without drifting from the monitor boundary:
+Keep the shipped monitor stable while preparing the upstream Desktop path:
 
 1. Keep Trace Spine V0 green in visual, live, and security checks.
-2. Add Desktop preflight for dashboard plugin-tab parity.
-3. Add deterministic operational eval signals for reliability, efficiency,
-   routing, and skill use.
+2. Keep Operational Evals deterministic and tied to Hermes evidence.
+3. Prepare the Hermes Desktop plugin-tab parity PR.
 4. Keep action buttons as handoff links unless a write action is approved.
