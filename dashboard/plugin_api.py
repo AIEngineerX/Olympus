@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import os
 import re
 import sqlite3
@@ -31,6 +32,7 @@ except Exception:
     yaml = None
 
 router = APIRouter()
+logger = logging.getLogger("olympus.dashboard")
 
 STALE_SECONDS = 60 * 60 * 24
 RECENT_SECONDS = 60 * 60
@@ -81,6 +83,17 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def redact_log_value(value: Any, limit: int = 180) -> str:
+    text = "" if value is None else str(value)
+    for pattern in REDACTION_PATTERNS:
+        text = pattern.sub(lambda m: m.group(1) + "[redacted]" if m.groups() else "[redacted]", text)
+    return text[:limit]
+
+
+def log_read_warning(context: str, exc: BaseException) -> None:
+    logger.warning("%s: %s", context, redact_log_value(exc))
+
+
 def ts_to_iso(value: Any) -> Optional[str]:
     if value in (None, ""):
         return None
@@ -115,14 +128,18 @@ def read_text(path: Path, limit: int = 12000) -> str:
     try:
         data = path.read_text(errors="replace")
         return data[-limit:]
-    except Exception:
+    except Exception as exc:
+        if path.exists():
+            log_read_warning(f"read_text failed for {path.name}", exc)
         return ""
 
 
 def read_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(errors="replace"))
-    except Exception:
+    except Exception as exc:
+        if path.exists():
+            log_read_warning(f"read_json failed for {path.name}", exc)
         return None
 
 
@@ -245,7 +262,8 @@ def _sqlite_count(path: Path, table: str) -> Optional[int]:
         con.row_factory = sqlite3.Row
         row = con.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
         return int(row["n"] or 0) if row is not None else 0
-    except Exception:
+    except Exception as exc:
+        log_read_warning(f"sqlite count failed for {table}", exc)
         return None
     finally:
         if con is not None:
@@ -434,7 +452,8 @@ def _epoch_seconds(value: Any) -> Optional[float]:
             raw = float(text)
             return raw / 1000 if raw > 10_000_000_000 else raw
         return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
-    except Exception:
+    except Exception as exc:
+        log_read_warning(f"kanban connection failed for {path.name}", exc)
         return None
 
 
@@ -1335,7 +1354,8 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
             f"SELECT {', '.join(select)} FROM sessions ORDER BY {order} DESC LIMIT ?",
             (limit,),
         ).fetchall()
-    except Exception:
+    except Exception as exc:
+        log_read_warning("session scan failed", exc)
         return []
     finally:
         if con is not None:
@@ -1684,6 +1704,7 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
 
             board["active_workers"] = sum(1 for w in active_workers if w.get("board") == slug)
         except Exception as exc:
+            log_read_warning(f"kanban board scan failed for {slug}", exc)
             board["error"] = redact_text(exc, 200)
             add_attention("warning", f"Could not read Kanban board {slug}", redact_text(exc), slug)
         finally:
