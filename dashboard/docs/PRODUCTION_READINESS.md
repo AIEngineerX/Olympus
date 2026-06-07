@@ -19,6 +19,7 @@ is mounted into.
 | Hidden operational IDs | Session, cron, Kanban run, worker, and event identifiers now use public refs by default. | `npm run verify` and `npm run test:security` fail on raw session/worker/current-run/run ID keys in hidden-label payloads. |
 | Health recency | Log warnings are based on log-tail scans, not timestamp parsing. | Health copy must say log tail unless timestamp parsing is added. |
 | First-screen density | Agent Monitor collapses secondary signals and extra tuning items. | Visual tests keep default Agent Monitor to six metric tiles and three full tuning cards. |
+| Touch targets | Disclosure summaries are part of the interactive scan path. | Visual tests fail if visible buttons, links, or summaries render below the control-size floor. |
 | Browser console gate | Fixture console checks run in CI. Live smoke is a local release gate because it depends on a Hermes dashboard. | Visual and live smoke tests fail on console/page errors. |
 | Design source | Keep PRODUCT.md and DESIGN.md current when the surface changes. | Maintain a Viewport strategy, fixture screenshots, and a small set of accepted states. |
 

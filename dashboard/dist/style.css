@@ -774,6 +774,10 @@
 }
 
 .olympus-details summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 5px 0;
   width: fit-content;
   cursor: pointer;
   color: #bdf5ef;
@@ -1778,7 +1782,11 @@
   }
 
   .olympus-performance-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .olympus-performance-lane {
+    min-height: 0;
   }
 
   .olympus-diagnostic-grid {
@@ -1821,6 +1829,6 @@
 
 @media (max-width: 520px) {
   .olympus-pantheon-map {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
