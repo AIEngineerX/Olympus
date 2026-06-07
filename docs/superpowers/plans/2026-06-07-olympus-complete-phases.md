@@ -23,11 +23,11 @@ Complete Olympus phases in documented order. Every phase must add working value,
 - Modify: `dashboard/dist/style.css`
 - Modify: `dashboard/docs/PRODUCTION_READINESS.md`
 
-- [ ] Add a visual regression assertion that visible disclosure summaries are usable touch targets.
-- [ ] Verify the new assertion fails against the current CSS.
-- [ ] Increase `.olympus-details summary` vertical hit area and reduce the tallest mobile sections without hiding required evidence.
-- [ ] Run `npm run test:visual`, `npm run test:live`, and `npm run test:security`.
-- [ ] Commit the phase.
+- [x] Add a visual regression assertion that visible disclosure summaries are usable touch targets.
+- [x] Verify the new assertion fails against the current CSS.
+- [x] Increase `.olympus-details summary` vertical hit area and reduce the tallest mobile sections without hiding required evidence.
+- [x] Run `npm run test:visual`, `npm run test:live`, and `npm run test:security`.
+- [x] Commit the phase.
 
 ### Task 2: Trace Spine V0
 
@@ -41,14 +41,14 @@ Complete Olympus phases in documented order. Every phase must add working value,
 - Modify: `scripts/olympus-security-smoke.mjs`
 - Modify: `OLYMPUS_GOAL.md`, `TODO.md`, `dashboard/docs/BUILD_PLAN.md`, `dashboard/docs/PRODUCTION_READINESS.md`
 
-- [ ] Add a failing unit test for correlating a Kanban task with a redacted session ref, task run, and task event.
-- [ ] Add a failing privacy assertion that Trace Spine does not expose raw task IDs, session IDs, run IDs, event IDs, transcript content, or local paths.
-- [ ] Implement `build_trace_spine(sessions, kanban)` from existing `session_ref`, task, run, and event data.
-- [ ] Return `trace_spine` from `/overview` and `/tuning`.
-- [ ] Render a compact Trace Spine panel with task-level recommendations and evidence links.
-- [ ] Add fixture data and visual smoke coverage.
-- [ ] Run `python3 -m unittest tests.test_trace_spine`, `npm run verify`, `npm run test:visual`, `npm run test:live`, and `npm run test:security`.
-- [ ] Commit the phase.
+- [x] Add a failing unit test for correlating a Kanban task with a redacted session ref, task run, and task event.
+- [x] Add a failing privacy assertion that Trace Spine does not expose raw task IDs, session IDs, run IDs, event IDs, transcript content, or local paths.
+- [x] Implement `build_trace_spine(sessions, kanban)` from existing `session_ref`, task, run, and event data.
+- [x] Return `trace_spine` from `/overview` and `/tuning`.
+- [x] Render a compact Trace Spine panel with task-level recommendations and evidence links.
+- [x] Add fixture data and visual smoke coverage.
+- [x] Run `python3 -m unittest tests.test_trace_spine`, `npm run verify`, `npm run test:visual`, `npm run test:live`, and `npm run test:security`.
+- [x] Commit the phase.
 
 ### Task 3: Curator And Skill Hygiene Completion
 
@@ -104,4 +104,3 @@ npm run test:security
 ```
 
 Add any phase-specific command to that gate before committing.
-

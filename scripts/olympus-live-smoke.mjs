@@ -24,6 +24,7 @@ const requiredSections = [
   [".olympus-score-card", "What the Score Means"],
   [".olympus-agent-hq", "Agent Monitor"],
   [".olympus-performance", "Performance Tracking"],
+  [".olympus-trace-spine", "Trace Spine"],
   [".olympus-policy", "Tool Policy & Aux Cost"],
   [".olympus-skill-hygiene", "Skill Hygiene"],
   [".olympus-pantheon", "Pantheon"],
@@ -227,6 +228,7 @@ async function inspectViewport(browser, viewport, sessionToken) {
       svgTextCount: pageEl.querySelectorAll("svg text").length,
       diagnosticsVisible: bodyText.includes("Production Diagnostics"),
       evidenceSourcesVisible: bodyText.includes("Evidence Sources"),
+      traceSpineVisible: bodyText.includes("Trace Spine"),
       policyVisible: bodyText.includes("Tool Policy & Aux Cost"),
       skillHygieneVisible: bodyText.includes("Skill Hygiene"),
       pantheonVisible: bodyText.includes("Pantheon"),
@@ -262,6 +264,7 @@ async function main() {
       if (result.metrics.svgTextCount) failures.push(`${result.viewport}: SVG text count ${result.metrics.svgTextCount}`);
       if (!result.metrics.diagnosticsVisible) failures.push(`${result.viewport}: production diagnostics not visible`);
       if (!result.metrics.evidenceSourcesVisible) failures.push(`${result.viewport}: evidence sources not visible`);
+      if (!result.metrics.traceSpineVisible) failures.push(`${result.viewport}: trace spine not visible`);
       if (!result.metrics.policyVisible) failures.push(`${result.viewport}: tool policy not visible`);
       if (!result.metrics.skillHygieneVisible) failures.push(`${result.viewport}: skill hygiene not visible`);
       if (!result.metrics.pantheonVisible) failures.push(`${result.viewport}: pantheon not visible`);

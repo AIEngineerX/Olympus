@@ -113,9 +113,11 @@ Frontend:
 - Shipped: Kanban Intelligence summarizes open, ready, running, blocked, review,
   active workers, stale workers, failed runs, assignee load, and attention
   items from Hermes Kanban evidence.
-- Remaining: Trace Spine V0 correlates Kanban `session_id`, `task_runs`,
-  task events, and Hermes sessions, then summarize tool sequences and failure
-  points without transcript content.
+- Shipped: Trace Spine V0 correlates Kanban task refs, task runs, task events,
+  and Hermes session refs, then summarizes failure points without transcript
+  content.
+- Remaining: dispatcher/orchestration settings evidence when Hermes exposes it
+  as safe read-only metadata.
 - Keep action buttons as handoff links until a write action is approved.
 
 ### 4. Pantheon V2 Visual Restoration (shipped)

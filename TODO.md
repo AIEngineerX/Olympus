@@ -4,7 +4,7 @@
 
 - Grounded Olympus in Hermes dashboard/plugin reality.
 - Packaged Olympus as a read-only Hermes dashboard plugin with `/health`, `/overview`, and `/tuning`.
-- Added Agent Monitor, readiness score, tuning queue, Evidence Sources, Performance Tracking, Pantheon, Kanban Intelligence, Skill Coverage, Skill Hygiene, Profile Fitness, Tool Policy, and Aux Cost.
+- Added Agent Monitor, readiness score, tuning queue, Evidence Sources, Performance Tracking, Trace Spine, Pantheon, Kanban Intelligence, Skill Coverage, Skill Hygiene, Profile Fitness, Tool Policy, and Aux Cost.
 - Redacted local labels, paths, raw IDs, prompt text, and secret-like values by default.
 - Added visual, live, and security smoke gates.
 - Kept actions as links to Hermes-owned pages.
@@ -25,16 +25,18 @@ Complete each item in order and test before starting the next.
 
 1. Kanban Worker Inspector (partial)
    - Shipped: board pressure, blocked work, active workers, stale workers, failed runs, and assignee load.
-   - Remaining: dispatcher/orchestration settings evidence and task-to-session correlation.
+   - Shipped: Trace Spine V0 links tasks to sessions, task runs, and task events with safe refs.
+   - Remaining: dispatcher/orchestration settings evidence.
 
 2. Curator and Skill Hygiene (partial)
    - Shipped: usage/provenance, stale/archive/patch counts, hub trust, and scan gaps.
    - Remaining: stored skills.sh audit status when Hermes records it, plus a Curator route when Hermes exposes one.
 
-3. Trace Spine (next major feature)
-   - Correlate sessions, messages, Kanban tasks, task runs, and task events.
-   - Show tool sequence summaries and failure points without transcript content.
+3. Trace Spine V0 (shipped)
+   - Correlates sessions, Kanban tasks, task runs, and task events.
+   - Shows failure points without transcript content.
    - Keep transcript content hidden and use hashed refs by default.
+   - `npm run verify` and `npm run test:security` fail if Trace Spine exposes raw ID, message, or transcript keys.
 
 4. Hermes Desktop Integration (upstream packaging track)
    - Add a Desktop preflight script in this repo.

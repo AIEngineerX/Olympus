@@ -32,6 +32,17 @@ const leakPatterns = [
   { name: "secret assignment", pattern: /(api[_-]?key|secret|password|passwd)\s*[:=]/i },
   { name: "bearer token", pattern: /bearer\s+[a-z0-9._~+/=-]+/i },
 ];
+const traceSpineBlockedKeys = new Set([
+  "current_run_id",
+  "event_id",
+  "handoff_error",
+  "messages",
+  "run_id",
+  "session_id",
+  "task_id",
+  "transcript",
+  "worker_pid",
+]);
 
 function requestText(url, options = {}, timeoutMs = 4000) {
   return new Promise((resolve) => {
@@ -145,11 +156,27 @@ function assertPayload(payload) {
   if (!payload.evidence_sources) failures.push("missing evidence_sources");
   if (!payload.skill_hygiene) failures.push("missing skill_hygiene");
   if (!payload.config_policy) failures.push("missing config_policy");
+  if (!payload.trace_spine) failures.push("missing trace_spine");
   const serialized = JSON.stringify(payload);
   for (const item of leakPatterns) {
     const match = serialized.match(item.pattern);
     if (match) failures.push(`${item.name}: ${match[0]}`);
   }
+  const traceKeyLeaks = [];
+  function scanTrace(value, pathName) {
+    if (Array.isArray(value)) {
+      value.forEach((item, idx) => scanTrace(item, `${pathName}[${idx}]`));
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    for (const [key, item] of Object.entries(value)) {
+      const nextPath = `${pathName}.${key}`;
+      if (traceSpineBlockedKeys.has(key)) traceKeyLeaks.push(nextPath);
+      scanTrace(item, nextPath);
+    }
+  }
+  scanTrace(payload.trace_spine, "trace_spine");
+  traceKeyLeaks.forEach((item) => failures.push(`trace_spine raw field: ${item}`));
   const privacy = payload.evidence_sources &&
     payload.evidence_sources.summary &&
     payload.evidence_sources.summary.privacy;

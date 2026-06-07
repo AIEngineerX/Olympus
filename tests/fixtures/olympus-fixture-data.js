@@ -353,6 +353,41 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       failed_kanban_runs: 1
     }
   },
+  trace_spine: {
+    summary: {
+      state: "warning",
+      tasks: 1,
+      correlated_tasks: 1,
+      sessions: 12,
+      runs: 1,
+      events: 2,
+      failure_points: 4
+    },
+    items: [
+      {
+        task_ref: "task:7f2b9c8a12",
+        board: "olympus",
+        title: "Viewport polish",
+        status: "blocked",
+        assignee: "Default",
+        session_ref: "session:93c1a47e2d",
+        session_state: "warning",
+        session_tools: 71,
+        session_messages: 24,
+        run_refs: ["run:b214c9a7ee"],
+        event_refs: ["event:a2c71d93b4", "event:d8e14f027b"],
+        run_count: 1,
+        event_count: 2,
+        signals: ["blocked", "retry", "failed_run", "failed_event"],
+        severity: "warning",
+        recommendation: "Review the blocked task and the failed worker run together.",
+        detail: "The task, session, run, and event evidence point to the same failure chain.",
+        recommended_view: "/kanban",
+        action_label: "Open Kanban",
+        basis: "Kanban task refs plus Hermes session refs"
+      }
+    ]
+  },
   config_policy: {
     summary: {
       state: "warning",
@@ -671,6 +706,18 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       detail: lane.id === "speed" ? "median 180s / p90 540s" : lane.id === "tools" ? "0 looping / 0 tool-heavy" : lane.id === "context" ? "0 pressure sessions" : lane.id === "reliability" ? "0 failed runs / 0 stale / 0 errored" : "0 sessions over $4.00"
     }));
     data.performance.signals = [];
+    data.trace_spine = {
+      summary: {
+        state: "ok",
+        tasks: 0,
+        correlated_tasks: 0,
+        sessions: 6,
+        runs: 0,
+        events: 1,
+        failure_points: 0
+      },
+      items: []
+    };
     data.config_policy = {
       summary: {
         state: "ok",
@@ -808,6 +855,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       opportunities: []
     };
     data.performance = { summary: { state: "unknown" }, lanes: [], signals: [], metrics: {} };
+    data.trace_spine = { summary: { state: "unknown", tasks: 0, correlated_tasks: 0, sessions: 0, runs: 0, events: 0, failure_points: 0 }, items: [] };
     data.config_policy = { summary: {}, settings: [], findings: [] };
     data.skill_coverage = { summary: {}, suggestions: [], profiles: [] };
     data.skill_hygiene = { summary: {}, signals: [], usage: [], hub: [] };
@@ -849,6 +897,31 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
     data.kanban.open = 18;
     data.kanban.assignee_load[0].open = 14;
     data.kanban.assignee_load[0].running = 5;
+    data.trace_spine.items.unshift({
+      task_ref: "task:e8c31b6f90",
+      board: "olympus",
+      title: "Route split",
+      status: "running",
+      assignee: "Default",
+      session_ref: "session:2fb17e90cd",
+      session_state: "warning",
+      session_tools: 58,
+      session_messages: 19,
+      run_refs: [],
+      event_refs: ["event:8f144a2f18"],
+      run_count: 0,
+      event_count: 1,
+      signals: ["tool_pressure", "stale"],
+      severity: "warning",
+      recommendation: "Check why the same owner is carrying the busy trace.",
+      detail: "Open work and tool pressure are concentrated on one profile.",
+      recommended_view: "/profiles",
+      action_label: "Open Profiles",
+      basis: "Kanban assignee load plus Hermes session counters"
+    });
+    data.trace_spine.summary.tasks = data.trace_spine.items.length;
+    data.trace_spine.summary.correlated_tasks = data.trace_spine.items.length;
+    data.trace_spine.summary.failure_points = 5;
     return data;
   }
 
@@ -879,6 +952,12 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       detail: "Browser smoke",
       state: "warning"
     });
+    data.trace_spine.summary.state = "critical";
+    data.trace_spine.summary.failure_points = 6;
+    data.trace_spine.items[0].severity = "critical";
+    data.trace_spine.items[0].signals = ["blocked", "stale", "retry", "failed_run", "failed_event"];
+    data.trace_spine.items[0].recommendation = "Review the stale worker before assigning more work.";
+    data.trace_spine.items[0].detail = "Blocked work and stale heartbeat evidence are on the same chain.";
     return data;
   }
 
@@ -911,6 +990,9 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
     ));
     data.config_policy.findings = data.config_policy.findings.filter((item) => item.kind !== "cost");
     data.config_policy.summary.findings = data.config_policy.findings.length;
+    data.trace_spine.items[0].signals = ["tool_pressure", "retry", "failed_run"];
+    data.trace_spine.items[0].recommendation = "Review the failed run before repeating the high-cost path.";
+    data.trace_spine.items[0].detail = "Context pressure and worker retry evidence appear in the same trace.";
     return data;
   }
 

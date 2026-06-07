@@ -17,6 +17,7 @@ is mounted into.
 | Config policy | Tool Policy & Aux Cost reads safe config structure only. | No prompt/personality text, base URLs, API keys, env values, local paths, or exact route labels in public payloads. |
 | Security/privacy gate | Static and live payload checks exist, but publishing still needs human review. Skills.sh audit fields are shown only if Hermes stores them locally. | Keep read-only routes, redacted session IDs, no local paths, no shell execution, hidden labels, and skill-hub scan/trust signals as merge blockers where applicable. |
 | Hidden operational IDs | Session, cron, Kanban run, worker, and event identifiers now use public refs by default. | `npm run verify` and `npm run test:security` fail on raw session/worker/current-run/run ID keys in hidden-label payloads. |
+| Trace Spine privacy | Task, session, run, and event correlations now render as safe refs. | Trace Spine must not expose raw ID keys, messages, handoff errors, or transcript content in `/overview`. |
 | Health recency | Log warnings are based on log-tail scans, not timestamp parsing. | Health copy must say log tail unless timestamp parsing is added. |
 | First-screen density | Agent Monitor collapses secondary signals and extra tuning items. | Visual tests keep default Agent Monitor to six metric tiles and three full tuning cards. |
 | Touch targets | Disclosure summaries are part of the interactive scan path. | Visual tests fail if visible buttons, links, or summaries render below the control-size floor. |
@@ -59,6 +60,8 @@ Confirm:
   behind an image role.
 - The Performance Tracking panel shows Production Diagnostics with API build,
   payload, fetch, render, board, and Hermes-version signals.
+- The Trace Spine panel links task, session, run, and event evidence without
+  transcript content or raw ID keys.
 - The Evidence Sources strip shows Hermes state, Kanban, config, skill usage,
   and hub lock metadata without local paths or raw IDs.
 - The Tool Policy & Aux Cost panel shows only safe config counts, browser
