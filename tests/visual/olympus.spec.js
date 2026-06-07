@@ -38,7 +38,7 @@ const privateLabelPhrases = [
   "Browser smoke",
   "Split overloaded visual work"
 ];
-const allowedHermesRoutes = ["/analytics", "/cron", "/kanban", "/logs", "/profiles", "/sessions", "/skills"];
+const allowedHermesRoutes = ["/analytics", "/config", "/cron", "/kanban", "/logs", "/profiles", "/sessions", "/skills"];
 
 const scenarios = [
   { name: "noisy", expectedSections, minAgentCards: 5 },
@@ -163,6 +163,7 @@ async function collectVisualMetrics(page) {
       agentCards: agentCards.length,
       badCopyPhrases,
       badLinks,
+      evidenceSourcesVisible: renderedText.includes("Evidence Sources"),
       horizontalOverflow: Math.max(
         document.documentElement.scrollWidth - window.innerWidth,
         document.body.scrollWidth - window.innerWidth
@@ -190,6 +191,7 @@ for (const scenario of scenarios) {
     expect(messages).toEqual([]);
     expect(metrics.agentCards).toBeGreaterThanOrEqual(scenario.minAgentCards);
     expect(metrics.badCopyPhrases).toEqual([]);
+    expect(metrics.evidenceSourcesVisible).toBe(true);
     expect(metrics.badLinks).toEqual([]);
     expect(metrics.horizontalOverflow).toBeLessThanOrEqual(2);
     expect(metrics.sectionCount).toBeGreaterThanOrEqual(scenario.expectedSections.length);
@@ -209,6 +211,7 @@ for (const scenario of scenarios) {
     expect(messages).toEqual([]);
     expect(metrics.agentCards).toBeGreaterThanOrEqual(scenario.minAgentCards);
     expect(metrics.badCopyPhrases).toEqual([]);
+    expect(metrics.evidenceSourcesVisible).toBe(true);
     expect(metrics.badLinks).toEqual([]);
     expect(metrics.horizontalOverflow).toBeLessThanOrEqual(2);
     expect(metrics.sectionCount).toBeGreaterThanOrEqual(scenario.expectedSections.length);

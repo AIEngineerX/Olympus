@@ -9,6 +9,7 @@
 - Added Agent HQ, Agent View, tuning queue, score breakdown, Kanban intelligence, and activity events.
 - Added Skill Coverage from profile skill counts, forced-skill Kanban work, session tool pressure, long threads, and context pressure.
 - Added Profile Fitness scoring from workload, route metadata, gateway state, skill count, cron load, blocked work, failed runs, and stale workers.
+- Added Evidence Sources so each scan shows which Hermes stores, metadata files, and safe fields grounded the result.
 - Kept actions as links to Hermes-owned pages.
 - Added privacy defaults for local labels, private paths, route labels, and secrets.
 - Kept copy model/provider agnostic and HermesOS-native.
@@ -56,6 +57,7 @@ Then verify the live dashboard:
 - No panel renders with mock, fake, or placeholder data.
 - Empty evidence hides instead of adding noise.
 - Links go to Hermes-owned pages.
+- Evidence Sources renders without local paths, raw database paths, raw IDs, or secret-like values.
 - Local names and paths stay hidden unless `OLYMPUS_EXPOSE_LOCAL_LABELS=1`.
 
 Browser check:

@@ -12,7 +12,8 @@ is mounted into.
 | Hermes compatibility | Hermes dashboard, Kanban, skill, and plugin behavior is moving quickly. | Track the Hermes version tested and rerun plugin smoke tests after each Hermes upgrade. |
 | Fixture coverage | Add more edge cases as new panels ship. | Fixture states cover noisy, healthy, empty, overloaded, stale/blocked, high-cost, and hidden-label cases. |
 | Performance tracking | Budgets are lightweight and need real release history. | Track render time, API response time, payload size, tool-call pressure, token pressure, loop count, and worker failures. |
-| Security/privacy gate | Static checks exist, but publishing checks are manual. Skill security/provenance evidence is not surfaced yet. | Keep read-only routes, redacted session IDs, no local paths, no shell execution, hidden labels, and skill-hub scan/trust signals as merge blockers where applicable. |
+| Evidence source contract | Evidence Sources now shows source presence and safe fields, but each new source must stay pathless and read-only. | Every panel should cite Hermes-owned evidence without raw paths, raw IDs, prompt text, or secret-like values. |
+| Security/privacy gate | Static checks exist, but publishing checks are manual. Skill security/provenance evidence is not fully surfaced yet. | Keep read-only routes, redacted session IDs, no local paths, no shell execution, hidden labels, and skill-hub scan/trust signals as merge blockers where applicable. |
 | Browser console gate | CI should keep both fixture and live smoke outputs visible. | Visual and live smoke tests fail on console/page errors. |
 | Design source | Keep PRODUCT.md and DESIGN.md current when the surface changes. | Maintain a Viewport strategy, fixture screenshots, and a small set of accepted states. |
 
@@ -51,6 +52,8 @@ Confirm:
   behind an image role.
 - The Performance Tracking panel shows Production Diagnostics with API build,
   payload, fetch, render, board, and Hermes-version signals.
+- The Evidence Sources strip shows Hermes state, Kanban, config, skill usage,
+  and hub lock metadata without local paths or raw IDs.
 
 `npm run test:live` performs this smoke check automatically. It reuses an
 existing Hermes dashboard only when the served HTML includes the Hermes session
@@ -73,6 +76,7 @@ Backend:
 - Number of Kanban boards scanned.
 - Number of SQLite read failures by table or board.
 - Redaction count for secret-like strings.
+- Evidence source presence, safe fields used, and read failures.
 - Hermes version under test.
 
 Agent performance:

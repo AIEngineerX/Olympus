@@ -203,7 +203,53 @@
     );
   }
 
-  function PerformanceTracking({ performance, diagnostics, clientDiagnostics }) {
+  function EvidenceSources({ evidenceSources }) {
+    const data = evidenceSources || {};
+    const summary = data.summary || {};
+    const items = asList(data.items);
+    if (!items.length) return null;
+
+    function countLine(counts) {
+      if (!counts || typeof counts !== "object") return "";
+      return Object.entries(counts)
+        .filter((entry) => Number(entry[1] || 0) > 0)
+        .slice(0, 3)
+        .map((entry) => entry[0].replaceAll("_", " ") + ": " + formatCount(entry[1]))
+        .join(" / ");
+    }
+
+    return el("div", { className: "olympus-evidence-sources" },
+      el("div", { className: "olympus-evidence-sources-head" },
+        el("div", null,
+          el("h3", null, "Evidence Sources"),
+          el("p", null, "Hermes evidence used for this scan, with privacy policy and read state.")
+        ),
+        el(StatePill, { state: summary.warnings ? "warning" : summary.missing ? "info" : "ok", label: [
+          formatCount(summary.available || 0),
+          "of",
+          formatCount(summary.sources || items.length),
+          "available"
+        ].join(" ") })
+      ),
+      el("div", { className: "olympus-evidence-source-grid" },
+        items.map((item) => el("article", { key: item.id || item.label, className: "olympus-evidence-source" },
+          el("div", { className: "olympus-evidence-source-title" },
+            el("div", null,
+              el("span", null, item.type || "source"),
+              el("strong", null, item.label || "Hermes evidence")
+            ),
+            el(StatePill, { state: item.state || "unknown" })
+          ),
+          countLine(item.counts) ? el("small", null, countLine(item.counts)) : null,
+          asList(item.fields).length ? el("em", null, asList(item.fields).slice(0, 4).join(" / ")) : null,
+          item.redaction ? el("p", null, item.redaction) : null,
+          item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, "Open Hermes view") : null
+        ))
+      )
+    );
+  }
+
+  function PerformanceTracking({ performance, diagnostics, clientDiagnostics, evidenceSources }) {
     const data = performance || {};
     const summary = data.summary || {};
     const lanes = asList(data.lanes);
@@ -261,7 +307,8 @@
             el(StatePill, { state: item.state })
           ))
         )
-      ) : null
+      ) : null,
+      el(EvidenceSources, { evidenceSources })
     );
   }
 
@@ -673,7 +720,7 @@
       el(Hero, { health, score, loading, onRefresh: load }),
       error ? el("div", { className: "olympus-error" }, error) : null,
       el(AgentHQ, { hq: tuning.agent_hq }),
-      el(PerformanceTracking, { performance: data && data.performance, diagnostics: data && data.diagnostics, clientDiagnostics }),
+      el(PerformanceTracking, { performance: data && data.performance, diagnostics: data && data.diagnostics, clientDiagnostics, evidenceSources: data && data.evidence_sources }),
       el(SkillCoverage, { coverage: data && data.skill_coverage }),
       el(ProfileFitness, { fitness: data && data.profile_fitness }),
       el(PartyView, { party: data && data.party, orchestration: data && data.orchestration, events: data && data.activity_events }),

@@ -776,6 +776,88 @@
   overflow-wrap: anywhere;
 }
 
+.olympus-evidence-sources {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(239, 196, 92, 0.16);
+  border-radius: 6px;
+  background: rgba(6, 9, 14, 0.34);
+}
+
+.olympus-evidence-sources-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.olympus-evidence-sources-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.olympus-evidence-sources-head p {
+  margin: 4px 0 0;
+  color: rgba(246, 240, 223, 0.62);
+  font-size: 13px;
+}
+
+.olympus-evidence-source-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.olympus-evidence-source {
+  min-width: 0;
+  min-height: 156px;
+  padding: 10px;
+  border: 1px solid rgba(246, 240, 223, 0.1);
+  border-radius: 4px;
+  background: rgba(6, 9, 14, 0.42);
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.olympus-evidence-source-title {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.olympus-evidence-source-title span {
+  color: rgba(246, 240, 223, 0.58);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.olympus-evidence-source-title strong {
+  display: block;
+  margin-top: 3px;
+  color: #f6f0df;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.olympus-evidence-source small,
+.olympus-evidence-source em,
+.olympus-evidence-source p {
+  margin: 0;
+  color: rgba(246, 240, 223, 0.62);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.olympus-evidence-source em {
+  color: rgba(67, 201, 191, 0.78);
+  font-style: normal;
+}
+
 .olympus-hq-pane {
   padding: 12px;
 }
@@ -1211,6 +1293,7 @@
   .olympus-hq-tiles,
   .olympus-performance-grid,
   .olympus-diagnostic-grid,
+  .olympus-evidence-source-grid,
   .olympus-skill-tiles,
   .olympus-fitness-tiles,
   .olympus-kanban-summary {
@@ -1270,6 +1353,14 @@
 
   .olympus-diagnostic-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .olympus-evidence-sources-head {
+    display: grid;
+  }
+
+  .olympus-evidence-source-grid {
+    grid-template-columns: 1fr;
   }
 
   .olympus-performance-lane-head {
