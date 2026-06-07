@@ -163,6 +163,9 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       hub_installed: 8,
       hub_missing_trust: 2,
       hub_missing_scan: 1,
+      hub_audit_pass: 1,
+      hub_audit_warn: 1,
+      hub_audit_fail: 1,
       forced_skill_metadata_gaps: 1
     },
     signals: [
@@ -187,6 +190,15 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       {
         kind: "skill",
         severity: "warning",
+        title: "Stored skill audit needs review",
+        detail: "Hermes has stored a warn or fail audit result for installed hub skills.",
+        evidence: "skill:60cf2824b9: socket warn, skill:ac52bb9910: snyk fail",
+        recommended_view: "/skills",
+        action_label: "Open Skills"
+      },
+      {
+        kind: "skill",
+        severity: "warning",
         title: "Forced-skill Kanban work lacks local metadata",
         detail: "Kanban references skills that do not appear in local usage or hub metadata.",
         evidence: "skill:4c823a88b1",
@@ -201,9 +213,9 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       { id: "skill:f1b094399e", label: "skill:f1b094399e", state: "active", use_count: 0, view_count: 1, patch_count: 0, pinned: false, archived: false, stale: true, recently_patched: false }
     ],
     hub: [
-      { id: "skill:3c9a18f042", label: "skill:3c9a18f042", trust_level: "local", scan_verdict: "pass", state: "ok" },
-      { id: "skill:60cf2824b9", label: "skill:60cf2824b9", trust_level: null, scan_verdict: "warn", state: "warning" },
-      { id: "skill:ac52bb9910", label: "skill:ac52bb9910", trust_level: "community", scan_verdict: null, state: "warning" }
+      { id: "skill:3c9a18f042", label: "skill:3c9a18f042", trust_level: "local", scan_verdict: "pass", audit_summary: "agent-trust-hub: pass", state: "ok" },
+      { id: "skill:60cf2824b9", label: "skill:60cf2824b9", trust_level: null, scan_verdict: "warn", audit_summary: "socket: warn", state: "warning" },
+      { id: "skill:ac52bb9910", label: "skill:ac52bb9910", trust_level: "community", scan_verdict: null, audit_summary: "snyk: fail", state: "critical" }
     ]
   },
   profile_fitness: {
@@ -793,6 +805,9 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         hub_installed: 8,
         hub_missing_trust: 0,
         hub_missing_scan: 0,
+        hub_audit_pass: 2,
+        hub_audit_warn: 0,
+        hub_audit_fail: 0,
         forced_skill_metadata_gaps: 0
       },
       signals: [],
@@ -801,8 +816,8 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         { id: "skill:90ff0d121b", label: "skill:90ff0d121b", state: "active", use_count: 14, view_count: 19, patch_count: 1, pinned: true, archived: false, stale: false, recently_patched: false }
       ],
       hub: [
-        { id: "skill:3c9a18f042", label: "skill:3c9a18f042", trust_level: "local", scan_verdict: "pass", state: "ok" },
-        { id: "skill:90ff0d121b", label: "skill:90ff0d121b", trust_level: "local", scan_verdict: "pass", state: "ok" }
+        { id: "skill:3c9a18f042", label: "skill:3c9a18f042", trust_level: "local", scan_verdict: "pass", audit_summary: "agent-trust-hub: pass", state: "ok" },
+        { id: "skill:90ff0d121b", label: "skill:90ff0d121b", trust_level: "local", scan_verdict: "pass", audit_summary: "socket: pass", state: "ok" }
       ]
     };
     data.profile_fitness.summary.needs_review = 0;

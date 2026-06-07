@@ -25,6 +25,7 @@ const leakPatterns = [
   { name: "raw task run id value", pattern: /raw-(?:run|current-run|event|task|session)-id/i },
   { name: "workspace path key", pattern: /"workspace_path"\s*:/ },
   { name: "cwd key", pattern: /"cwd"\s*:/ },
+  { name: "internal name key", pattern: /"_name"\s*:/ },
   { name: "raw config secret key", pattern: /"(?:api_key|session_key|base_url|password|secret|token)"\s*:/i },
   { name: "prompt/personality key", pattern: /"(?:prompt|personality)"\s*:/i },
   { name: "GitHub token", pattern: /github_pat_[A-Za-z0-9_]+|ghp_[A-Za-z0-9_]+/ },

@@ -60,9 +60,7 @@ that evidence only to explain risk, routing, skill hygiene, or the next action.
 Complete the next phases without drifting from the monitor boundary:
 
 1. Keep Trace Spine V0 green in visual, live, and security checks.
-2. Finish the remaining skill-hygiene evidence only when Hermes stores it
-   locally.
-3. Add Desktop preflight for dashboard plugin-tab parity.
-4. Add deterministic operational eval signals for reliability, efficiency,
+2. Add Desktop preflight for dashboard plugin-tab parity.
+3. Add deterministic operational eval signals for reliability, efficiency,
    routing, and skill use.
-5. Keep action buttons as handoff links unless a write action is approved.
+4. Keep action buttons as handoff links unless a write action is approved.

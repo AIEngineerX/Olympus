@@ -52,6 +52,10 @@ OPEN_KANBAN_STATUSES = {"triage", "todo", "scheduled", "ready", "running", "bloc
 KANBAN_COLUMNS = ["triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"]
 FAILED_RUN_STATUSES = {"crashed", "timed_out", "failed"}
 FAILED_RUN_OUTCOMES = {"crashed", "timed_out", "spawn_failed", "gave_up"}
+SKILLS_SH_AUDIT_CHECKS = ("agent-trust-hub", "socket", "snyk")
+SKILLS_SH_AUDIT_OK = {"pass", "passed", "ok", "clean"}
+SKILLS_SH_AUDIT_WARN = {"warn", "warning", "review"}
+SKILLS_SH_AUDIT_FAIL = {"fail", "failed", "error", "critical", "block"}
 EXPOSE_LOCAL_LABELS = os.environ.get("OLYMPUS_EXPOSE_LOCAL_LABELS", "").strip().lower() in {"1", "true", "yes", "on"}
 REDACTION_PATTERNS = [
     re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd)\s*[:=]\s*['\"]?[^'\"\s]+"),
@@ -441,6 +445,48 @@ def _public_skill_label(name: Any) -> str:
     return safe_id(raw, "skill")
 
 
+def _skill_audit_verdict(value: Any) -> Optional[str]:
+    raw: Any = value
+    if isinstance(value, dict):
+        raw = value.get("verdict") or value.get("status") or value.get("result")
+    text = str(raw or "").strip().lower()
+    if not text:
+        return None
+    if text in SKILLS_SH_AUDIT_OK:
+        return "pass"
+    if text in SKILLS_SH_AUDIT_WARN:
+        return "warn"
+    if text in SKILLS_SH_AUDIT_FAIL:
+        return "fail"
+    return None
+
+
+def _skill_audit_state(verdict: str) -> str:
+    if verdict == "fail":
+        return "critical"
+    if verdict == "warn":
+        return "warning"
+    return "ok"
+
+
+def _stored_skill_audits(meta: Dict[str, Any]) -> List[Dict[str, str]]:
+    source = meta.get("skills_sh_audit")
+    if not isinstance(source, dict):
+        source = meta.get("security_audit")
+    if not isinstance(source, dict):
+        source = meta
+    audits: List[Dict[str, str]] = []
+    for check in SKILLS_SH_AUDIT_CHECKS:
+        verdict = _skill_audit_verdict(source.get(check) if isinstance(source, dict) else None)
+        if verdict:
+            audits.append({
+                "check": check,
+                "verdict": verdict,
+                "state": _skill_audit_state(verdict),
+            })
+    return audits
+
+
 def collect_skill_metadata() -> Dict[str, Any]:
     skills_dir = get_hermes_home() / "skills"
     usage_path = skills_dir / ".usage.json"
@@ -487,13 +533,17 @@ def collect_skill_metadata() -> Dict[str, Any]:
             continue
         trust_level = meta.get("trust_level")
         scan_verdict = meta.get("scan_verdict")
+        audits = _stored_skill_audits(meta)
+        audit_states = {item["state"] for item in audits}
         hub_items.append({
             "_name": str(name),
             "id": _public_skill_label(name),
             "label": _public_skill_label(name),
             "trust_level": str(trust_level) if trust_level not in (None, "") else None,
             "scan_verdict": str(scan_verdict) if scan_verdict not in (None, "") else None,
-            "state": "warning" if not trust_level or not scan_verdict else "ok",
+            "security_audits": audits,
+            "audit_summary": " / ".join(f"{item['check']}: {item['verdict']}" for item in audits) if audits else None,
+            "state": "critical" if "critical" in audit_states else ("warning" if "warning" in audit_states or not trust_level or not scan_verdict else "ok"),
             "installed_at": ts_to_iso(meta.get("installed_at")),
             "updated_at": ts_to_iso(meta.get("updated_at")),
         })
@@ -504,6 +554,7 @@ def collect_skill_metadata() -> Dict[str, Any]:
     recently_patched = [item for item in usage_items if item.get("recently_patched")]
     hub_missing_trust = [item for item in hub_items if not item.get("trust_level")]
     hub_missing_scan = [item for item in hub_items if not item.get("scan_verdict")]
+    audit_records = [audit for item in hub_items for audit in as_list(item.get("security_audits")) if isinstance(audit, dict)]
     return {
         "summary": {
             "usage_present": usage_path.exists(),
@@ -517,6 +568,9 @@ def collect_skill_metadata() -> Dict[str, Any]:
             "hub_installed": len(hub_items),
             "hub_missing_trust": len(hub_missing_trust),
             "hub_missing_scan": len(hub_missing_scan),
+            "hub_audit_pass": sum(1 for item in audit_records if item.get("verdict") == "pass"),
+            "hub_audit_warn": sum(1 for item in audit_records if item.get("verdict") == "warn"),
+            "hub_audit_fail": sum(1 for item in audit_records if item.get("verdict") == "fail"),
             "read_failures": int(usage_path.exists() and not isinstance(usage_data, dict)) + int(hub_lock_path.exists() and not isinstance(hub_data, dict)),
         },
         "usage_items": usage_items,
@@ -598,6 +652,22 @@ def build_skill_hygiene(skill_metadata: Dict[str, Any], skill_coverage: Dict[str
             ", ".join(str(item.get("label")) for item in hub_missing[:3]),
         )
 
+    audit_findings = []
+    for item in hub_items:
+        for audit in as_list(item.get("security_audits")):
+            if not isinstance(audit, dict) or audit.get("verdict") == "pass":
+                continue
+            audit_findings.append(f"{item.get('label')}: {audit.get('check')} {audit.get('verdict')}")
+    if audit_findings:
+        add_signal(
+            "warning",
+            "Stored skill audit needs review",
+            "Hermes has stored a warn or fail audit result for installed hub skills. Review the Skills page before using those skills in forced workflows.",
+            ", ".join(audit_findings[:4]),
+            "/skills",
+            "Hermes skill hub lock stored skills.sh audit metadata",
+        )
+
     forced_skill_names: set[str] = set()
     for task in kanban_items(kanban, "recent_tasks"):
         for name in as_list(task.get("_skills")):
@@ -628,11 +698,14 @@ def build_skill_hygiene(skill_metadata: Dict[str, Any], skill_coverage: Dict[str
             "hub_installed": summary.get("hub_installed") or 0,
             "hub_missing_trust": summary.get("hub_missing_trust") or 0,
             "hub_missing_scan": summary.get("hub_missing_scan") or 0,
+            "hub_audit_pass": summary.get("hub_audit_pass") or 0,
+            "hub_audit_warn": summary.get("hub_audit_warn") or 0,
+            "hub_audit_fail": summary.get("hub_audit_fail") or 0,
             "forced_skill_metadata_gaps": len(missing_forced),
         },
         "signals": findings[:8],
-        "usage": sorted(usage_items, key=lambda item: int(item.get("use_count") or 0), reverse=True)[:8],
-        "hub": hub_items[:8],
+        "usage": strip_internal(sorted(usage_items, key=lambda item: int(item.get("use_count") or 0), reverse=True)[:8]),
+        "hub": strip_internal(hub_items[:8]),
     }
 
 

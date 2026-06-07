@@ -143,7 +143,7 @@ Frontend:
   it.
 - Link to Hermes Skills or Curator surfaces.
 - Do not install, scan, delete, archive, restore, or mutate skills from Olympus v1.
-- Remaining: show stored skills.sh audit fields when Hermes persists them and add a Curator-specific route once Hermes exposes one.
+- Remaining: add a Curator-specific route once Hermes exposes one.
 
 ### 6. Tool Policy & Auxiliary Cost Watch (shipped)
 

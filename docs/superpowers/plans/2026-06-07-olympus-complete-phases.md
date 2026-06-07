@@ -59,11 +59,11 @@ Complete Olympus phases in documented order. Every phase must add working value,
 - Modify: `tests/fixtures/olympus-fixture-data.js`
 - Modify: docs listed above
 
-- [ ] Add a failing unit test for stored skill audit metadata when Hermes has already persisted it locally.
-- [ ] Parse only local stored audit fields from skill usage or hub lock metadata.
-- [ ] Surface audit status as read-only hygiene evidence.
-- [ ] Keep scan/install/archive/delete actions out of Olympus.
-- [ ] Run the phase gate and commit.
+- [x] Add a failing unit test for stored skill audit metadata when Hermes has already persisted it locally.
+- [x] Parse only local stored audit fields from skill usage or hub lock metadata.
+- [x] Surface audit status as read-only hygiene evidence.
+- [x] Keep scan/install/archive/delete actions out of Olympus.
+- [x] Run the phase gate and commit.
 
 ### Task 4: Hermes Desktop Integration Preflight
 
