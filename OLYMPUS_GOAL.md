@@ -51,10 +51,10 @@ duplicate the control.
 
 ## Next Direction
 
-Deepen Kanban evidence:
+Build Trace Spine V0 from first-party Hermes evidence:
 
-1. Correlate Kanban `session_id` and `task_runs` to Hermes sessions.
-2. Add dispatcher and orchestration settings evidence.
+1. Correlate sessions, messages, Kanban tasks, task runs, and task events.
+2. Summarize tool sequences and failure points without transcript content.
 3. Rank task-level recommendations by blocked, stale, retry, tool-heavy,
-   unassigned, and unhealthy-assignee signals.
+   unassigned, handoff failure, and unhealthy-assignee signals.
 4. Keep action buttons as handoff links unless a write action is approved.

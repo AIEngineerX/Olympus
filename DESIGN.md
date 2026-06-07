@@ -155,7 +155,7 @@ Olympus uses bordered tonal layering with hard offset shadows on dense cards. So
 
 Navigation is inherited from the Hermes dashboard shell. Olympus should not clone Hermes admin navigation. Handoff links should be short, explicit, and point to Hermes-owned routes.
 
-### Agent View
+### Pantheon / Agent View
 
 The Agent View uses trigger lanes, agent cards, a selected profile inspector, and an activity feed. It must answer which profiles are active, idle, blocked, or risky without shrinking a graph. Mobile should stack the view rather than compressing the whole surface.
 

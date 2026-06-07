@@ -8,7 +8,7 @@ Hermes uses to mount the tab.
 
 - `manifest.json`: plugin metadata, tab path, frontend assets, backend module.
 - `plugin_api.py`: read-only FastAPI router mounted by Hermes.
-- `dist/index.js`: vanilla JS frontend registered with the Hermes plugin SDK.
+- `dist/index.js`: hand-authored SDK React frontend registered with the Hermes plugin SDK.
 - `dist/style.css`: `olympus-*` styles for the dashboard surface.
 - `docs/BUILD_PLAN.md`: implementation plan and product boundary notes.
 - `docs/PRODUCTION_READINESS.md`: production gates, risks, and compatibility.
@@ -22,8 +22,8 @@ Hermes mounts the backend at `/api/plugins/olympus/`.
 | Route | Purpose |
 | --- | --- |
 | `GET /health` | Liveness and coarse runtime health. |
-| `GET /overview` | Full read model for the dashboard. |
-| `GET /tuning` | Tuning recommendations and score details. |
+| `GET /overview` | Full dashboard read model: health, tuning, profiles, gateways, cron, sessions, Kanban, performance, skill hygiene, config policy, and evidence sources. |
+| `GET /tuning` | Tuning-focused read model with score details, Kanban intelligence, skill hygiene, config policy, performance, and evidence sources. |
 
 Routes sit behind Hermes dashboard session-token middleware. The frontend calls
 them through the Hermes plugin SDK.

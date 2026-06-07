@@ -30,7 +30,7 @@ owns vs. what Hermes owns).
 - A working [HermesOS / Hermes Agent](https://github.com/NousResearch/hermes-agent) install (`$HERMES_HOME`, default `~/.hermes`).
 - Python 3.10+ (the backend is a FastAPI router loaded by Hermes).
 - Node.js/npm for verification and Playwright-based visual smoke tests. There is
-  still no frontend build step; `dashboard/dist/*` is hand-authored.
+  no frontend build step; `dashboard/dist/*` is hand-authored SDK React/CSS.
 
 ## Install (local Hermes)
 
@@ -72,8 +72,8 @@ Hermes mounts Olympus at `/api/plugins/olympus/`:
 | Route | Purpose |
 | --- | --- |
 | `GET /health` | Liveness and a coarse runtime status summary |
-| `GET /overview` | Full read model: health, attention, tuning, profiles, gateways, cron, sessions, Kanban |
-| `GET /tuning` | Tuning recommendations, score breakdown, and Kanban intelligence |
+| `GET /overview` | Full dashboard read model: health, tuning, profiles, gateways, cron, sessions, Kanban, performance, skill hygiene, config policy, and evidence sources |
+| `GET /tuning` | Tuning-focused read model with score breakdown, Kanban intelligence, skill hygiene, config policy, performance, and evidence sources |
 
 Routes sit behind the Hermes dashboard session-token middleware. The frontend
 calls them through the plugin SDK's `fetchJSON`, which injects the token.
@@ -96,7 +96,7 @@ See [`SECURITY.md`](SECURITY.md) for the full security and privacy posture.
 ├── dashboard/
 │   ├── manifest.json            # plugin metadata, tab path, assets, api module
 │   ├── plugin_api.py            # FastAPI router (read-only backend)
-│   ├── dist/index.js            # hand-authored frontend (registered with the Hermes plugin SDK)
+│   ├── dist/index.js            # hand-authored SDK React frontend
 │   ├── dist/style.css           # olympus-* styles
 │   ├── docs/BUILD_PLAN.md       # implementation plan
 │   ├── docs/PRODUCTION_READINESS.md
@@ -116,7 +116,7 @@ See [`SECURITY.md`](SECURITY.md) for the full security and privacy posture.
 └── README.md
 ```
 
-Note: `dashboard/dist/*` is hand-authored vanilla JS/CSS. There is no bundler or
+Note: `dashboard/dist/*` is hand-authored SDK React/CSS. There is no bundler or
 build step. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow.
 
 ## Verify

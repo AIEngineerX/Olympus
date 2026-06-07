@@ -15,7 +15,7 @@ is mounted into.
 | Evidence source contract | Evidence Sources now shows source presence and safe fields, but each new source must stay pathless and read-only. | Every panel should cite Hermes-owned evidence without raw paths, raw IDs, prompt text, or secret-like values. |
 | Config policy | Tool Policy & Aux Cost reads safe config structure only. | No prompt/personality text, base URLs, API keys, env values, local paths, or exact route labels in public payloads. |
 | Security/privacy gate | Static and live payload checks exist, but publishing still needs human review. Skills.sh audit fields are shown only if Hermes stores them locally. | Keep read-only routes, redacted session IDs, no local paths, no shell execution, hidden labels, and skill-hub scan/trust signals as merge blockers where applicable. |
-| Browser console gate | CI should keep both fixture and live smoke outputs visible. | Visual and live smoke tests fail on console/page errors. |
+| Browser console gate | Fixture console checks run in CI. Live smoke is a local release gate because it depends on a Hermes dashboard. | Visual and live smoke tests fail on console/page errors. |
 | Design source | Keep PRODUCT.md and DESIGN.md current when the surface changes. | Maintain a Viewport strategy, fixture screenshots, and a small set of accepted states. |
 
 ## Release Gate
@@ -75,6 +75,7 @@ before using the smoke runner to replace it.
 | Date | Hermes version | Check | Result |
 | --- | --- | --- | --- |
 | 2026-06-06 | Hermes Agent v0.16.0 (2026.6.5), upstream `1c218983`, OpenAI SDK 2.24.0 | `npm run test:live` | Passed on desktop and mobile. |
+| 2026-06-07 | Local Hermes dashboard on `127.0.0.1:9119` | `npm run test:live`, `npm run test:security` | Passed on desktop/mobile live smoke and overview payload redaction. |
 
 ## Production Metrics To Track
 
