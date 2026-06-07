@@ -101,6 +101,14 @@ npm run verify
 npm run test:visual
 npm run test:live
 npm run test:security
+npm run test:desktop
 ```
 
 Add any phase-specific command to that gate before committing.
+
+## Final Status
+
+- [x] All planned phases completed.
+- [x] Final hygiene sweep removed stale Agent Monitor naming and compacted
+  Operational Evals without hiding evidence.
+- [x] Final gate passed.

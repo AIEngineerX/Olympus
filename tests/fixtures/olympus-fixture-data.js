@@ -56,7 +56,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
     agent_hq: {
       summary: {
         agents: 5,
-        opportunities: 4,
+        recommendations: 4,
         total_tokens: 1842200,
         looping_sessions: 2,
         context_pressure_sessions: 1,
@@ -70,7 +70,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         failed_kanban_runs: 1
       },
       agents: [],
-      opportunities: [
+      recommendations: [
         {
           kind: "skill",
           severity: "warning",
@@ -749,7 +749,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       explanation: "Fixture score generated from healthy Hermes evidence.",
       deductions: []
     };
-    data.tuning.agent_hq.summary.opportunities = 1;
+    data.tuning.agent_hq.summary.recommendations = 1;
     data.tuning.agent_hq.summary.looping_sessions = 0;
     data.tuning.agent_hq.summary.context_pressure_sessions = 0;
     data.tuning.agent_hq.summary.total_cost_usd = 0.18;
@@ -757,7 +757,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
     data.tuning.agent_hq.metrics.p90_duration_seconds = 540;
     data.tuning.agent_hq.metrics.total_tool_calls = 72;
     data.tuning.agent_hq.metrics.failed_kanban_runs = 0;
-    data.tuning.agent_hq.opportunities = [{
+    data.tuning.agent_hq.recommendations = [{
       kind: "review",
       severity: "ok",
       title: "No current agent tuning gap",
@@ -940,10 +940,10 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       deductions: []
     };
     data.tuning.agent_hq = {
-      summary: { agents: 0, opportunities: 0, total_tokens: 0, looping_sessions: 0, context_pressure_sessions: 0, total_cost_usd: 0 },
+      summary: { agents: 0, recommendations: 0, total_tokens: 0, looping_sessions: 0, context_pressure_sessions: 0, total_cost_usd: 0 },
       metrics: { median_duration_seconds: 0, p90_duration_seconds: 0, total_tokens: 0, total_tool_calls: 0, failed_kanban_runs: 0 },
       agents: [],
-      opportunities: []
+      recommendations: []
     };
     data.performance = { summary: { state: "unknown" }, lanes: [], signals: [], metrics: {} };
     data.trace_spine = { summary: { state: "unknown", tasks: 0, correlated_tasks: 0, sessions: 0, runs: 0, events: 0, failure_points: 0 }, items: [] };
@@ -970,7 +970,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
     data.party.members[0].ready_work = 6;
     data.party.members[0].flags = ["load balance", "route split", "blocked"];
     data.tuning.agent_hq.metrics.p90_duration_seconds = 3600;
-    data.tuning.agent_hq.opportunities.unshift({
+    data.tuning.agent_hq.recommendations.unshift({
       kind: "agent",
       severity: "critical",
       title: "Split overloaded visual work",
