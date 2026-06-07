@@ -39,7 +39,7 @@ Complete each item in order and test before starting the next.
    - `npm run verify` and `npm run test:security` fail if Trace Spine exposes raw ID, message, or transcript keys.
 
 4. Hermes Desktop Integration (upstream packaging track)
-   - Add a Desktop preflight script in this repo.
+   - Shipped: Desktop preflight script in this repo.
    - Prepare an upstream Hermes Desktop PR for dashboard plugin-tab parity.
    - Keep Olympus read-only and avoid duplicating Desktop Command Center Usage.
    - Fallback: document browser-dashboard access if Desktop plugin parity is not accepted.

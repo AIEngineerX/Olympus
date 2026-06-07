@@ -78,6 +78,10 @@ Desktop visibility requires Hermes Desktop plugin-tab parity for dashboard
 plugins. See
 [`dashboard/docs/HERMES_DESKTOP_INTEGRATION.md`](dashboard/docs/HERMES_DESKTOP_INTEGRATION.md).
 
+Run `npm run test:desktop` to verify the local Desktop app, Command Center
+Usage ownership, web dashboard plugin support, and the current plugin-tab parity
+status before preparing an upstream Desktop PR.
+
 ## API
 
 Hermes mounts Olympus at `/api/plugins/olympus/`:

@@ -81,6 +81,7 @@ npm run verify
 npm run test:visual
 npm run test:live
 npm run test:security
+npm run test:desktop
 ```
 
 `npm run test:visual` runs fixture-backed desktop/mobile checks across noisy,
@@ -94,3 +95,6 @@ somewhere else, set `OLYMPUS_SMOKE_RELINK=1`.
 `npm run test:security` fetches the live `/overview` payload through the Hermes
 session-token flow and fails on local paths, raw database filenames,
 workspace/cwd keys, or secret-like strings.
+
+`npm run test:desktop` checks the local Hermes Desktop app, Command Center Usage
+ownership, web dashboard plugin support, and Desktop plugin-tab parity status.

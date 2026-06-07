@@ -39,6 +39,15 @@ loads there through `dashboard/manifest.json`.
 Hermes Desktop currently has a native route set and does not expose dashboard
 plugin tabs such as `/olympus` as first-class Desktop pages.
 
+Run the local preflight before preparing an upstream PR:
+
+```bash
+npm run test:desktop
+```
+
+The current expected result is a passing preflight with a warning that Desktop
+has native routes but no dashboard plugin route signal yet.
+
 ## Target
 
 Desktop should surface installed dashboard plugin tabs from the same

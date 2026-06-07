@@ -73,10 +73,10 @@ Complete Olympus phases in documented order. Every phase must add working value,
 - Modify: `dashboard/docs/HERMES_DESKTOP_INTEGRATION.md`
 - Modify: `dashboard/docs/PRODUCTION_READINESS.md`
 
-- [ ] Add a failing script-level check that expects Desktop status, Desktop route evidence, Command Center Usage ownership, and web dashboard plugin availability.
-- [ ] Implement the preflight script without mutating Desktop.
-- [ ] Add `npm run test:desktop`.
-- [ ] Run the phase gate plus `npm run test:desktop` and commit.
+- [x] Add a failing script-level check that expects Desktop status, Desktop route evidence, Command Center Usage ownership, and web dashboard plugin availability.
+- [x] Implement the preflight script without mutating Desktop.
+- [x] Add `npm run test:desktop`.
+- [x] Run the phase gate plus `npm run test:desktop` and commit.
 
 ### Task 5: Deterministic Eval Signals
 

@@ -161,11 +161,13 @@ Frontend:
 ### 7. Hermes Desktop Plugin Parity (planned)
 
 - Keep Olympus Dashboard-first until Desktop exposes dashboard plugin tabs.
+- Run `npm run test:desktop` before preparing the upstream PR.
 - Prepare an upstream Hermes Desktop PR that reads dashboard plugin manifests,
   shows plugin nav entries, and hosts plugin pages safely.
 - Do not duplicate Desktop Command Center Usage. Link to Hermes Usage/Analytics
   for token, model, session, and cost totals.
-- Add a Desktop preflight gate before opening the upstream PR.
+- The Desktop preflight passes locally with a warning until plugin-tab route
+  parity lands.
 
 ## Bug-Test Gate
 

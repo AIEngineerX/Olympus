@@ -9,7 +9,8 @@
     "test:visual": "playwright test",
     "test:visual:artifacts": "playwright test",
     "test:live": "node scripts/olympus-live-smoke.mjs",
-    "test:security": "node scripts/olympus-security-smoke.mjs"
+    "test:security": "node scripts/olympus-security-smoke.mjs",
+    "test:desktop": "node scripts/olympus-desktop-preflight.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
