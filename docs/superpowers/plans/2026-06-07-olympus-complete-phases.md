@@ -113,4 +113,6 @@ Add any phase-specific command to that gate before committing.
 - [x] All planned phases completed.
 - [x] Final hygiene sweep removed stale Agent Monitor naming and compacted
   Operational Evals without hiding evidence.
+- [x] Dashboard mode staging shipped: Brief first, then Agents, Skills, Kanban,
+  Policy, and Diagnostics for deeper inspection.
 - [x] Final gate passed.

@@ -19,7 +19,7 @@ is mounted into.
 | Hidden operational IDs | Session, cron, Kanban run, worker, and event identifiers now use public refs by default. | `npm run verify` and `npm run test:security` fail on raw session/worker/current-run/run ID keys in hidden-label payloads. |
 | Trace Spine privacy | Task, session, run, and event correlations now render as safe refs. | Trace Spine must not expose raw ID keys, messages, handoff errors, or transcript content in `/overview`. |
 | Health recency | Log warnings are based on log-tail scans, not timestamp parsing. | Health copy must say log tail unless timestamp parsing is added. |
-| First-screen density | Agent Monitor collapses secondary signals and extra tuning items. | Visual tests keep default Agent Monitor to six metric tiles and three full tuning cards. |
+| First-screen density | Brief mode shows hero status, score details, and Agent Monitor only. | Visual and live smoke tests keep deep panels behind Agents, Skills, Kanban, Policy, and Diagnostics tabs. |
 | Touch targets | Disclosure summaries are part of the interactive scan path. | Visual tests fail if visible buttons, links, or summaries render below the control-size floor. |
 | Browser console gate | Fixture console checks run in CI. Live smoke is a local release gate because it depends on a Hermes dashboard. | Visual and live smoke tests fail on console/page errors. |
 | Design source | Keep PRODUCT.md and DESIGN.md current when the surface changes. | Maintain a Viewport strategy, fixture screenshots, and a small set of accepted states. |
@@ -54,6 +54,9 @@ http://127.0.0.1:9119/olympus
 Confirm:
 
 - `/olympus` renders with no browser console errors.
+- Brief mode shows only hero status, score details, and Agent Monitor.
+- Agents, Skills, Kanban, Policy, and Diagnostics tabs reveal their owned
+  panels without horizontal overflow.
 - Empty evidence hides instead of filling the UI with fake state.
 - No panel uses mock data in the live dashboard.
 - All action links go to Hermes-owned pages.
@@ -61,14 +64,16 @@ Confirm:
 - Pantheon is legible at desktop and mobile widths.
 - Pantheon controls remain accessible buttons, not an interactive subtree hidden
   behind an image role.
-- The Performance Tracking panel shows Production Diagnostics with API build,
-  payload, fetch, render, board, and Hermes-version signals.
+- The Performance Tracking panel shows latency, tool pressure, context pressure,
+  and reliability signals.
+- The Production Diagnostics panel shows API build, payload, fetch, render,
+  board, and Hermes-version signals.
 - The Trace Spine panel links task, session, run, and event evidence without
   transcript content or raw ID keys.
 - The Operational Evals panel shows deterministic reliability, routing,
   skill-use, and efficiency checks from Hermes evidence. It must not present
   answer-quality or benchmark claims.
-- The Evidence Sources strip shows Hermes state, Kanban, config, skill usage,
+- The Evidence Sources panel shows Hermes state, Kanban, config, skill usage,
   and hub lock metadata without local paths or raw IDs.
 - The Tool Policy & Aux Cost panel shows only safe config counts, browser
   privacy flags, route audit presence, and cost visibility. It must not expose

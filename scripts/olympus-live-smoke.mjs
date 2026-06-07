@@ -19,18 +19,37 @@ const viewports = [
   { name: "desktop", width: 1280, height: 720 },
   { name: "mobile", width: 390, height: 844 },
 ];
-const requiredSections = [
+const modeTabLabels = ["Brief", "Agents", "Skills", "Kanban", "Policy", "Diagnostics"];
+const briefSections = [
   [".olympus-hero", "Olympus"],
   [".olympus-score-card", "What the Score Means"],
   [".olympus-agent-hq", "Agent Monitor"],
-  [".olympus-performance", "Performance Tracking"],
-  [".olympus-trace-spine", "Trace Spine"],
-  [".olympus-ops-evals", "Operational Evals"],
-  [".olympus-policy", "Tool Policy & Aux Cost"],
-  [".olympus-skill-hygiene", "Skill Hygiene"],
-  [".olympus-pantheon", "Pantheon"],
-  [".olympus-kanban", "Kanban Intelligence"],
 ];
+const modeSections = {
+  Agents: [
+    [".olympus-performance", "Performance Tracking"],
+    [".olympus-profile-fitness", "Profile Fitness"],
+    [".olympus-pantheon", "Pantheon"],
+  ],
+  Skills: [
+    [".olympus-skill-coverage", "Skill Coverage"],
+    [".olympus-skill-hygiene", "Skill Hygiene"],
+  ],
+  Kanban: [
+    [".olympus-trace-spine", "Trace Spine"],
+    [".olympus-kanban", "Kanban Intelligence"],
+  ],
+  Policy: [
+    [".olympus-policy", "Tool Policy & Aux Cost"],
+  ],
+  Diagnostics: [
+    [".olympus-ops-evals", "Operational Evals"],
+    [".olympus-diagnostics", "Production Diagnostics"],
+    [".olympus-evidence-sources", "Evidence Sources"],
+  ],
+};
+const deepSections = Object.values(modeSections).flat()
+  .filter(([selector], index, sections) => sections.findIndex((item) => item[0] === selector) === index);
 const bannedCopyPhrases = [
   "no-fluff",
   "opportunity",
@@ -141,6 +160,96 @@ async function startHermesIfNeeded() {
   return child;
 }
 
+async function collectMetrics(page, sections) {
+  return page.evaluate(({ required, deep, tabs, bannedPhrases, allowedRoutes }) => {
+    const pageEl = document.querySelector(".olympus-page");
+    const visible = (el) => {
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    const collectSections = (items) => items.map(([selector, text]) => {
+      const el = document.querySelector(selector);
+      const rect = el ? el.getBoundingClientRect() : null;
+      return {
+        selector,
+        exists: Boolean(el),
+        visible: Boolean(el && visible(el)),
+        containsText: Boolean(el && (el.innerText || "").includes(text)),
+        width: rect ? Math.round(rect.width) : 0,
+        height: rect ? Math.round(rect.height) : 0,
+      };
+    });
+    const tinyText = Array.from(pageEl.querySelectorAll("*"))
+      .filter((el) => {
+        const text = (el.textContent || "").trim();
+        return text && visible(el) && Number.parseFloat(window.getComputedStyle(el).fontSize || "0") < 10;
+      })
+      .map((el) => ({ className: String(el.className || ""), text: (el.textContent || "").trim().slice(0, 80) }));
+    const bodyText = pageEl.innerText || "";
+    const badCopyPhrases = bannedPhrases
+      .filter((phrase) => new RegExp("\\b" + phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i").test(bodyText));
+    return {
+      sections: collectSections(required),
+      deepSections: collectSections(deep),
+      horizontalOverflow: Math.max(document.documentElement.scrollWidth - window.innerWidth, document.body.scrollWidth - window.innerWidth),
+      tinyText,
+      badCopyPhrases,
+      badLinks: Array.from(pageEl.querySelectorAll("a"))
+        .filter(visible)
+        .map((el) => ({ href: el.getAttribute("href") || "", text: (el.textContent || "").trim() }))
+        .filter((item) => {
+          const route = item.href.split(/[?#]/)[0];
+          return !item.href ||
+            item.href === "#" ||
+            item.href.startsWith("javascript:") ||
+            item.text.length < 4 ||
+            (route.startsWith("/") && !allowedRoutes.includes(route));
+        }),
+      svgTextCount: pageEl.querySelectorAll("svg text").length,
+      modeTabs: Array.from(pageEl.querySelectorAll(".olympus-mode-tab")).filter(visible).map((el) => ({
+        selected: el.getAttribute("aria-selected") === "true",
+        text: (el.querySelector("span") && el.querySelector("span").textContent || "").trim(),
+      })),
+      expectedTabs: tabs,
+      diagnosticsVisible: Boolean(document.querySelector(".olympus-diagnostics") && bodyText.includes("Production Diagnostics")),
+      evidenceSourcesVisible: Boolean(document.querySelector(".olympus-evidence-sources") && bodyText.includes("Evidence Sources")),
+      traceSpineVisible: Boolean(document.querySelector(".olympus-trace-spine") && bodyText.includes("Trace Spine")),
+      opsEvalsVisible: Boolean(document.querySelector(".olympus-ops-evals") && bodyText.includes("Operational Evals")),
+      policyVisible: Boolean(document.querySelector(".olympus-policy") && bodyText.includes("Tool Policy & Aux Cost")),
+      skillHygieneVisible: Boolean(document.querySelector(".olympus-skill-hygiene") && bodyText.includes("Skill Hygiene")),
+      pantheonVisible: Boolean(document.querySelector(".olympus-pantheon") && bodyText.includes("Pantheon")),
+      pantheonButtons: Array.from(pageEl.querySelectorAll(".olympus-pantheon .olympus-agent-card")).filter(visible).length,
+    };
+  }, {
+    required: sections,
+    deep: deepSections,
+    tabs: modeTabLabels,
+    bannedPhrases: bannedCopyPhrases,
+    allowedRoutes: allowedHermesRoutes,
+  });
+}
+
+async function selectMode(page, label, sections) {
+  const tab = page.locator(`.olympus-mode-tab[aria-label="${label}"]`);
+  await tab.click();
+  await page.waitForFunction((mode) => {
+    const active = document.querySelector(`.olympus-mode-tab[aria-label="${mode}"]`);
+    return active && active.getAttribute("aria-selected") === "true";
+  }, label, { timeout: 5000 });
+  await page.waitForFunction((expected) => {
+    const visible = (el) => {
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    return expected.every(([selector, text]) => {
+      const el = document.querySelector(selector);
+      return el && visible(el) && (el.innerText || "").includes(text);
+    });
+  }, sections, { timeout: 15000 });
+}
+
 async function inspectViewport(browser, viewport, sessionToken) {
   const context = await browser.newContext({
     viewport: { width: viewport.width, height: viewport.height },
@@ -181,67 +290,18 @@ async function inspectViewport(browser, viewport, sessionToken) {
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".olympus-page", { timeout: 15000 });
   await page.waitForSelector(".olympus-agent-hq", { timeout: 15000 });
-  await page.waitForFunction(() => document.body.innerText.includes("Production Diagnostics"), { timeout: 15000 });
-  const metrics = await page.evaluate(({ required, bannedPhrases, allowedRoutes }) => {
-    const pageEl = document.querySelector(".olympus-page");
-    const visible = (el) => {
-      const rect = el.getBoundingClientRect();
-      const style = window.getComputedStyle(el);
-      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-    };
-    const sections = required.map(([selector, text]) => {
-      const el = document.querySelector(selector);
-      const rect = el ? el.getBoundingClientRect() : null;
-      return {
-        selector,
-        exists: Boolean(el),
-        visible: Boolean(el && visible(el)),
-        containsText: Boolean(el && (el.innerText || "").includes(text)),
-        width: rect ? Math.round(rect.width) : 0,
-        height: rect ? Math.round(rect.height) : 0,
-      };
-    });
-    const tinyText = Array.from(pageEl.querySelectorAll("*"))
-      .filter((el) => {
-        const text = (el.textContent || "").trim();
-        return text && visible(el) && Number.parseFloat(window.getComputedStyle(el).fontSize || "0") < 10;
-      })
-      .map((el) => ({ className: String(el.className || ""), text: (el.textContent || "").trim().slice(0, 80) }));
-    const bodyText = pageEl.innerText || "";
-    const badCopyPhrases = bannedPhrases
-      .filter((phrase) => new RegExp("\\b" + phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i").test(bodyText));
-    return {
-      sections,
-      horizontalOverflow: Math.max(document.documentElement.scrollWidth - window.innerWidth, document.body.scrollWidth - window.innerWidth),
-      tinyText,
-      badCopyPhrases,
-      badLinks: Array.from(pageEl.querySelectorAll("a"))
-        .filter(visible)
-        .map((el) => ({ href: el.getAttribute("href") || "", text: (el.textContent || "").trim() }))
-        .filter((item) => {
-          const route = item.href.split(/[?#]/)[0];
-          return !item.href ||
-            item.href === "#" ||
-            item.href.startsWith("javascript:") ||
-            item.text.length < 4 ||
-            (route.startsWith("/") && !allowedRoutes.includes(route));
-        }),
-      svgTextCount: pageEl.querySelectorAll("svg text").length,
-      diagnosticsVisible: bodyText.includes("Production Diagnostics"),
-      evidenceSourcesVisible: bodyText.includes("Evidence Sources"),
-      traceSpineVisible: bodyText.includes("Trace Spine"),
-      opsEvalsVisible: bodyText.includes("Operational Evals"),
-      policyVisible: bodyText.includes("Tool Policy & Aux Cost"),
-      skillHygieneVisible: bodyText.includes("Skill Hygiene"),
-      pantheonVisible: bodyText.includes("Pantheon"),
-      pantheonButtons: Array.from(pageEl.querySelectorAll(".olympus-pantheon .olympus-agent-card")).filter(visible).length,
-    };
-  }, { required: requiredSections, bannedPhrases: bannedCopyPhrases, allowedRoutes: allowedHermesRoutes });
+  await page.waitForSelector(".olympus-mode-tabs", { timeout: 15000 });
+  const metrics = await collectMetrics(page, briefSections);
+  const modeMetrics = {};
+  for (const [label, sections] of Object.entries(modeSections)) {
+    await selectMode(page, label, sections);
+    modeMetrics[label] = await collectMetrics(page, sections);
+  }
   await context.close();
   const relevantConsoleErrors = failedResponses.length
     ? consoleErrors
     : consoleErrors.filter((message) => !message.includes("Failed to load resource"));
-  return { viewport: viewport.name, consoleErrors: relevantConsoleErrors, failedResponses, ignoredFailedResponses, metrics };
+  return { viewport: viewport.name, consoleErrors: relevantConsoleErrors, failedResponses, ignoredFailedResponses, metrics, modeMetrics };
 }
 
 async function main() {
@@ -259,21 +319,57 @@ async function main() {
       if (result.failedResponses.length) failures.push(`${result.viewport}: failed responses ${JSON.stringify(result.failedResponses)}`);
       const missing = result.metrics.sections.filter((section) => !section.exists || !section.visible || !section.containsText);
       if (missing.length) failures.push(`${result.viewport}: missing sections ${missing.map((s) => s.selector).join(", ")}`);
+      const visibleDeep = result.metrics.deepSections.filter((section) => section.exists && section.visible);
+      if (visibleDeep.length) failures.push(`${result.viewport}: deep sections visible in brief ${visibleDeep.map((s) => s.selector).join(", ")}`);
+      const actualTabs = result.metrics.modeTabs.map((item) => item.text);
+      if (JSON.stringify(actualTabs) !== JSON.stringify(modeTabLabels)) failures.push(`${result.viewport}: mode tabs ${JSON.stringify(actualTabs)}`);
+      const selectedTabs = result.metrics.modeTabs.filter((item) => item.selected).map((item) => item.text);
+      if (JSON.stringify(selectedTabs) !== JSON.stringify(["Brief"])) failures.push(`${result.viewport}: brief tab not selected ${JSON.stringify(selectedTabs)}`);
       if (result.metrics.horizontalOverflow > 2) failures.push(`${result.viewport}: horizontal overflow ${result.metrics.horizontalOverflow}`);
       if (result.metrics.tinyText.length) failures.push(`${result.viewport}: tiny text ${JSON.stringify(result.metrics.tinyText)}`);
       if (result.metrics.badCopyPhrases.length) failures.push(`${result.viewport}: banned copy phrases ${result.metrics.badCopyPhrases.join(", ")}`);
       if (result.metrics.badLinks.length) failures.push(`${result.viewport}: bad links ${JSON.stringify(result.metrics.badLinks)}`);
       if (result.metrics.svgTextCount) failures.push(`${result.viewport}: SVG text count ${result.metrics.svgTextCount}`);
-      if (!result.metrics.diagnosticsVisible) failures.push(`${result.viewport}: production diagnostics not visible`);
-      if (!result.metrics.evidenceSourcesVisible) failures.push(`${result.viewport}: evidence sources not visible`);
-      if (!result.metrics.traceSpineVisible) failures.push(`${result.viewport}: trace spine not visible`);
-      if (!result.metrics.opsEvalsVisible) failures.push(`${result.viewport}: operational evals not visible`);
-      if (!result.metrics.policyVisible) failures.push(`${result.viewport}: tool policy not visible`);
-      if (!result.metrics.skillHygieneVisible) failures.push(`${result.viewport}: skill hygiene not visible`);
-      if (!result.metrics.pantheonVisible) failures.push(`${result.viewport}: pantheon not visible`);
-      if (result.metrics.pantheonButtons < 1) failures.push(`${result.viewport}: pantheon agent buttons not visible`);
+      for (const [label, sections] of Object.entries(modeSections)) {
+        const mode = result.modeMetrics[label];
+        const missingMode = mode.sections.filter((section) => !section.exists || !section.visible || !section.containsText);
+        if (missingMode.length) failures.push(`${result.viewport}: ${label} missing sections ${missingMode.map((s) => s.selector).join(", ")}`);
+        if (mode.horizontalOverflow > 2) failures.push(`${result.viewport}: ${label} horizontal overflow ${mode.horizontalOverflow}`);
+        if (mode.tinyText.length) failures.push(`${result.viewport}: ${label} tiny text ${JSON.stringify(mode.tinyText)}`);
+        if (mode.badCopyPhrases.length) failures.push(`${result.viewport}: ${label} banned copy phrases ${mode.badCopyPhrases.join(", ")}`);
+        if (mode.badLinks.length) failures.push(`${result.viewport}: ${label} bad links ${JSON.stringify(mode.badLinks)}`);
+        if (mode.svgTextCount) failures.push(`${result.viewport}: ${label} SVG text count ${mode.svgTextCount}`);
+        if (label === "Agents" && (!mode.pantheonVisible || mode.pantheonButtons < 1)) {
+          failures.push(`${result.viewport}: Agents pantheon controls not visible`);
+        }
+        if (label === "Skills" && !mode.skillHygieneVisible) failures.push(`${result.viewport}: Skills skill hygiene not visible`);
+        if (label === "Kanban" && !mode.traceSpineVisible) failures.push(`${result.viewport}: Kanban trace spine not visible`);
+        if (label === "Policy" && !mode.policyVisible) failures.push(`${result.viewport}: Policy tool policy not visible`);
+        if (label === "Diagnostics" && (!mode.diagnosticsVisible || !mode.evidenceSourcesVisible || !mode.opsEvalsVisible)) {
+          failures.push(`${result.viewport}: Diagnostics panels not visible`);
+        }
+      }
     }
-    const summary = { ok: failures.length === 0, url: baseUrl, host, port, sessionTokenDetected: Boolean(sessionToken), results, failures };
+    const compactResults = results.map((result) => ({
+      viewport: result.viewport,
+      consoleErrors: result.consoleErrors,
+      failedResponses: result.failedResponses,
+      ignoredAuthResponses: result.ignoredFailedResponses.length,
+      brief: {
+        sections: result.metrics.sections.map((section) => section.selector),
+        modeTabs: result.metrics.modeTabs.map((item) => item.text),
+        horizontalOverflow: result.metrics.horizontalOverflow,
+      },
+      modes: Object.fromEntries(Object.entries(result.modeMetrics).map(([label, metrics]) => [
+        label,
+        {
+          sections: metrics.sections.map((section) => section.selector),
+          horizontalOverflow: metrics.horizontalOverflow,
+          pantheonButtons: metrics.pantheonButtons,
+        },
+      ])),
+    }));
+    const summary = { ok: failures.length === 0, url: baseUrl, host, port, sessionTokenDetected: Boolean(sessionToken), results: compactResults, failures };
     console.log(JSON.stringify(summary, null, 2));
     if (failures.length) process.exitCode = 1;
   } finally {

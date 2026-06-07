@@ -53,6 +53,21 @@ Pantheon is a command-style operational surface:
 - Empty evidence sections stay hidden; do not render filler panels to keep a
   layout shape.
 
+## Dashboard Modes
+
+Olympus should answer the next-action question before it opens deep inspection.
+The default Brief mode contains only hero status, score details, and Agent
+Monitor. Use the mode tabs for the rest:
+
+- Agents: Performance Tracking, Profile Fitness, and Pantheon.
+- Skills: Skill Coverage and Skill Hygiene.
+- Kanban: Trace Spine and Kanban Intelligence.
+- Policy: Tool Policy & Aux Cost.
+- Diagnostics: Operational Evals, Production Diagnostics, and Evidence Sources.
+
+On mobile, tabs use a two-column layout with short labels. Secondary tab
+summaries are hidden so the control stays readable and does not widen the page.
+
 ## Better Skill Suggestions
 
 Rank skill suggestions by observed repeatability:
@@ -123,6 +138,8 @@ not inferred trend decoration.
 - Fail if action links point outside the known Hermes-owned routes.
 - Run the same pass across noisy, healthy, empty, overloaded, stale/blocked,
   high-cost, and hidden-label fixture states.
+- Verify Brief mode first, then click each staged mode and validate its owned
+  panels.
 - Attach screenshots as test artifacts.
 - Add fixture states before adding more visual complexity.
 

@@ -9,6 +9,14 @@
   const Button = C.Button || "button";
 
   const API = "/api/plugins/olympus";
+  const OLYMPUS_MODES = [
+    { id: "brief", label: "Brief", summary: "Top actions and readiness" },
+    { id: "agents", label: "Agents", summary: "Profiles, performance, and live state" },
+    { id: "skills", label: "Skills", summary: "Coverage, hygiene, and reuse signals" },
+    { id: "kanban", label: "Kanban", summary: "Task, worker, and trace evidence" },
+    { id: "policy", label: "Policy", summary: "Tool and config risk" },
+    { id: "diagnostics", label: "Diagnostics", summary: "Eval, source, and payload checks" }
+  ];
 
   function el(type, props, ...children) {
     return React.createElement(type, props || null, ...children);
@@ -108,7 +116,7 @@
     const deductions = asList(breakdown.deductions);
     const thresholds = asList(methodology.thresholds);
     const sources = asList(methodology.sources);
-    return el("section", { className: "olympus-section olympus-score-card" },
+    return el("section", { className: "olympus-section olympus-score-card olympus-score-card-compact" },
       el("div", { className: "olympus-section-head" },
         el("div", null,
           el("h2", null, "What the Score Means"),
@@ -116,43 +124,84 @@
         ),
         el(StatePill, { state: (breakdown.score || 0) >= 85 ? "ok" : (breakdown.score || 0) >= 55 ? "warning" : "error", label: breakdown.label || "Score" })
       ),
-      el("div", { className: "olympus-score-grid" },
-        el("div", { className: "olympus-score-pane" },
-          el("h3", null, "Breakdown"),
-          el("div", { className: "olympus-score-total" },
-            el("span", null, "Starts at"),
-            el("strong", null, String(breakdown.base || 100)),
-            el("span", null, "Current"),
-            el("strong", null, String(breakdown.score || 0))
-          ),
-          deductions.length ? deductions.map((item, idx) => el("div", { key: idx, className: "olympus-score-deduction" },
-            el("div", null,
-              el("strong", null, item.label || "Deduction"),
-              el("small", null, item.reason || "")
+      el("details", { className: "olympus-details olympus-score-details" },
+        el("summary", null, "Score details"),
+        el("div", { className: "olympus-score-grid" },
+          el("div", { className: "olympus-score-pane" },
+            el("h3", null, "Breakdown"),
+            el("div", { className: "olympus-score-total" },
+              el("span", null, "Starts at"),
+              el("strong", null, String(breakdown.base || 100)),
+              el("span", null, "Current"),
+              el("strong", null, String(breakdown.score || 0))
             ),
-            el("span", null, "-" + String(item.points || 0)),
-            el("em", null, [item.evidence, item.source].filter(Boolean).join(" / "))
-          )) : el("p", { className: "olympus-muted" }, "No deductions in this scan.")
-        ),
-        el("div", { className: "olympus-score-pane" },
-          el("h3", null, "Method"),
-          el("details", { className: "olympus-details olympus-method-list" },
-            el("summary", null, "Why these signals are used"),
-            thresholds.map((item, idx) => el("div", { key: idx, className: "olympus-method-row" },
-              el("strong", null, item.signal || "Signal"),
-              el("span", null, item.threshold || ""),
-              el("small", null, item.why || "")
-            ))
+            deductions.length ? deductions.map((item, idx) => el("div", { key: idx, className: "olympus-score-deduction" },
+              el("div", null,
+                el("strong", null, item.label || "Deduction"),
+                el("small", null, item.reason || "")
+              ),
+              el("span", null, "-" + String(item.points || 0)),
+              el("em", null, [item.evidence, item.source].filter(Boolean).join(" / "))
+            )) : el("p", { className: "olympus-muted" }, "No deductions in this scan.")
           ),
-          sources.length ? el("details", { className: "olympus-details olympus-source-list" },
-            el("summary", null, "Source basis"),
-            sources.map((item, idx) => el("div", { key: idx, className: "olympus-source-row" },
-              el("strong", null, item.label || "Source"),
-              el("small", null, item.detail || "")
-            ))
-          ) : null
+          el("div", { className: "olympus-score-pane" },
+            el("h3", null, "Method"),
+            el("details", { className: "olympus-details olympus-method-list" },
+              el("summary", null, "Why these signals are used"),
+              thresholds.map((item, idx) => el("div", { key: idx, className: "olympus-method-row" },
+                el("strong", null, item.signal || "Signal"),
+                el("span", null, item.threshold || ""),
+                el("small", null, item.why || "")
+              ))
+            ),
+            sources.length ? el("details", { className: "olympus-details olympus-source-list" },
+              el("summary", null, "Source basis"),
+              sources.map((item, idx) => el("div", { key: idx, className: "olympus-source-row" },
+                el("strong", null, item.label || "Source"),
+                el("small", null, item.detail || "")
+              ))
+            ) : null
+          )
         )
       )
+    );
+  }
+
+  function ModeTabs({ activeMode, onChange }) {
+    return el("div", { className: "olympus-mode-shell" },
+      el("div", { className: "olympus-mode-tabs", role: "tablist", "aria-label": "Olympus dashboard modes" },
+        OLYMPUS_MODES.map((mode) => el("button", {
+          key: mode.id,
+          id: "olympus-mode-tab-" + mode.id,
+          className: cx("olympus-mode-tab", activeMode === mode.id && "olympus-mode-tab-active"),
+          type: "button",
+          role: "tab",
+          "aria-label": mode.label,
+          "aria-selected": activeMode === mode.id ? "true" : "false",
+          "aria-controls": "olympus-mode-panel-" + mode.id,
+          onClick: () => onChange(mode.id)
+        },
+          el("span", null, mode.label),
+          el("small", null, mode.summary)
+        ))
+      )
+    );
+  }
+
+  function ModePanel({ id, activeMode, children }) {
+    const mode = OLYMPUS_MODES.find((item) => item.id === id) || OLYMPUS_MODES[0];
+    if (activeMode !== id) return null;
+    return el("div", {
+      className: cx("olympus-mode-panel", "olympus-mode-panel-" + id),
+      id: "olympus-mode-panel-" + id,
+      role: "tabpanel",
+      "aria-labelledby": "olympus-mode-tab-" + id
+    },
+      el("div", { className: "olympus-mode-intro" },
+        el("span", null, mode.label),
+        el("p", null, mode.summary)
+      ),
+      children
     );
   }
 
@@ -289,14 +338,12 @@
     );
   }
 
-  function PerformanceTracking({ performance, diagnostics, clientDiagnostics, evidenceSources }) {
+  function PerformanceTracking({ performance }) {
     const data = performance || {};
     const summary = data.summary || {};
     const lanes = asList(data.lanes);
     const signals = asList(data.signals);
-    const diag = diagnostics || {};
-    const client = clientDiagnostics || {};
-    if (!lanes.length && !signals.length && !diag.generated_ms && !client.fetch_ms) return null;
+    if (!lanes.length && !signals.length) return null;
 
     function laneValue(item) {
       if (item.unit === "seconds") return formatDuration(item.value);
@@ -308,7 +355,7 @@
       el("div", { className: "olympus-section-head" },
         el("div", null,
           el("h2", null, "Performance Tracking"),
-          el("p", null, "Latency, tool pressure, context risk, reliability, and diagnostic payloads from the latest scan.")
+          el("p", null, "Latency, tool pressure, context risk, and reliability from the latest scan.")
         ),
         el(StatePill, { state: summary.state || "unknown" })
       ),
@@ -330,23 +377,36 @@
           el("small", null, item.detail || ""),
           el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
         ))
-      ) : null,
-      (diag.generated_ms || client.fetch_ms) ? el("div", { className: "olympus-performance-diagnostics" },
-        el("h3", null, "Production Diagnostics"),
-        el("div", { className: "olympus-diagnostic-grid" },
-          [
-            { label: "API Build", value: diag.generated_ms ? Math.round(Number(diag.generated_ms)) + "ms" : "unknown", state: diag.budget_status && diag.budget_status.api_response || "unknown" },
-            { label: "Payload", value: diag.payload_bytes ? formatBytes(diag.payload_bytes) : "unknown", state: diag.budget_status && diag.budget_status.payload || "unknown" },
-            { label: "Fetch", value: client.fetch_ms ? Math.round(Number(client.fetch_ms)) + "ms" : "pending", state: client.fetch_state || "unknown" },
-            { label: "Render", value: client.render_ms ? Math.round(Number(client.render_ms)) + "ms" : "pending", state: client.render_state || "unknown" },
-            { label: "Boards", value: String(diag.counts && diag.counts.kanban_boards_scanned || 0), state: diag.counts && diag.counts.kanban_board_read_failures ? "warning" : "ok" },
-            { label: "Hermes", value: diag.hermes && diag.hermes.version || "unknown", state: diag.hermes && diag.hermes.version && diag.hermes.version !== "unknown" ? "ok" : "unknown" },
-          ].map((item) => el("div", { key: item.label, className: "olympus-diagnostic-tile" },
-            el("span", null, item.label),
-            el("strong", null, item.value),
-            el(StatePill, { state: item.state })
-          ))
-        )
+      ) : null
+    );
+  }
+
+  function ProductionDiagnostics({ diagnostics, clientDiagnostics, evidenceSources }) {
+    const diag = diagnostics || {};
+    const client = clientDiagnostics || {};
+    if (!diag.generated_ms && !client.fetch_ms && !(evidenceSources && asList(evidenceSources.items).length)) return null;
+
+    return el("section", { className: "olympus-section olympus-diagnostics" },
+      el("div", { className: "olympus-section-head" },
+        el("div", null,
+          el("h2", null, "Production Diagnostics"),
+          el("p", null, "Payload, fetch, render, board, and source health for this scan.")
+        ),
+        el(StatePill, { state: diag.state || client.render_state || "unknown" })
+      ),
+      (diag.generated_ms || client.fetch_ms) ? el("div", { className: "olympus-diagnostic-grid" },
+        [
+          { label: "API Build", value: diag.generated_ms ? Math.round(Number(diag.generated_ms)) + "ms" : "unknown", state: diag.budget_status && diag.budget_status.api_response || "unknown" },
+          { label: "Payload", value: diag.payload_bytes ? formatBytes(diag.payload_bytes) : "unknown", state: diag.budget_status && diag.budget_status.payload || "unknown" },
+          { label: "Fetch", value: client.fetch_ms ? Math.round(Number(client.fetch_ms)) + "ms" : "pending", state: client.fetch_state || "unknown" },
+          { label: "Render", value: client.render_ms ? Math.round(Number(client.render_ms)) + "ms" : "pending", state: client.render_state || "unknown" },
+          { label: "Boards", value: String(diag.counts && diag.counts.kanban_boards_scanned || 0), state: diag.counts && diag.counts.kanban_board_read_failures ? "warning" : "ok" },
+          { label: "Hermes", value: diag.hermes && diag.hermes.version || "unknown", state: diag.hermes && diag.hermes.version && diag.hermes.version !== "unknown" ? "ok" : "unknown" },
+        ].map((item) => el("div", { key: item.label, className: "olympus-diagnostic-tile" },
+          el("span", null, item.label),
+          el("strong", null, item.value),
+          el(StatePill, { state: item.state })
+        ))
       ) : null,
       el(EvidenceSources, { evidenceSources })
     );
@@ -989,6 +1049,7 @@
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(true);
     const [clientDiagnostics, setClientDiagnostics] = useState(null);
+    const [activeMode, setActiveMode] = useState("brief");
     const requestSeq = useRef(0);
 
     function load() {
@@ -1037,17 +1098,31 @@
     return el("div", { className: "olympus-page" },
       el(Hero, { health, score, loading, onRefresh: load }),
       error ? el("div", { className: "olympus-error" }, error) : null,
-      el(AgentHQ, { hq: tuning.agent_hq }),
-      el(PerformanceTracking, { performance: data && data.performance, diagnostics: data && data.diagnostics, clientDiagnostics, evidenceSources: data && data.evidence_sources }),
-      el(TraceSpine, { trace: data && data.trace_spine }),
-      el(OpsEvals, { evals: data && data.ops_evals }),
-      el(ToolPolicy, { policy: data && data.config_policy }),
-      el(SkillCoverage, { coverage: data && data.skill_coverage }),
-      el(SkillHygiene, { hygiene: data && data.skill_hygiene }),
-      el(ProfileFitness, { fitness: data && data.profile_fitness }),
-      el(PartyView, { party: data && data.party, orchestration: data && data.orchestration, events: data && data.activity_events, score }),
-      el(KanbanIntelligence, { kanban: data && data.kanban }),
-      el(ScoreExplainer, { tuning })
+      el(ModeTabs, { activeMode, onChange: setActiveMode }),
+      el(ModePanel, { id: "brief", activeMode },
+        el(ScoreExplainer, { tuning }),
+        el(AgentHQ, { hq: tuning.agent_hq })
+      ),
+      el(ModePanel, { id: "agents", activeMode },
+        el(PerformanceTracking, { performance: data && data.performance }),
+        el(ProfileFitness, { fitness: data && data.profile_fitness }),
+        el(PartyView, { party: data && data.party, orchestration: data && data.orchestration, events: data && data.activity_events, score })
+      ),
+      el(ModePanel, { id: "skills", activeMode },
+        el(SkillCoverage, { coverage: data && data.skill_coverage }),
+        el(SkillHygiene, { hygiene: data && data.skill_hygiene })
+      ),
+      el(ModePanel, { id: "kanban", activeMode },
+        el(TraceSpine, { trace: data && data.trace_spine }),
+        el(KanbanIntelligence, { kanban: data && data.kanban })
+      ),
+      el(ModePanel, { id: "policy", activeMode },
+        el(ToolPolicy, { policy: data && data.config_policy })
+      ),
+      el(ModePanel, { id: "diagnostics", activeMode },
+        el(OpsEvals, { evals: data && data.ops_evals }),
+        el(ProductionDiagnostics, { diagnostics: data && data.diagnostics, clientDiagnostics, evidenceSources: data && data.evidence_sources })
+      )
     );
   }
 

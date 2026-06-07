@@ -23,8 +23,8 @@ Hermes mounts the backend at `/api/plugins/olympus/`.
 | Route | Purpose |
 | --- | --- |
 | `GET /health` | Liveness and coarse runtime health. |
-| `GET /overview` | Full dashboard read model: health, tuning, profiles, gateways, cron, sessions, Kanban, performance, skill hygiene, config policy, and evidence sources. |
-| `GET /tuning` | Tuning-focused read model with score details, Kanban intelligence, skill hygiene, config policy, performance, and evidence sources. |
+| `GET /overview` | Full dashboard read model: health, tuning, profiles, gateways, cron, sessions, Kanban, performance, Trace Spine, Operational Evals, skill hygiene, config policy, and evidence sources. |
+| `GET /tuning` | Tuning-focused read model with score details, Kanban intelligence, Trace Spine, Operational Evals, skill hygiene, config policy, performance, and evidence sources. |
 
 Routes sit behind Hermes dashboard session-token middleware. The frontend calls
 them through the Hermes plugin SDK.
@@ -56,11 +56,15 @@ OLYMPUS_EXPOSE_LOCAL_LABELS=1 hermes dashboard --no-open --skip-build
 
 ## Frontend Rules
 
+- The dashboard opens in Brief mode with hero status, score details, and Agent
+  Monitor. Deeper inspection lives in Agents, Skills, Kanban, Policy, and
+  Diagnostics tabs.
 - Pantheon uses HTML text and accessible profile buttons, not SVG text or an image-role
   wrapper around interactive controls.
 - Empty evidence sections stay hidden instead of rendering filler panels.
 - Refresh and interval loads ignore stale responses so older `/overview` calls
   cannot overwrite newer data.
+- Production Diagnostics and Evidence Sources belong to Diagnostics mode.
 - Operational Evals are deterministic checks from Hermes evidence. They do not
   claim answer quality or benchmark quality.
 - Usage and cost totals stay in Hermes Command Center Usage or Analytics.
@@ -91,9 +95,10 @@ npm audit --audit-level=moderate
 `npm run test:visual` runs fixture-backed desktop/mobile checks across noisy,
 healthy, empty, overloaded, stale, high-cost, and no-labels states.
 
-`npm run test:live` opens the real Hermes dashboard route. It will reuse an
-existing Hermes dashboard only when the served HTML includes the Hermes session
-token. If it needs to start Hermes and your plugin target already points
+`npm run test:live` opens the real Hermes dashboard route, verifies Brief mode,
+then clicks the Agents, Skills, Kanban, Policy, and Diagnostics tabs. It will
+reuse an existing Hermes dashboard only when the served HTML includes the Hermes
+session token. If it needs to start Hermes and your plugin target already points
 somewhere else, set `OLYMPUS_SMOKE_RELINK=1`.
 
 `npm run test:security` fetches the live `/overview` payload through the Hermes

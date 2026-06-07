@@ -23,8 +23,10 @@ Backend: `plugin_api.py`
 
 Frontend: `dist/index.js` and `dist/style.css`
 
-- renders the score explanation, Agent Monitor, tuning queue, Pantheon, conditional Kanban intelligence, and activity events
-- renders Evidence Sources inside Performance Tracking so operators can see the first-party source basis for each scan
+- opens in Brief mode with hero status, score details, Agent Monitor, and tuning queue
+- stages deeper inspection behind Agents, Skills, Kanban, Policy, and Diagnostics tabs
+- renders Pantheon, Trace Spine, Kanban Intelligence, Skill Coverage, Skill Hygiene, Profile Fitness, Operational Evals, and activity events
+- renders Evidence Sources in Diagnostics mode so operators can see the first-party source basis for each scan
 - renders Tool Policy & Aux Cost from safe Hermes config fields and session cost-visibility metadata
 - renders Skill Hygiene from local skill usage and hub provenance metadata
 - links actions to existing Hermes pages
@@ -67,11 +69,13 @@ Backend:
 
 Frontend:
 
-- Render Evidence Sources in the Performance Tracking diagnostics area.
+- Render Evidence Sources in Diagnostics mode.
 - Keep it compact and link only to Hermes-owned pages.
 - Fixture and live smoke checks require the strip to render.
 - Agent Monitor keeps first-screen density bounded: six metric tiles and three
   full tuning cards by default, with secondary signals collapsed.
+- Brief mode keeps the first screen focused; deeper panels stay behind the mode
+  tabs until the operator asks for them.
 
 ### 1. Skill Coverage (shipped)
 
