@@ -157,6 +157,12 @@ def safe_id(value: Any, prefix: str = "item") -> str:
     return f"{prefix}:{digest}"
 
 
+def public_ref(value: Any, prefix: str = "item") -> Optional[str]:
+    if value in (None, ""):
+        return None
+    return redact_text(value, 120) if EXPOSE_LOCAL_LABELS else safe_id(value, prefix)
+
+
 def public_label(raw: Any, fallback: str, prefix: str = "item") -> str:
     if EXPOSE_LOCAL_LABELS and raw:
         return redact_text(raw, 120)
@@ -1208,11 +1214,12 @@ def collect_cron(profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[s
         state = "error" if error or last_status == "error" else ("scheduled" if enabled else "paused")
         raw_profile = str(job.get("profile") or "default")
         public_name = public_profile_label(raw_profile, profile_public_names) or "default"
+        job_ref = public_ref(job.get("id"), "cron") or "cron"
         out.append({
-            "id": f"cron:{job.get('id')}",
+            "id": job_ref,
             "kind": "cron",
-            "job_id": job.get("id"),
-            "label": public_label(job.get("name"), safe_id(job.get("id"), "cron"), "cron"),
+            "job_id": job_ref,
+            "label": public_label(job.get("name"), job_ref, "cron"),
             "state": state,
             "enabled": enabled,
             "schedule": job.get("schedule_display") or (job.get("schedule") or {}).get("display"),
@@ -1519,8 +1526,8 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                         "completed_at": ts_to_iso(row_value(t, "completed_at")),
                         "last_heartbeat_at": ts_to_iso(heartbeat),
                         "claim_expires_at": ts_to_iso(claim_expires),
-                        "worker_pid": row_value(t, "worker_pid"),
-                        "current_run_id": row_value(t, "current_run_id"),
+                        "worker_ref": public_ref(row_value(t, "worker_pid"), "pid"),
+                        "current_run_ref": public_ref(row_value(t, "current_run_id"), "run"),
                         "max_runtime_seconds": row_value(t, "max_runtime_seconds"),
                         "consecutive_failures": failures,
                         "goal_mode": bool(row_value(t, "goal_mode", 0)),
@@ -1550,10 +1557,10 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                     if ended_at is None and run_status == "running":
                         active_workers.append({
                             "board": slug,
-                            "run_id": row_value(r, "id"),
+                            "run_ref": public_ref(row_value(r, "id"), "run"),
                             "task_id": public_task_id,
                             "profile": public_profile_label(row_value(r, "profile"), profile_public_names),
-                            "worker_pid": row_value(r, "worker_pid"),
+                            "worker_ref": public_ref(row_value(r, "worker_pid"), "pid"),
                             "started_at": ts_to_iso(row_value(r, "started_at")),
                             "last_heartbeat_at": ts_to_iso(heartbeat),
                         })
@@ -1561,7 +1568,7 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                         add_attention("critical", f"Kanban worker {outcome or run_status}: {public_task_id}", redact_text(row_value(r, "error") or "Worker run failed", 200), slug, public_task_id)
                     if len(recent_runs) < 16:
                         recent_runs.append({
-                            "id": row_value(r, "id"),
+                            "id": public_ref(row_value(r, "id"), "run"),
                             "board": slug,
                             "task_id": public_task_id,
                             "profile": public_profile_label(row_value(r, "profile"), profile_public_names),
@@ -1588,11 +1595,12 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                     raw_title = str(row_value(e, "title") or task_id or "task")
                     assignee = str(row_value(e, "assignee") or "unassigned")
                     public_assignee = public_profile_label(assignee, profile_public_names) or "unassigned"
+                    event_ref = public_ref(row_value(e, "id"), "event") or "event"
                     recent_events.append({
-                        "id": f"{slug}:{row_value(e, 'id')}",
+                        "id": f"{slug}:{event_ref}",
                         "board": slug,
                         "task_id": public_task_id,
-                        "run_id": row_value(e, "run_id"),
+                        "run_ref": public_ref(row_value(e, "run_id"), "run"),
                         "kind": row_value(e, "kind"),
                         "created_at": ts_to_iso(row_value(e, "created_at")),
                         "task_title": public_label(raw_title, public_task_id, "task"),
@@ -1651,7 +1659,7 @@ def collect_health(profiles: List[Dict[str, Any]], cron: List[Dict[str, Any]]) -
         summary = f"{len(failed_cron)} scheduled job(s) report errors."
     elif recent_errors:
         status_label = "Needs review"
-        summary = "Recent Hermes logs contain failure terms. Inspect logs."
+        summary = "Log tail contains failure terms. Inspect logs."
     elif not gateway_running:
         status_label = "Check gateway"
         summary = "No visible gateway process was detected."
@@ -1664,6 +1672,7 @@ def collect_health(profiles: List[Dict[str, Any]], cron: List[Dict[str, Any]]) -
         "summary": summary,
         "gateway_running": gateway_running,
         "recent_error_terms": recent_errors[:5],
+        "log_scan_window": "last 8KB per log file",
         "failed_cron_count": len(failed_cron),
         "agent_log_mtime": ts_to_iso(agent_log.stat().st_mtime) if agent_log.exists() else None,
         "gateway_log_mtime": ts_to_iso(gateway_log.stat().st_mtime) if gateway_log.exists() else None,
@@ -1680,7 +1689,7 @@ def build_attention(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any
             items.append({"severity": "warning", "label": "No running gateway process detected", "detail": "Gateway may be intentionally stopped or not visible to Olympus."})
         else:
             terms = ", ".join(health.get("recent_error_terms") or [])
-            items.append({"severity": "warning", "label": "Recent log warnings detected", "detail": f"Hermes logs contain failure terms: {terms}." if terms else (health.get("summary") or "Recent Hermes logs contain failure terms.")})
+            items.append({"severity": "warning", "label": "Log-tail warnings detected", "detail": f"Hermes log tail contains failure terms: {terms}." if terms else (health.get("summary") or "Log tail contains failure terms.")})
     for job in cron:
         if job.get("state") == "error":
             items.append({"severity": "critical", "label": f"Cron failed: {job.get('label')}", "detail": str(job.get("last_error") or "last_status=error")[:240]})
@@ -2891,13 +2900,13 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
     if health.get("recent_error_terms"):
         recommendations.append(_recommendation(
             "critical",
-            "Investigate recent log errors",
-            "Recent gateway or error logs contain failure terms.",
+            "Investigate log-tail errors",
+            "Gateway or error log tails contain failure terms.",
             ", ".join(str(x) for x in health.get("recent_error_terms", [])[:5]),
             "/logs",
             "Argus",
             "Open Logs",
-            "Recent log failure terms are operational evidence.",
+            "Olympus scans the last 8KB of each Hermes log file; timestamp recency is not inferred.",
         ))
     if kanban_attention:
         recommendations.append(_recommendation(

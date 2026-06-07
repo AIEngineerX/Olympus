@@ -61,12 +61,17 @@ Backend:
 - Sources include Hermes state, Kanban, config, skill usage metadata, and skill hub lock metadata.
 - The contract reports presence, read state, counts, safe field names, redaction policy, and Hermes-owned fix links.
 - Raw paths, raw session IDs, raw task IDs, prompt text, and secret-like values remain hidden by default.
+- Cron IDs, Kanban run IDs, worker PIDs, and event IDs use public refs by default.
+- Health log warnings identify the scan as a log-tail check unless timestamp
+  parsing is added.
 
 Frontend:
 
 - Render Evidence Sources in the Performance Tracking diagnostics area.
 - Keep it compact and link only to Hermes-owned pages.
 - Fixture and live smoke checks require the strip to render.
+- Agent Monitor keeps first-screen density bounded: six metric tiles and three
+  full tuning cards by default, with secondary signals collapsed.
 
 ### 1. Skill Coverage (shipped)
 

@@ -9,7 +9,7 @@ The Hermes Desktop app also has Command Center Usage. That section already owns 
 Overall rating: 8.4 / 10
 
 Ready for local operator use: yes.
-Ready for wider/public release: close, but fix the privacy/raw-ID contract, reduce live-page density, and settle Desktop plugin-tab parity first.
+Ready for wider/public release: close, but settle Desktop plugin-tab parity and run a fresh release audit first.
 
 ## Ratings
 
@@ -18,8 +18,8 @@ Ready for wider/public release: close, but fix the privacy/raw-ID contract, redu
 | Product boundary | 9.0 | Clear read-only scope. Good separation from Hermes-owned admin pages. |
 | Hermes plugin fit | 8.5 | Manifest/API/frontend shape matches Hermes dashboard plugin model. Routes sit under `/api/plugins/olympus`; Desktop still needs plugin-tab parity. |
 | Backend correctness | 8.0 | Solid read-only collectors, SQLite RO mode, schema-aware column checks, useful diagnostics. Some heuristics need tightening. |
-| Security/privacy posture | 8.0 | Good defaults and smoke tests. Still exposes some raw operational IDs/PIDs in payload despite docs promising raw-ID hiding. |
-| Frontend/UI | 8.0 | Strong visual identity and hierarchy. Current live data is dense, especially on mobile; top sections are very tall. |
+| Security/privacy posture | 8.6 | Hidden-label payloads now use public refs for cron, Kanban run, worker, and event IDs. Security smoke checks raw operational ID keys. |
+| Frontend/UI | 8.3 | Strong visual identity and hierarchy. Agent Monitor now collapses secondary signals and extra tuning items. Deeper sections are still tall on mobile. |
 | Test coverage | 9.0 | Verify, fixture visual tests, live smoke, and security smoke all pass. Good release gate discipline. |
 | Operational usefulness | 8.5 | Surfaces score, tuning queue, performance, policy, skills, profiles, Kanban, evidence sources. Useful immediately. |
 
@@ -100,7 +100,7 @@ Direct backend import check:
 
 ## Findings
 
-### P1 — Align privacy contract with payload reality
+### P1 — Align privacy contract with payload reality (fixed locally)
 
 Docs say raw IDs/paths/local labels stay hidden by default. The payload still includes some raw operational identifiers:
 
@@ -115,7 +115,13 @@ Recommendation:
 - Keep stable public IDs using `safe_id(raw, "cron" | "run" | "pid")`.
 - Add explicit security-smoke assertions for raw `job_id`, `worker_pid`, `current_run_id`, `run_id`, and PID-like fields if hidden-label mode is active.
 
-### P1 — Health log signal is not actually time-bounded
+Status:
+- Implemented stable public refs for cron IDs, task run IDs, current run IDs, worker PIDs, and event IDs.
+- Added `tests/test_privacy_contract.py`.
+- Added privacy regression coverage to `npm run verify`.
+- Added live security smoke patterns for raw worker/current-run/run ID keys.
+
+### P1 — Health log signal is not actually time-bounded (fixed locally)
 
 `collect_health()` scans tails of `agent.log`, `gateway.log`, and `errors.log` for failure terms and reports them as recent. It does not parse timestamps or enforce a freshness window. A stale error inside the tail can keep Olympus in warning state.
 
@@ -123,7 +129,12 @@ Recommendation:
 - Rename to “log tail contains failure terms” or parse timestamps and limit to last N minutes/hours.
 - Include `log_window` in evidence: e.g. `last 8KB tail`, `last 60m parsed`, or `unknown freshness`.
 
-### P2 — Live UI is operationally useful but too tall/dense
+Status:
+- Health summary now says “Log tail contains failure terms.”
+- `health.log_scan_window` reports `last 8KB per log file`.
+- Tuning recommendation basis says timestamp recency is not inferred.
+
+### P2 — Live UI is operationally useful but too tall/dense (first pass fixed locally)
 
 Live smoke passes, but the current live page is very tall:
 
@@ -138,6 +149,12 @@ Recommendation:
   - Collapse evidence/method details by default.
   - Consider tabs/anchors for Performance, Skills, Kanban, Profiles.
 - Keep “Evidence Sources” but move it lower or make it compact unless a source warning exists.
+
+Status:
+- Agent Monitor now shows at most six metric tiles by default.
+- Tuning Queue now shows at most three full cards by default.
+- Secondary monitor signals and extra tuning items collapse into backlog details.
+- Visual tests assert the density limits on desktop and mobile.
 
 ### P2 — `/overview` and `/tuning` duplicate almost all collector work
 
@@ -170,31 +187,18 @@ Recommendation:
 
 ## Specific Next Fixes
 
-1. Patch privacy IDs
-   - Hash/omit cron IDs, Kanban run IDs, worker PIDs unless labels are exposed.
-   - Extend `scripts/olympus-security-smoke.mjs` to fail on raw operational identifiers.
-
-2. Fix health recency wording or timestamp parsing
-   - Best: parse known Hermes log timestamp formats and only count failures in the last 60 minutes.
-   - Fast safe fix: change copy to “log tail contains failure terms” and expose the tail-size basis.
-
-3. Compact the first-screen experience
-   - Make Agent Monitor show only top 5 tiles by default.
-   - Move lower-priority metric tiles into details or a second row after the tuning queue.
-   - Collapse score methodology by default lower on page.
-
-4. Refactor read-model collection
+1. Refactor read-model collection
    - Add one shared snapshot builder used by `/overview` and `/tuning`.
    - This prevents feature drift and makes future Trace Spine work easier.
 
-5. Scope Desktop plugin-tab parity
+2. Scope Desktop plugin-tab parity
    - Add a local Desktop preflight script.
    - Prepare an upstream Hermes PR that surfaces dashboard plugin tabs in Desktop.
    - Keep Usage/Analytics as the ledger and Olympus as the action layer.
 
-6. Add Trace Spine only after the privacy patch
-   - The next product direction is right, but task/session correlation will increase privacy surface.
-   - Lock the redaction contract before adding deeper trace correlation.
+3. Add Trace Spine
+   - The privacy contract is now safer for deeper task/session correlation.
+   - Keep transcript content hidden and use hashed refs by default.
 
 ## Simple Summary
 
@@ -202,10 +206,8 @@ Olympus is good. The core idea is right, the plugin boundary is clean, and the t
 
 Main fixes before broader release:
 
-1. Hide/hash raw cron IDs, run IDs, and worker PIDs by default.
-2. Make health-log warnings actually time-bounded or label them as log-tail warnings.
-3. Reduce dashboard density, especially mobile and the first two sections.
-4. Share backend collection between `/overview` and `/tuning`.
-5. Push Desktop plugin-tab parity upstream, without duplicating Desktop Usage.
+1. Share backend collection between `/overview` and `/tuning`.
+2. Push Desktop plugin-tab parity upstream, without duplicating Desktop Usage.
+3. Run another release audit after Trace Spine lands.
 
 After those, Olympus is a credible local Hermes operator console.

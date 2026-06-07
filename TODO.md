@@ -8,6 +8,9 @@
 - Redacted local labels, paths, raw IDs, prompt text, and secret-like values by default.
 - Added visual, live, and security smoke gates.
 - Kept actions as links to Hermes-owned pages.
+- Tightened hidden-ID privacy for cron, Kanban run, worker, and event refs.
+- Changed log health wording to report log-tail scanning instead of inferred recency.
+- Reduced Agent Monitor first-screen density with collapsed secondary signals.
 
 ## Phase Ledger
 
@@ -18,6 +21,7 @@ Complete each item in order and test before starting the next.
    - Maintain fixture states for noisy, healthy, empty, overloaded, stale/blocked, high-cost, and hidden-label systems.
    - Track production gaps in `dashboard/docs/PRODUCTION_READINESS.md`.
    - Static checks and fixture visual smoke now run in CI; live Hermes smoke remains a local release gate.
+   - Privacy regression checks now run in `npm run verify`.
 
 1. Kanban Worker Inspector (partial)
    - Shipped: board pressure, blocked work, active workers, stale workers, failed runs, and assignee load.
@@ -27,15 +31,16 @@ Complete each item in order and test before starting the next.
    - Shipped: usage/provenance, stale/archive/patch counts, hub trust, and scan gaps.
    - Remaining: stored skills.sh audit status when Hermes records it, plus a Curator route when Hermes exposes one.
 
-3. Hermes Desktop Integration (next)
+3. Trace Spine (next major feature)
+   - Correlate sessions, messages, Kanban tasks, task runs, and task events.
+   - Show tool sequence summaries and failure points without transcript content.
+   - Keep transcript content hidden and use hashed refs by default.
+
+4. Hermes Desktop Integration (upstream packaging track)
    - Add a Desktop preflight script in this repo.
    - Prepare an upstream Hermes Desktop PR for dashboard plugin-tab parity.
    - Keep Olympus read-only and avoid duplicating Desktop Command Center Usage.
    - Fallback: document browser-dashboard access if Desktop plugin parity is not accepted.
-
-4. Trace Spine
-   - Correlate sessions, messages, Kanban tasks, task runs, and task events.
-   - Show tool sequence summaries and failure points without transcript content.
 
 5. Deterministic Eval Signals
    - Add local reliability, efficiency, routing, and skill-use eval signals.
