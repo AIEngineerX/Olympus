@@ -22,7 +22,7 @@ Backend: `plugin_api.py`
 
 Frontend: `dist/index.js` and `dist/style.css`
 
-- renders the score explanation, Agent HQ, tuning queue, Agent View, conditional Kanban intelligence, and activity events
+- renders the score explanation, Agent HQ, tuning queue, Pantheon, conditional Kanban intelligence, and activity events
 - renders Evidence Sources inside Performance Tracking so operators can see the first-party source basis for each scan
 - renders Skill Hygiene from local skill usage and hub provenance metadata
 - links actions to existing Hermes pages
@@ -105,7 +105,22 @@ Frontend:
 - Keep action buttons as handoff links unless a write action is explicitly
   approved.
 
-### 4. Curator and Skill Hygiene (partially shipped)
+### 4. Pantheon V2 Visual Restoration (shipped)
+
+- Restores the Pantheon identity as a real operational control, not a decorative
+  diagram.
+- Impeccable product-UI gate was run against the live `/olympus` surface. The
+  repo-local helper was missing, so the installed Impeccable skill, product
+  register, this build plan, `VIEWPORT_STRATEGY.md`, existing CSS, and live
+  browser screenshots were used.
+- Uses current `/overview` evidence: profiles, trigger lanes, workload, profile
+  state, selected profile details, orchestration summary, and activity events.
+- Keeps agent nodes as accessible HTML buttons with selected state and visible
+  focus. Readable labels are HTML text, not SVG text.
+- Desktop shows the visual map and selected-profile inspector together.
+  Mid-width and mobile use a compact map/node grid with no horizontal overflow.
+
+### 5. Curator and Skill Hygiene (partially shipped)
 
 - Surface unused, heavily used, stale, archived, or recently changed skills from
   local Hermes evidence.
@@ -118,7 +133,7 @@ Frontend:
 - Do not install, scan, delete, archive, restore, or mutate skills from Olympus v1.
 - Remaining: show stored skills.sh audit fields when Hermes persists them and add a Curator-specific route once Hermes exposes one.
 
-### 5. Auxiliary Cost Watch (open)
+### 6. Auxiliary Cost Watch (open)
 
 - Detect background or auxiliary work causing token pressure.
 - Highlight expensive routes used for background tasks.

@@ -35,7 +35,7 @@ controls). Changes that blur that boundary will be sent back.
    ```
 2. **Run the dashboard:**
    ```bash
-   hermes dashboard --no-open --skip-build
+   npm run dev
    ```
    Open `http://127.0.0.1:9119/olympus`.
 3. **Iterate.** Important reload rules:
@@ -88,7 +88,7 @@ only.
 
 The visual fixture intentionally uses fixed evidence states. It is not a
 substitute for a live Hermes check, but it catches the most common regressions:
-console errors, horizontal overflow, unreadable Agent View labels, and broken
+console errors, horizontal overflow, unreadable Pantheon labels, and broken
 desktop/mobile layout.
 
 ## Commit conventions

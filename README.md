@@ -48,6 +48,13 @@ $HERMES_HOME/plugins/olympus/dashboard/
 ## Run
 
 ```bash
+npm run dev
+```
+
+Equivalent manual flow:
+
+```bash
+scripts/install-dashboard-link.sh
 hermes dashboard --no-open --skip-build
 ```
 
@@ -117,6 +124,7 @@ build step. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflo
 npm run verify
 npm run test:visual
 npm run test:live
+npm run test:security
 ```
 
 `npm run test:visual` uses a fixture-backed Playwright harness. It loads the
@@ -138,7 +146,7 @@ set `OLYMPUS_SMOKE_RELINK=1` before running the smoke command.
 
 - API responses redact session IDs, private labels, paths, and secrets unless
   `OLYMPUS_EXPOSE_LOCAL_LABELS=1` is explicitly set.
-- Agent View uses HTML text and accessible buttons rather than SVG text or an
+- Pantheon uses HTML text and accessible profile buttons rather than SVG text or an
   image-role wrapper.
 - Frontend refreshes ignore stale `/overview` responses so an older request
   cannot overwrite newer data.

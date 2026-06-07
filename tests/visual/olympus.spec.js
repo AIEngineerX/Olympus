@@ -12,7 +12,7 @@ const expectedSections = [
   { selector: ".olympus-skill-coverage", text: "Skill Coverage", minHeight: 180 },
   { selector: ".olympus-skill-hygiene", text: "Skill Hygiene", minHeight: 180 },
   { selector: ".olympus-profile-fitness", text: "Profile Fitness", minHeight: 180 },
-  { selector: ".olympus-party", text: "Agent View", minHeight: 240 },
+  { selector: ".olympus-pantheon", text: "Pantheon", minHeight: 240 },
   { selector: ".olympus-kanban", text: "Kanban Intelligence", minHeight: 180 }
 ];
 const bannedCopyPhrases = [
@@ -47,7 +47,7 @@ const scenarios = [
   {
     name: "empty",
     expectedSections: expectedSections.slice(0, 3),
-    absentSections: [".olympus-skill-coverage", ".olympus-skill-hygiene", ".olympus-profile-fitness", ".olympus-party", ".olympus-kanban"],
+    absentSections: [".olympus-skill-coverage", ".olympus-skill-hygiene", ".olympus-profile-fitness", ".olympus-pantheon", ".olympus-kanban"],
     minAgentCards: 0
   },
   { name: "overloaded", expectedSections, minAgentCards: 5 },
@@ -118,6 +118,7 @@ async function collectVisualMetrics(page) {
     const pageEl = document.querySelector(".olympus-page");
     if (!pageEl) return { missingPage: true };
     const viewport = document.querySelector(".olympus-command-viewport");
+    const pantheon = document.querySelector(".olympus-pantheon");
     const agentCards = Array.from(document.querySelectorAll(".olympus-agent-card"));
     const tinyVisibleText = Array.from(pageEl.querySelectorAll("*"))
       .filter((el) => {
@@ -170,6 +171,8 @@ async function collectVisualMetrics(page) {
         document.body.scrollWidth - window.innerWidth
       ),
       sectionCount: document.querySelectorAll(".olympus-section").length + document.querySelectorAll(".olympus-hero").length,
+      pantheonVisible: Boolean(pantheon && visible(pantheon) && renderedText.includes("Pantheon")),
+      pantheonButtons: Array.from(document.querySelectorAll(".olympus-pantheon .olympus-agent-card")).filter(visible).length,
       smallControls,
       svgTextCount: pageEl.querySelectorAll("svg text").length,
       tinyVisibleText,
@@ -193,6 +196,10 @@ for (const scenario of scenarios) {
     expect(metrics.agentCards).toBeGreaterThanOrEqual(scenario.minAgentCards);
     expect(metrics.badCopyPhrases).toEqual([]);
     expect(metrics.evidenceSourcesVisible).toBe(true);
+    if (scenario.minAgentCards > 0) {
+      expect(metrics.pantheonVisible).toBe(true);
+      expect(metrics.pantheonButtons).toBeGreaterThanOrEqual(scenario.minAgentCards);
+    }
     expect(metrics.badLinks).toEqual([]);
     expect(metrics.horizontalOverflow).toBeLessThanOrEqual(2);
     expect(metrics.sectionCount).toBeGreaterThanOrEqual(scenario.expectedSections.length);
@@ -213,6 +220,10 @@ for (const scenario of scenarios) {
     expect(metrics.agentCards).toBeGreaterThanOrEqual(scenario.minAgentCards);
     expect(metrics.badCopyPhrases).toEqual([]);
     expect(metrics.evidenceSourcesVisible).toBe(true);
+    if (scenario.minAgentCards > 0) {
+      expect(metrics.pantheonVisible).toBe(true);
+      expect(metrics.pantheonButtons).toBeGreaterThanOrEqual(scenario.minAgentCards);
+    }
     expect(metrics.badLinks).toEqual([]);
     expect(metrics.horizontalOverflow).toBeLessThanOrEqual(2);
     expect(metrics.sectionCount).toBeGreaterThanOrEqual(scenario.expectedSections.length);

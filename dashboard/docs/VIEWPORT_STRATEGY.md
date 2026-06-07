@@ -1,9 +1,9 @@
-# Agent View and Skill Suggestion Strategy
+# Pantheon and Skill Suggestion Strategy
 
-The Agent View exists to clarify live operational state. It should not be a
+Pantheon exists to clarify live operational state. It should not be a
 decorative diagram.
 
-## Agent View Bar
+## Pantheon Control
 
 An operator should be able to answer these in one scan:
 
@@ -13,22 +13,46 @@ An operator should be able to answer these in one scan:
 4. Which profile should I inspect first?
 5. What Hermes page owns the fix?
 
-The visual should use readable text, stable cards, and clear risk hierarchy. Avoid
+The visual should use readable text, stable controls, and clear risk hierarchy. Avoid
 SVG text that scales down with the viewport. If a graph is used, labels should be
 HTML or otherwise sized independently from the graphic.
 
-## Current Direction
+## Pantheon V2 Shipped Direction
 
-The Agent View is a command-style operational surface:
+Pantheon is Olympus' visual identity and an operational control. The previous
+constellation proved the direction, then got removed during hardening because
+SVG text and image-role wrapping made viewport and accessibility guarantees
+fragile.
+
+The Impeccable product-UI pass was run against the live `/olympus` page. The
+repo-local helper was unavailable, so the implementation used the installed
+Impeccable skill, product register, existing CSS, this document, and live
+browser screenshots.
+
+Pantheon v2 rules:
+
+- Agent nodes are real HTML buttons.
+- Selected state is exposed through ARIA and visible styling.
+- Labels are HTML text, not SVG text.
+- The visual map uses CSS layout and positioned buttons; interaction stays in
+  accessible HTML controls.
+- Desktop should show the visual map and selected profile inspector together.
+- Mid-width in-app browser views should compress to a compact map or node grid,
+  with the profile buttons visible at the top of Pantheon.
+- Mobile should stack deliberately with no horizontal overflow and no tiny text.
+
+## Current Rules
+
+Pantheon is a command-style operational surface:
 
 - Trigger lanes show Kanban, Cron, and Gateway pressure.
-- Agent cards show open, running, ready, and blocked work.
+- Profile buttons show open, running, ready, and blocked work.
 - Flags surface the reason a profile matters.
 - The selected profile inspector gives the current task and links the operator back
   to Hermes-owned pages.
 - Mobile stacks the view rather than shrinking the whole graphic.
-- Profile cards are real buttons with selected state exposed through ARIA. Do not
-  wrap interactive Agent View content in `role="img"`.
+- Profile controls are real buttons with selected state exposed through ARIA.
+  Do not wrap interactive Pantheon content in `role="img"`.
 - Empty evidence sections stay hidden; do not render filler panels just to keep a
   layout shape.
 
@@ -96,7 +120,7 @@ not inferred trend decoration.
 - Test desktop and mobile viewports.
 - Fail on console and page errors.
 - Fail if the page has horizontal overflow.
-- Fail if the Agent View contains microscopic visible text.
+- Fail if Pantheon contains microscopic visible text.
 - Fail if hidden-label fixtures expose private profile, task, board, session, or
   path labels.
 - Fail if action links point outside the known Hermes-owned routes.

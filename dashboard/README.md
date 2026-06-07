@@ -12,7 +12,7 @@ Hermes uses to mount the tab.
 - `dist/style.css`: `olympus-*` styles for the dashboard surface.
 - `docs/BUILD_PLAN.md`: implementation plan and product boundary notes.
 - `docs/PRODUCTION_READINESS.md`: production gates, risks, and compatibility.
-- `docs/VIEWPORT_STRATEGY.md`: visual QA strategy for Agent View and mobile.
+- `docs/VIEWPORT_STRATEGY.md`: visual QA strategy for Pantheon and mobile.
 - `docs/FRONTEND_SKILL_RESEARCH.md`: design/QA skill decision record.
 
 ## Routes
@@ -53,7 +53,7 @@ OLYMPUS_EXPOSE_LOCAL_LABELS=1 hermes dashboard --no-open --skip-build
 
 ## Frontend Rules
 
-- Agent View uses HTML text and accessible buttons, not SVG text or an image-role
+- Pantheon uses HTML text and accessible profile buttons, not SVG text or an image-role
   wrapper around interactive controls.
 - Empty evidence sections stay hidden instead of rendering filler panels.
 - Refresh and interval loads ignore stale responses so older `/overview` calls
@@ -62,6 +62,12 @@ OLYMPUS_EXPOSE_LOCAL_LABELS=1 hermes dashboard --no-open --skip-build
   `/kanban`, `/logs`, `/profiles`, `/sessions`, or `/skills`.
 
 ## Verify
+
+For local development:
+
+```bash
+npm run dev
+```
 
 Run from the repository root:
 
