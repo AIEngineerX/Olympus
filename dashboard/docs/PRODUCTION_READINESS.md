@@ -48,8 +48,8 @@ Confirm:
 - No panel uses mock data in the live dashboard.
 - All action links go to Hermes-owned pages.
 - Local labels, session IDs, and paths stay hidden unless `OLYMPUS_EXPOSE_LOCAL_LABELS=1`.
-- The Agent View is legible at desktop and mobile widths.
-- Agent View controls remain accessible buttons, not an interactive subtree hidden
+- Pantheon is legible at desktop and mobile widths.
+- Pantheon controls remain accessible buttons, not an interactive subtree hidden
   behind an image role.
 - The Performance Tracking panel shows Production Diagnostics with API build,
   payload, fetch, render, board, and Hermes-version signals.

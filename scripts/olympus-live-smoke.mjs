@@ -25,7 +25,7 @@ const requiredSections = [
   [".olympus-agent-hq", "Agent HQ"],
   [".olympus-performance", "Performance Tracking"],
   [".olympus-skill-hygiene", "Skill Hygiene"],
-  [".olympus-party", "Agent View"],
+  [".olympus-pantheon", "Pantheon"],
   [".olympus-kanban", "Kanban Intelligence"],
 ];
 const bannedCopyPhrases = [
@@ -228,6 +228,8 @@ async function inspectViewport(browser, viewport, sessionToken) {
       diagnosticsVisible: bodyText.includes("Production Diagnostics"),
       evidenceSourcesVisible: bodyText.includes("Evidence Sources"),
       skillHygieneVisible: bodyText.includes("Skill Hygiene"),
+      pantheonVisible: bodyText.includes("Pantheon"),
+      pantheonButtons: Array.from(pageEl.querySelectorAll(".olympus-pantheon .olympus-agent-card")).filter(visible).length,
     };
   }, { required: requiredSections, bannedPhrases: bannedCopyPhrases, allowedRoutes: allowedHermesRoutes });
   await context.close();
@@ -260,6 +262,8 @@ async function main() {
       if (!result.metrics.diagnosticsVisible) failures.push(`${result.viewport}: production diagnostics not visible`);
       if (!result.metrics.evidenceSourcesVisible) failures.push(`${result.viewport}: evidence sources not visible`);
       if (!result.metrics.skillHygieneVisible) failures.push(`${result.viewport}: skill hygiene not visible`);
+      if (!result.metrics.pantheonVisible) failures.push(`${result.viewport}: pantheon not visible`);
+      if (result.metrics.pantheonButtons < 1) failures.push(`${result.viewport}: pantheon agent buttons not visible`);
     }
     const summary = { ok: failures.length === 0, url: baseUrl, host, port, sessionTokenDetected: Boolean(sessionToken), results, failures };
     console.log(JSON.stringify(summary, null, 2));

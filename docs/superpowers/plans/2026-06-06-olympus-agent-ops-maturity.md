@@ -39,6 +39,7 @@ Each phase must use only evidence already present in Hermes or already documente
   - Render new compact panels.
   - Prefer evidence tables and drill-down links over decorative diagrams.
   - Keep action buttons as Hermes-owned links.
+  - For Pantheon visuals, use accessible HTML controls for agents; do not put readable labels inside SVG text.
 - Modify `dashboard/dist/style.css`
   - Add only necessary panel styles using existing Olympus tokens and dense layout patterns.
 - Modify `tests/fixtures/*` or add targeted fixture data
@@ -171,6 +172,74 @@ OLYMPUS_EXPOSE_LOCAL_LABELS=1 npm run test:live
 ```
 
 **Done means:** Olympus can tell the operator whether skill usage, staleness, archive state, hub provenance, and missing skill metadata are contributing to agent friction, without mutating skills or exposing private labels by default.
+
+---
+
+### Phase 1.5: Pantheon V2 Visual Restoration
+
+**Why before config policy:** Olympus lost the memorable Pantheon visual while hardening the dashboard for viewport safety and accessibility. Restore the visual identity before adding more panels, but keep the hardening gains.
+
+**Required design gate before implementation:** Run the Impeccable product-UI workflow against `/olympus` and the proposed Pantheon surface before editing code. If the repo-local `.agents` helper is unavailable, use the installed `impeccable` skill instructions plus the product register, `dashboard/docs/VIEWPORT_STRATEGY.md`, existing CSS, and the live in-app browser. Record the design decision in this plan or `dashboard/docs/VIEWPORT_STRATEGY.md` before implementation.
+
+**Design gate result:** Shipped with the installed Impeccable product-UI guidance because `.agents/skills/impeccable/scripts/context.mjs` is not present in this repo. The live in-app browser pass required the profile map to appear at the top of Pantheon in the narrow app viewport, with real buttons, readable labels, no horizontal overflow, and no SVG text.
+
+**Hermes evidence used:** current `party.members`, `party.summary`, `orchestration.summary`, `activity_events`, profile workload counts, trigger-lane counts, and profile state already returned by `/overview`.
+
+**Files:**
+- Modify: `dashboard/dist/index.js`
+- Modify: `dashboard/dist/style.css`
+- Modify: `tests/fixtures/olympus-fixture-data.js`
+- Modify: `tests/visual/olympus.spec.js`
+- Modify: `scripts/olympus-live-smoke.mjs`
+- Modify: `dashboard/docs/VIEWPORT_STRATEGY.md`
+- Modify: `dashboard/docs/BUILD_PLAN.md`
+
+- [x] Restore Pantheon as a first-class visual section and primary operational view.
+  - Use the old Pantheon/Constellation commits as inspiration only: `815a21e` and `d579cbd`.
+  - Do not reintroduce SVG text, `role="img"` around interactive content, or labels that scale below readable size.
+  - Agent nodes must be real buttons with visible focus, selected state, and ARIA state.
+  - The selected agent inspector must remain HTML text with Hermes-owned links.
+- [x] Preserve the operational questions from the hardened dashboard.
+  - Which profiles are working, idle, blocked, or risky?
+  - Which trigger lanes are feeding work: Kanban, Cron, Gateway?
+  - Which profile should I inspect first?
+  - What evidence and Hermes page own the fix?
+- [x] Make responsive behavior explicit.
+  - Desktop: Pantheon visual map plus selected-profile inspector.
+  - Mid-width in-app browser: compact map or two-column node grid without excessive height.
+  - Mobile: stacked controls with no microscopic labels, no horizontal overflow, and no hidden interaction.
+- [x] Add visual fixture checks for Pantheon v2.
+  - Require `.olympus-pantheon` or the renamed visual section.
+  - Require at least five clickable agent controls in non-empty states.
+  - Fail if SVG text is used for agent labels.
+  - Keep private-label hiding checks intact.
+- [x] Update docs to explain why Pantheon v2 is visual identity plus usable control, not decoration.
+
+**Bug gate:**
+
+```bash
+npm run verify
+npm run test:visual
+npm run test:live
+npm run test:security
+```
+
+**Visual gate:**
+
+```bash
+# Run before implementation and again before commit.
+# Use the installed Impeccable skill/product register if repo-local helpers are missing.
+npm run test:visual
+npm run test:live
+```
+
+**Security gate:**
+
+```bash
+OLYMPUS_EXPOSE_LOCAL_LABELS=0 npm run test:security
+```
+
+**Done means:** Olympus has a recognizable Pantheon visual again, agents are still clickable and accessible, and desktop/mobile/in-app browser viewports remain readable without private label leaks.
 
 ---
 

@@ -6,11 +6,12 @@
 - Removed old office/product-clone framing.
 - Packaged Olympus as a Hermes dashboard plugin.
 - Added read-only `/health`, `/overview`, and `/tuning` routes.
-- Added Agent HQ, Agent View, tuning queue, score breakdown, Kanban intelligence, and activity events.
+- Added Agent HQ, Pantheon, tuning queue, score breakdown, Kanban intelligence, and activity events.
 - Added Skill Coverage from profile skill counts, forced-skill Kanban work, session tool pressure, long threads, and context pressure.
 - Added Profile Fitness scoring from workload, route metadata, gateway state, skill count, cron load, blocked work, failed runs, and stale workers.
 - Added Evidence Sources so each scan shows which Hermes stores, metadata files, and safe fields grounded the result.
 - Added Skill Hygiene from Hermes skill usage metadata and hub lock provenance, including stale/archive/patch counts and trust/scan gaps.
+- Restored Pantheon as a clickable profile map with accessible HTML controls and selected-profile details.
 - Added a live security smoke test for `/overview` payload redaction.
 - Kept actions as links to Hermes-owned pages.
 - Added privacy defaults for local labels, private paths, route labels, and secrets.

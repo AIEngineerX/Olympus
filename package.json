@@ -4,6 +4,7 @@
   "private": true,
   "description": "Read-only HermesOS Agent HQ dashboard plugin.",
   "scripts": {
+    "dev": "scripts/install-dashboard-link.sh && hermes dashboard --no-open --skip-build",
     "verify": "python3 -m py_compile dashboard/plugin_api.py && node --check dashboard/dist/index.js && git diff --check",
     "test:visual": "playwright test",
     "test:visual:artifacts": "playwright test",

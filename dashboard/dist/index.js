@@ -525,7 +525,7 @@
     return fallback || "active";
   }
 
-  function PartyView({ party, orchestration, events }) {
+  function PartyView({ party, orchestration, events, score }) {
     const data = party || {};
     const members = asList(data.members);
     const summary = data.summary || {};
@@ -555,20 +555,57 @@
       { label: "Blocked", value: summary.blocked || orchSummary.blocked || 0, state: (summary.blocked || orchSummary.blocked) ? "warning" : "ok" },
       { label: "Stale", value: orchSummary.stale_workers || 0, state: orchSummary.stale_workers ? "warning" : "ok" },
     ];
+    const nodePositions = [
+      ["18%", "28%"], ["50%", "14%"], ["80%", "30%"], ["70%", "72%"],
+      ["32%", "74%"], ["12%", "60%"], ["88%", "60%"], ["50%", "52%"],
+    ];
 
-    return el("section", { className: "olympus-section olympus-party" },
+    return el("section", { className: "olympus-section olympus-party olympus-pantheon" },
       el("div", { className: "olympus-section-head" },
         el("div", null,
-          el("h2", null, "Agent View"),
-          el("p", null, "Profiles, trigger lanes, workload, and risk from current Hermes evidence.")
+          el("h2", null, "Pantheon"),
+          el("p", null, "Clickable agent map for profiles, trigger lanes, workload, and risk from current Hermes evidence.")
         ),
         el("a", { className: "olympus-link", href: "/kanban" }, "Open Kanban")
       ),
       el("div", { className: "olympus-command-viewport" },
-        el("div", { className: "olympus-viewport-main", role: "group", "aria-label": "Agent view showing trigger lanes, profile workload, and current operational risk." },
+        el("div", { className: "olympus-viewport-main", role: "group", "aria-label": "Pantheon showing trigger lanes, profile workload, and current operational risk." },
+          members.length ? el("div", { className: "olympus-pantheon-map", role: "group", "aria-label": "Clickable Pantheon profile map." },
+            el("div", { className: "olympus-pantheon-score", "aria-hidden": "true" },
+              el("span", null, "Readiness"),
+              el("strong", null, String(score || 0))
+            ),
+            members.map((member, idx) => {
+              const pos = nodePositions[idx % nodePositions.length];
+              return el("button", {
+                key: member.id,
+                type: "button",
+                style: { "--x": pos[0], "--y": pos[1] },
+                "aria-pressed": selected.id === member.id,
+                "aria-label": "Select profile " + (member.label || "Agent"),
+                className: cx(
+                  "olympus-agent-card",
+                  "olympus-pantheon-node",
+                  "olympus-agent-card-" + String(member.state || "unknown").toLowerCase(),
+                  selected.id === member.id && "olympus-agent-card-selected",
+                  selected.id === member.id && "olympus-pantheon-node-selected"
+                ),
+                onClick: () => setSelectedId(member.id)
+              },
+                el("span", { className: "olympus-pantheon-node-kicker" }, "Profile"),
+                el("strong", null, member.label || "Agent"),
+                el("small", null, [
+                  (member.open_work || 0) + " open",
+                  (member.running_work || 0) + " running",
+                  (member.blocked_work || 0) + " blocked",
+                ].join(" / ")),
+                el(StatePill, { state: member.state || "unknown" })
+              );
+            })
+          ) : el("p", { className: "olympus-muted" }, "No Hermes profiles detected."),
           el("div", { className: "olympus-viewport-head" },
             el("div", null,
-              el("span", null, "Live Agent View"),
+              el("span", null, "Live Pantheon"),
               el("h3", null, "Operational State")
             ),
             el("div", { className: "olympus-viewport-status" },
@@ -586,41 +623,7 @@
               el("small", null, lane.detail),
               el(StatePill, { state: lane.state })
             ))
-          ),
-          members.length ? el("div", { className: "olympus-agent-grid" },
-            members.map((member) => el("button", {
-              key: member.id,
-              type: "button",
-              "aria-pressed": selected.id === member.id,
-              "aria-label": "Select profile " + (member.label || "Agent"),
-              className: cx("olympus-agent-card", "olympus-agent-card-" + String(member.state || "unknown").toLowerCase(), selected.id === member.id && "olympus-agent-card-selected"),
-              onClick: () => setSelectedId(member.id)
-            },
-              el("div", { className: "olympus-agent-card-head" },
-                el("div", null,
-                  el("span", null, "Profile"),
-                  el("strong", null, member.label || "Agent")
-                ),
-                el(StatePill, { state: member.state || "unknown" })
-              ),
-              el("div", { className: "olympus-agent-card-metrics" },
-                [
-                  ["Open", member.open_work || 0],
-                  ["Run", member.running_work || 0],
-                  ["Ready", member.ready_work || 0],
-                  ["Block", member.blocked_work || 0],
-                ].map((pair) => el("span", { key: pair[0] }, el("b", null, String(pair[1])), pair[0]))
-              ),
-              el("div", { className: "olympus-agent-card-foot" },
-                el("span", null, (member.skill_count || 0) + " skills"),
-                el("span", null, (member.cron_jobs || 0) + " cron"),
-                el("span", null, (member.gateway_count || 0) + " gateways")
-              ),
-              asList(member.flags).length ? el("div", { className: "olympus-agent-card-flags" },
-                asList(member.flags).slice(0, 4).map((flag) => el("em", { key: flag }, flag))
-              ) : null
-            ))
-          ) : el("p", { className: "olympus-muted" }, "No Hermes profiles detected.")
+          )
         ),
         el("aside", { className: "olympus-party-inspector" },
           el("div", { className: "olympus-party-inspector-head" },
@@ -803,7 +806,7 @@
       el(SkillCoverage, { coverage: data && data.skill_coverage }),
       el(SkillHygiene, { hygiene: data && data.skill_hygiene }),
       el(ProfileFitness, { fitness: data && data.profile_fitness }),
-      el(PartyView, { party: data && data.party, orchestration: data && data.orchestration, events: data && data.activity_events }),
+      el(PartyView, { party: data && data.party, orchestration: data && data.orchestration, events: data && data.activity_events, score }),
       el(KanbanIntelligence, { kanban: data && data.kanban }),
       el(ScoreExplainer, { tuning })
     );
