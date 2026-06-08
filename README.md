@@ -48,6 +48,9 @@ Hermes loads the plugin from:
 $HERMES_HOME/plugins/olympus/dashboard/
 ```
 
+After linking, follow [`after-install.md`](after-install.md) to confirm the tab,
+first screen, privacy defaults, and local smoke checks.
+
 ## Run
 
 ```bash
@@ -139,6 +142,7 @@ See [`SECURITY.md`](SECURITY.md) for the full security and privacy posture.
 ├── tests/visual/                 # Playwright fixture checks
 ├── tests/fixtures/                # Olympus browser fixtures
 ├── package.json                   # verification scripts
+├── after-install.md              # post-install checks
 ├── OLYMPUS_GOAL.md              # product boundary
 ├── TODO.md                      # active backlog
 ├── SECURITY.md                  # security and privacy notes
