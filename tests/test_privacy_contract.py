@@ -141,6 +141,38 @@ class PrivacyContractTest(unittest.TestCase):
         self.assertIn('"session_ref"', serialized)
         self.assertIn("session:", payload[0]["session_ref"])
 
+    def test_malformed_session_numeric_fields_do_not_break_scan(self):
+        db = self.home / "state.db"
+        con = sqlite3.connect(db)
+        con.executescript(
+            """
+            CREATE TABLE sessions (
+              id TEXT, started_at TEXT, ended_at TEXT, message_count TEXT,
+              tool_call_count TEXT, input_tokens TEXT, output_tokens TEXT,
+              reasoning_tokens TEXT, api_call_count TEXT
+            );
+            """
+        )
+        con.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "raw-session-id-bad", "not-a-date", None, "bad", "bad",
+                "bad", "bad", "bad", "bad",
+            ),
+        )
+        con.commit()
+        con.close()
+
+        payload = plugin_api.collect_sessions()
+        serialized = json.dumps(payload)
+
+        self.assertEqual(payload[0]["message_count"], 0)
+        self.assertEqual(payload[0]["tool_call_count"], 0)
+        self.assertEqual(payload[0]["total_tokens"], 0)
+        self.assertEqual(payload[0]["api_call_count"], 0)
+        self.assertIsNone(payload[0]["started_at"])
+        self.assertNotIn("raw-session-id-bad", serialized)
+
     def test_log_tail_warnings_are_not_described_as_recent(self):
         logs = self.home / "logs"
         logs.mkdir(parents=True)
@@ -151,6 +183,17 @@ class PrivacyContractTest(unittest.TestCase):
         self.assertIn("Log tail", health["summary"])
         self.assertNotIn("Recent Hermes logs", health["summary"])
         self.assertEqual(health["log_scan_window"], "last 8KB per log file")
+
+    def test_redaction_covers_json_style_secret_assignments(self):
+        raw = 'failed with {"api_key": "plain-value", "token": "plain-token", "safe": true}'
+
+        redacted = plugin_api.redact_text(raw)
+
+        self.assertNotIn("plain-value", redacted)
+        self.assertNotIn("plain-token", redacted)
+        self.assertNotIn('"api_key":', redacted)
+        self.assertNotIn('"token":', redacted)
+        self.assertIn("[redacted]", redacted)
 
 
 if __name__ == "__main__":

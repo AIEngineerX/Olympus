@@ -52,6 +52,32 @@ class SkillHygieneTest(unittest.TestCase):
         self.assertIn("skill:", serialized)
         self.assertNotIn("github.com/private-org/visual-skill", serialized)
 
+    def test_malformed_skill_usage_metadata_does_not_break_scan(self):
+        skills_dir = self.home / "skills"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / ".usage.json").write_text(json.dumps({
+            "github.com/private-org/unstable-skill": {
+                "use_count": "not-a-number",
+                "view_count": "also-bad",
+                "patch_count": "bad",
+                "last_used_at": "not-a-date",
+                "last_patched_at": {"bad": "timestamp"}
+            }
+        }))
+
+        metadata = plugin_api.collect_skill_metadata()
+        payload = plugin_api.build_skill_hygiene(metadata, {"summary": {}})
+        serialized = json.dumps(payload)
+
+        self.assertEqual(metadata["summary"]["total_skills"], 1)
+        self.assertEqual(metadata["usage_items"][0]["use_count"], 0)
+        self.assertEqual(metadata["usage_items"][0]["view_count"], 0)
+        self.assertEqual(metadata["usage_items"][0]["patch_count"], 0)
+        self.assertIsNone(metadata["usage_items"][0]["last_used_at"])
+        self.assertIsNone(metadata["usage_items"][0]["last_patched_at"])
+        self.assertIn("skill:", serialized)
+        self.assertNotIn("github.com/private-org/unstable-skill", serialized)
+
 
 if __name__ == "__main__":
     unittest.main()
