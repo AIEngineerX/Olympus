@@ -22,6 +22,8 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Backend compiles
         run: python -m py_compile dashboard/plugin_api.py
+      - name: Backend unit tests
+        run: python -m unittest discover -s tests -p "test_*.py"
       - name: Frontend parses
         run: node --check dashboard/dist/index.js
       - name: Whitespace check
