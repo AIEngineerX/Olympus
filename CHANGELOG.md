@@ -4,6 +4,17 @@ All notable changes to Olympus are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-06-08
+
+### Added
+
+- `after-install.md` with the post-install checks for linking, smoke tests,
+  privacy defaults, and common troubleshooting.
+
+### Changed
+
+- Aligned dashboard manifest and package metadata with the public release line.
+
 ## [1.0.0] - 2026-06-07
 
 First public release. Olympus is a read-only HermesOS Agent Monitor dashboard
@@ -56,4 +67,5 @@ credentials, or config.
 - `verify` workflow runs backend compile, backend unit tests, frontend parse,
   whitespace check, and the visual smoke on push and pull request.
 
+[1.0.1]: https://github.com/AIEngineerX/Olympus/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/AIEngineerX/Olympus/releases/tag/v1.0.0
