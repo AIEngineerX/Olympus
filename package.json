@@ -1,6 +1,6 @@
 {
   "name": "olympus-dashboard-plugin",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "description": "Read-only HermesOS Agent Monitor dashboard plugin.",
   "scripts": {

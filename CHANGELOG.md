@@ -4,6 +4,14 @@ All notable changes to Olympus are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-06-08
+
+### Fixed
+
+- Prevent malformed skill usage timestamps from breaking `/overview` or `/tuning`.
+- Prevent malformed skill and session numeric metadata from breaking the scan.
+- Redact JSON-style secret assignments in local error strings.
+
 ## [1.0.2] - 2026-06-08
 
 ### Added
@@ -78,6 +86,7 @@ credentials, or config.
 - `verify` workflow runs backend compile, backend unit tests, frontend parse,
   whitespace check, and the visual smoke on push and pull request.
 
+[1.0.3]: https://github.com/AIEngineerX/Olympus/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/AIEngineerX/Olympus/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/AIEngineerX/Olympus/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/AIEngineerX/Olympus/releases/tag/v1.0.0

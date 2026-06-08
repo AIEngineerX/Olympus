@@ -60,6 +60,7 @@ SKILLS_SH_AUDIT_WARN = {"warn", "warning", "review"}
 SKILLS_SH_AUDIT_FAIL = {"fail", "failed", "error", "critical", "block"}
 EXPOSE_LOCAL_LABELS = os.environ.get("OLYMPUS_EXPOSE_LOCAL_LABELS", "").strip().lower() in {"1", "true", "yes", "on"}
 REDACTION_PATTERNS = [
+    re.compile(r"(?i)['\"]?(?:api[_-]?key|token|secret|password|passwd)['\"]?\s*[:=]\s*['\"]?[^'\"\s,}]+['\"]?"),
     re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd)\s*[:=]\s*['\"]?[^'\"\s]+"),
     re.compile(r"(?i)(bearer\s+)[a-z0-9._~+/=-]+"),
     re.compile(r"sk-[A-Za-z0-9_-]{12,}"),
@@ -102,7 +103,7 @@ def ts_to_iso(value: Any) -> Optional[str]:
             return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc).isoformat()
         return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
     except Exception:
-        return str(value)
+        return None
 
 
 def age_state(iso_or_ts: Any) -> str:
@@ -168,6 +169,18 @@ def redact_text(value: Any, limit: int = 180) -> str:
     for pattern in REDACTION_PATTERNS:
         text = pattern.sub(lambda m: m.group(1) + "[redacted]" if m.groups() else "[redacted]", text)
     return text[:limit]
+
+
+def safe_int(value: Any, default: int = 0) -> int:
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
 
 
 def safe_id(value: Any, prefix: str = "item") -> str:
@@ -453,7 +466,7 @@ def _epoch_seconds(value: Any) -> Optional[float]:
             return raw / 1000 if raw > 10_000_000_000 else raw
         return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
     except Exception as exc:
-        log_read_warning(f"kanban connection failed for {path.name}", exc)
+        log_read_warning("timestamp parse failed", exc)
         return None
 
 
@@ -517,12 +530,13 @@ def collect_skill_metadata() -> Dict[str, Any]:
     now_ts = time.time()
 
     usage_items: List[Dict[str, Any]] = []
+
     for name, meta in sorted(usage.items()):
         if not isinstance(meta, dict):
             continue
-        use_count = int(meta.get("use_count") or 0)
-        view_count = int(meta.get("view_count") or 0)
-        patch_count = int(meta.get("patch_count") or 0)
+        use_count = safe_int(meta.get("use_count"))
+        view_count = safe_int(meta.get("view_count"))
+        patch_count = safe_int(meta.get("patch_count"))
         last_used_ts = _epoch_seconds(meta.get("last_used_at"))
         last_patched_ts = _epoch_seconds(meta.get("last_patched_at"))
         archived = bool(meta.get("archived_at")) or str(meta.get("state") or "").lower() == "archived"
@@ -1383,10 +1397,12 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
             duration_seconds = None
         session_id = row_value(r, "id")
         model = row_value(r, "model")
-        input_tokens = int(row_value(r, "input_tokens", 0) or 0)
-        output_tokens = int(row_value(r, "output_tokens", 0) or 0)
-        reasoning_tokens = int(row_value(r, "reasoning_tokens", 0) or 0)
-        api_calls = int(row_value(r, "api_call_count", 0) or 0)
+        message_count = safe_int(row_value(r, "message_count", 0))
+        tool_call_count = safe_int(row_value(r, "tool_call_count", 0))
+        input_tokens = safe_int(row_value(r, "input_tokens", 0))
+        output_tokens = safe_int(row_value(r, "output_tokens", 0))
+        reasoning_tokens = safe_int(row_value(r, "reasoning_tokens", 0))
+        api_calls = safe_int(row_value(r, "api_call_count", 0))
         # Average per API call is the context-pressure signal; cumulative tokens
         # over-count chatty sessions.
         avg_input_tokens = int(input_tokens / api_calls) if api_calls > 0 else 0
@@ -1408,8 +1424,8 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
             "source": row_value(r, "source"),
             "started_at": ts_to_iso(started),
             "ended_at": ts_to_iso(ended),
-            "message_count": row_value(r, "message_count"),
-            "tool_call_count": row_value(r, "tool_call_count"),
+            "message_count": message_count,
+            "tool_call_count": tool_call_count,
             "duration_seconds": duration_seconds,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
