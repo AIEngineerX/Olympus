@@ -10,6 +10,8 @@ agent system is performing and links to the Hermes page that owns each fix.
 See [`OLYMPUS_GOAL.md`](OLYMPUS_GOAL.md) for the product boundary (what Olympus
 owns vs. what Hermes owns).
 
+![Olympus dashboard showing readiness score, mode tabs, and Agent Monitor](docs/assets/olympus-dashboard.jpg)
+
 ## What It Does
 
 - Ranks agent optimization items with the evidence behind each one.
@@ -34,30 +36,25 @@ owns vs. what Hermes owns).
 - Node.js/npm for verification and Playwright-based visual smoke tests. There is
   no frontend build step; `dashboard/dist/*` is hand-authored SDK React/CSS.
 
-## Install (local Hermes)
+## Install In A Local Hermes Dashboard
 
-Link the dashboard plugin into your Hermes home:
+Install Olympus from source, link it into your local Hermes home, and start the
+Hermes dashboard:
 
 ```bash
-scripts/install-dashboard-link.sh
+git clone https://github.com/AIEngineerX/Olympus.git
+cd Olympus
+npm ci
+npm run dev
 ```
 
-Hermes loads the plugin from:
+`npm run dev` links this repository's `dashboard/` folder into:
 
 ```text
 $HERMES_HOME/plugins/olympus/dashboard/
 ```
 
-After linking, follow [`after-install.md`](after-install.md) to confirm the tab,
-first screen, privacy defaults, and local smoke checks.
-
-## Run
-
-```bash
-npm run dev
-```
-
-Equivalent manual flow:
+Then it starts Hermes with:
 
 ```bash
 scripts/install-dashboard-link.sh
@@ -69,6 +66,9 @@ Then open:
 ```text
 http://127.0.0.1:9119/olympus
 ```
+
+After the tab loads, follow [`after-install.md`](after-install.md) to confirm
+the first screen, privacy defaults, and local smoke checks.
 
 ## Dashboard Modes
 
@@ -136,6 +136,7 @@ See [`SECURITY.md`](SECURITY.md) for the full security and privacy posture.
 │   ├── docs/VIEWPORT_STRATEGY.md
 │   ├── docs/FRONTEND_SKILL_RESEARCH.md
 │   └── README.md                # package notes
+├── docs/assets/olympus-dashboard.jpg
 ├── scripts/install-dashboard-link.sh
 ├── scripts/olympus-live-smoke.mjs
 ├── scripts/olympus-performance-smoke.mjs
