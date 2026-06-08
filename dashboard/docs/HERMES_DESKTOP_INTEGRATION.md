@@ -3,13 +3,15 @@
 Olympus is a read-only Hermes operations plugin. It should be visible from
 Hermes Dashboard and Hermes Desktop, but it should not replace Desktop controls.
 
-## Local Desktop Finding
+## Desktop Build Location
 
-On this machine, Hermes Desktop runs from:
+A local Hermes Desktop build typically runs from the Hermes home, for example:
 
 ```text
-/Users/ghost/.hermes/hermes-agent/apps/desktop/release/mac-arm64/Hermes.app
+$HERMES_HOME/hermes-agent/apps/desktop/release/<platform>/Hermes.app
 ```
+
+(`$HERMES_HOME` defaults to `~/.hermes`; `<platform>` is e.g. `mac-arm64`.)
 
 The Desktop app has a Command Center Usage section backed by
 `/api/analytics/usage?days=...`. The source at
