@@ -9,6 +9,13 @@
   const Button = C.Button || "button";
 
   const API = "/api/plugins/olympus";
+  const STATIC_BACKEND_REQUIRED = [
+    "Readiness scoring and score deductions",
+    "Kanban board synthesis, Trace Spine, and worker attention items",
+    "Skill hygiene/audit synthesis and profile fitness scoring",
+    "Tool policy, config risk, and auxiliary cost recommendations",
+    "Operational evals and production diagnostics from Olympus evidence collectors"
+  ];
   const OLYMPUS_MODES = [
     { id: "brief", label: "Brief", summary: "Top actions and readiness" },
     { id: "agents", label: "Agents", summary: "Profiles, performance, and live state" },
@@ -86,6 +93,155 @@
     if (n < 1024) return Math.round(n) + " B";
     if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
     return (n / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  function toErrorMessage(error) {
+    return String(error && error.message ? error.message : error || "request failed");
+  }
+
+  function safeFetchJSON(path) {
+    return SDK.fetchJSON(path)
+      .then((value) => ({ ok: true, path, value }))
+      .catch((error) => ({ ok: false, path, error: toErrorMessage(error) }));
+  }
+
+  function buildStaticCompatibilityData(reason, results) {
+    const plugins = asList(results.plugins && results.plugins.value);
+    const olympus = plugins.find((item) => item && item.name === "olympus") || null;
+    const status = results.status && results.status.ok && results.status.value || {};
+    const profiles = asList(results.profiles && results.profiles.value && results.profiles.value.profiles);
+    const skills = asList(results.skills && results.skills.value);
+    const sessionStats = results.sessionStats && results.sessionStats.ok && results.sessionStats.value || {};
+    const cronJobsRaw = results.cronJobs && results.cronJobs.ok && results.cronJobs.value;
+    const cronJobs = Array.isArray(cronJobsRaw) ? cronJobsRaw : asList(cronJobsRaw && cronJobsRaw.jobs);
+    const apiResults = [results.plugins, results.status, results.profiles, results.skills, results.sessionStats, results.cronJobs]
+      .filter(Boolean);
+    const availableCount = apiResults.filter((item) => item.ok).length;
+    const frontendApis = apiResults.map((item) => ({
+      id: item.path,
+      label: item.path,
+      type: "Hermes dashboard API",
+      state: item.ok ? "ok" : "warning",
+      counts: item.ok ? { responses: 1 } : { errors: 1 },
+      fields: item.ok ? ["read-only JSON"] : [],
+      redaction: item.ok ? "available" : item.error || "unavailable",
+      recommended_view: item.path === "/api/dashboard/plugins" ? "/config" : ""
+    }));
+    const profileRows = profiles.slice(0, 6).map((profile, idx) => ({
+      id: "profile:" + idx,
+      label: "Profile " + String(idx + 1),
+      state: profile && profile.is_active ? "active" : "unknown",
+      score: 0,
+      top_issue: "Static mode can count this profile but cannot score fitness without the Olympus backend.",
+      recommended_view: "/profiles",
+      metrics: { skills: 0, cron: 0, gateways: 0, open: 0, ready: 0, running: 0, blocked: 0, failed_runs: 0 },
+      reasons: []
+    }));
+
+    return {
+      generated_at: new Date().toISOString(),
+      static_compatibility: {
+        enabled: true,
+        reason: reason || "Olympus backend route unavailable",
+        frontend_available: ["/api/dashboard/plugins", "/api/status", "/api/profiles", "/api/skills", "/api/sessions/stats", "/api/cron/jobs"],
+        backend_required: STATIC_BACKEND_REQUIRED
+      },
+      health: {
+        status: "warning",
+        status_label: "Static plugin mode",
+        summary: "Olympus backend synthesis is unavailable, so this tab is showing a read-only compatibility view from existing Hermes dashboard APIs."
+      },
+      tuning: {
+        score: 0,
+        score_breakdown: {
+          base: 0,
+          score: 0,
+          label: "Static mode",
+          explanation: "Readiness scoring requires /api/plugins/olympus/overview, which is not mounted for non-bundled user dashboard plugins.",
+          deductions: [{ label: "Olympus backend unavailable", points: 0, reason: reason || "backend unavailable", evidence: "/api/plugins/olympus/overview unavailable", source: "frontend compatibility fallback" }]
+        },
+        methodology: {
+          thresholds: STATIC_BACKEND_REQUIRED.map((item) => ({ signal: item, threshold: "requires bundled/trusted backend mode", why: "First-party Hermes dashboard APIs expose page data, not Olympus' redacted synthesis model." })),
+          sources: frontendApis.map((item) => ({ label: item.label, detail: item.redaction }))
+        },
+        agent_hq: {
+          summary: { agents: profiles.length, recommendations: 2, total_tokens: 0, looping_sessions: 0, context_pressure_sessions: 0, total_cost_usd: 0 },
+          metrics: { median_duration_seconds: 0, p90_duration_seconds: 0, total_tokens: 0, total_tool_calls: 0, failed_kanban_runs: 0 },
+          agents: [],
+          recommendations: [
+            { kind: "compatibility", severity: "warning", title: "Static user-plugin mode detected", detail: "Hermes served the Olympus tab, but did not mount the non-bundled Python backend API.", evidence: reason || "backend unavailable", recommended_view: "/config", action_label: "Open Config" },
+            { kind: "integration", severity: "info", title: "Use bundled or trusted backend mode for full Olympus", detail: "Existing Hermes dashboard APIs can provide counts and links; Olympus scoring and evidence synthesis still require the backend.", evidence: availableCount + " of " + apiResults.length + " fallback APIs responded", recommended_view: "/profiles", action_label: "Open Profiles" }
+          ]
+        }
+      },
+      profile_fitness: { summary: { profiles: profiles.length, needs_review: profiles.length, average_score: 0, lowest_score: 0 }, profiles: profileRows },
+      skill_coverage: {
+        summary: { profiles: profiles.length, total_skills: skills.length, zero_skill_profiles: 0, forced_skill_tasks: 0, looping_sessions: 0, tool_heavy_sessions: 0, long_threads: 0, context_pressure_sessions: 0 },
+        suggestions: [{ kind: "compatibility", severity: "info", title: "Skill counts available; skill coverage synthesis unavailable", detail: "The frontend can read /api/skills, but repeated-use recommendations require the Olympus backend collectors.", evidence: formatCount(skills.length) + " skills returned by /api/skills", recommended_view: "/skills", action_label: "Open Skills" }],
+        profiles: []
+      },
+      skill_hygiene: { summary: { state: "unknown", issues: 0, total_skills: skills.length, archived: 0, stale: 0, never_used: 0, recently_patched: 0, hub_installed: 0, hub_missing_trust: 0, hub_missing_scan: 0, hub_audit_pass: 0, hub_audit_warn: 0, hub_audit_fail: 0, forced_skill_metadata_gaps: 0 }, signals: [], usage: [], hub: [] },
+      performance: {
+        summary: { state: "unknown", window_sessions: sessionStats.total || 0, completed_sessions: 0, total_tokens: 0, total_tool_calls: 0, avg_tools_per_session: 0, avg_tokens_per_call: 0, total_cost_usd: 0 },
+        lanes: [
+          { id: "sessions", label: "Sessions", value: sessionStats.total || 0, unit: "count", state: sessionStats.total ? "active" : "idle", detail: "Count from /api/sessions/stats; no transcript content read.", source: "Hermes dashboard API", recommended_view: "/sessions" },
+          { id: "cron", label: "Cron Jobs", value: cronJobs.length, unit: "count", state: cronJobs.length ? "active" : "idle", detail: "Job count from /api/cron/jobs; scheduling synthesis requires backend mode.", source: "Hermes dashboard API", recommended_view: "/cron" }
+        ],
+        signals: []
+      },
+      diagnostics: { state: "warning", generated_ms: 0, payload_bytes: 0, budgets: { api_response_ms: 750, client_render_ms: 150 }, budget_status: { api_response: "unknown", payload: "unknown" }, counts: { kanban_boards_scanned: 0, kanban_board_read_failures: 0 }, hermes: { version: status.version || "unknown" } },
+      evidence_sources: {
+        summary: { sources: frontendApis.length, available: availableCount, warnings: apiResults.length - availableCount, missing: 0 },
+        items: [{ id: "olympus-manifest", label: "Olympus manifest", type: "dashboard plugin discovery", state: olympus ? "ok" : "warning", counts: { plugins: plugins.length }, fields: olympus ? ["source: " + (olympus.source || "unknown"), "has_api: " + String(Boolean(olympus.has_api))] : [], redaction: olympus ? "Manifest visible through /api/dashboard/plugins." : "Olympus manifest not found in /api/dashboard/plugins.", recommended_view: "/config" }, ...frontendApis]
+      },
+      config_policy: {
+        summary: { state: "warning", findings: 1, toolsets: 0, enabled_toolsets: 0, risky_toolsets: 0, max_turns: 0, aux_configured: 0, aux_missing: 0, gateway_platforms: Object.keys(status.gateway_platforms || {}).length, browser_privacy_flags: 0 },
+        settings: [],
+        findings: [{ kind: "compatibility", severity: "warning", title: "Policy synthesis hidden in static mode", detail: "The frontend does not inspect config/env details directly. Use Hermes-owned config pages or bundled Olympus backend mode.", evidence: "Static compatibility fallback", recommended_view: "/config", action_label: "Open Config" }]
+      },
+      ops_evals: null,
+      trace_spine: null,
+      kanban: null,
+      party: null,
+      orchestration: null,
+      activity_events: []
+    };
+  }
+
+  function loadStaticCompatibility(reason) {
+    return Promise.all([
+      safeFetchJSON("/api/dashboard/plugins"),
+      safeFetchJSON("/api/status"),
+      safeFetchJSON("/api/profiles"),
+      safeFetchJSON("/api/skills"),
+      safeFetchJSON("/api/sessions/stats"),
+      safeFetchJSON("/api/cron/jobs")
+    ]).then((items) => buildStaticCompatibilityData(reason, { plugins: items[0], status: items[1], profiles: items[2], skills: items[3], sessionStats: items[4], cronJobs: items[5] }));
+  }
+
+  function StaticCompatibilityNotice({ compatibility }) {
+    const info = compatibility || {};
+    if (!info.enabled) return null;
+    return el("section", { className: "olympus-section olympus-static-compatibility" },
+      el("div", { className: "olympus-section-head" },
+        el("div", null,
+          el("h2", null, "Static User-Plugin Mode"),
+          el("p", null, "Hermes served Olympus as a static dashboard plugin. Backend synthesis panels are hidden or labelled because /api/plugins/olympus/* is unavailable.")
+        ),
+        el(StatePill, { state: "warning", label: "frontend only" })
+      ),
+      el("div", { className: "olympus-policy-grid" },
+        el("div", { className: "olympus-policy-pane" },
+          el("h3", null, "Works with existing Hermes APIs"),
+          asList(info.frontend_available).map((item) => el("div", { key: item, className: "olympus-mini-row" }, el("span", null, item), el("small", null, "read-only dashboard API")))
+        ),
+        el("div", { className: "olympus-policy-pane" },
+          el("h3", null, "Requires bundled/trusted backend"),
+          asList(info.backend_required).map((item) => el("div", { key: item, className: "olympus-mini-row" }, el("span", null, item), el("small", null, "not synthesized in static mode")))
+        )
+      ),
+      info.reason ? el("p", { className: "olympus-muted" }, info.reason) : null
+    );
   }
 
   function Hero({ health, score, loading, onRefresh }) {
@@ -1078,7 +1234,22 @@
           });
         })
         .catch((err) => {
-          if (requestId === requestSeq.current) setError(String(err && err.message ? err.message : err));
+          const message = toErrorMessage(err);
+          return loadStaticCompatibility(message).then((fallback) => {
+            if (requestId !== requestSeq.current) return;
+            const received = window.performance && performance.now ? performance.now() : Date.now();
+            setData(fallback);
+            setError(null);
+            setClientDiagnostics({
+              fetch_ms: Math.round(received - started),
+              fetch_state: "warning",
+              render_ms: 0,
+              render_state: "warning",
+              total_ms: Math.round(received - started)
+            });
+          }).catch((fallbackErr) => {
+            if (requestId === requestSeq.current) setError(toErrorMessage(fallbackErr));
+          });
         })
         .finally(() => {
           if (requestId === requestSeq.current) setLoading(false);
@@ -1100,6 +1271,7 @@
       error ? el("div", { className: "olympus-error" }, error) : null,
       el(ModeTabs, { activeMode, onChange: setActiveMode }),
       el(ModePanel, { id: "brief", activeMode },
+        el(StaticCompatibilityNotice, { compatibility: data && data.static_compatibility }),
         el(ScoreExplainer, { tuning }),
         el(AgentHQ, { hq: tuning.agent_hq })
       ),

@@ -41,7 +41,8 @@ owns vs. what Hermes owns).
 > backend imports. In that mode `/olympus` can load while
 > `/api/plugins/olympus/*` returns `404`. Full backend routes require Olympus to
 > be bundled into Hermes or a future trusted backend-plugin model. See
-> [`dashboard/docs/HERMES_BACKEND_PLUGIN_COMPATIBILITY.md`](dashboard/docs/HERMES_BACKEND_PLUGIN_COMPATIBILITY.md).
+> [`dashboard/docs/HERMES_BACKEND_PLUGIN_COMPATIBILITY.md`](dashboard/docs/HERMES_BACKEND_PLUGIN_COMPATIBILITY.md)
+> and [`dashboard/docs/STATIC_USER_PLUGIN_MODE.md`](dashboard/docs/STATIC_USER_PLUGIN_MODE.md).
 
 ## Install In A Local Hermes Dashboard
 
