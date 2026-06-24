@@ -5,6 +5,12 @@ import http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  backendCompatibilityStatus,
+  findOlympusPlugin,
+  manifestDeclaresApi,
+  parsePluginRows,
+} from "./olympus-compat-helper.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const baseUrl = process.env.OLYMPUS_SMOKE_URL || "http://127.0.0.1:9119/olympus";
@@ -12,6 +18,7 @@ const dashboardUrl = new URL(baseUrl);
 const hermesHome = process.env.HERMES_HOME || path.join(process.env.HOME || "", ".hermes");
 const dashboardSourceDir = path.join(repoRoot, "dashboard");
 const dashboardTargetDir = path.join(hermesHome, "plugins", "olympus", "dashboard");
+const manifestPath = path.join(dashboardSourceDir, "manifest.json");
 const runs = Math.max(1, Number.parseInt(process.env.OLYMPUS_PERF_RUNS || "5", 10) || 5);
 const maxResponseMs = Number(process.env.OLYMPUS_PERF_MAX_RESPONSE_MS || "2000");
 const maxAverageResponseMs = Number(process.env.OLYMPUS_PERF_MAX_AVG_RESPONSE_MS || "1000");
@@ -82,6 +89,25 @@ function linkAlreadyTargetsRepo() {
   } catch {
     return false;
   }
+}
+
+
+
+async function backendCompatibilityHint(sessionToken, routeStatus) {
+  const plugins = await requestText(new URL("/api/dashboard/plugins", baseUrl).toString(), {
+    headers: sessionToken ? { "X-Hermes-Session-Token": sessionToken } : {},
+  }, 5000);
+  const discovered = findOlympusPlugin(parsePluginRows(plugins.body));
+  const compatibility = backendCompatibilityStatus({
+    backendMounted: false,
+    discovered,
+    manifestHasApi: manifestDeclaresApi(manifestPath),
+    routeStatus: {
+      dashboardPlugins: plugins.statusCode,
+      ...routeStatus,
+    },
+  });
+  return compatibility.hint;
 }
 
 function ensureDashboardLink() {
@@ -171,11 +197,17 @@ async function measureRoute(routeName, sessionToken) {
   };
 }
 
-function routeFailures(result) {
+async function routeFailures(result, sessionToken) {
   const failures = [];
   const { summary, samples, route } = result;
   const failedStatuses = samples.filter((sample) => sample.statusCode < 200 || sample.statusCode >= 300);
-  if (failedStatuses.length) failures.push(`${route}: non-2xx responses ${failedStatuses.map((sample) => sample.statusCode).join(", ")}`);
+  if (failedStatuses.length) {
+    failures.push(`${route}: non-2xx responses ${failedStatuses.map((sample) => sample.statusCode).join(", ")}`);
+    if (failedStatuses.length === samples.length && failedStatuses.every((sample) => sample.statusCode === 404)) {
+      const hint = await backendCompatibilityHint(sessionToken, { [route]: 404 });
+      if (hint) failures.push(`${route}: ${hint}`);
+    }
+  }
   if (summary.maxResponseMs > summary.budgets.maxResponseMs) failures.push(`${route}: max response ${summary.maxResponseMs}ms > ${summary.budgets.maxResponseMs}ms`);
   if (summary.avgResponseMs > summary.budgets.maxAverageResponseMs) failures.push(`${route}: avg response ${summary.avgResponseMs}ms > ${summary.budgets.maxAverageResponseMs}ms`);
   if (summary.maxGeneratedMs !== null && summary.maxGeneratedMs > summary.budgets.maxGeneratedMs) failures.push(`${route}: generated ${summary.maxGeneratedMs}ms > ${summary.budgets.maxGeneratedMs}ms`);
@@ -197,7 +229,8 @@ async function main() {
     for (const route of routes) {
       results.push(await measureRoute(route, sessionToken));
     }
-    const failures = results.flatMap(routeFailures);
+    const failures = [];
+    for (const result of results) failures.push(...await routeFailures(result, sessionToken));
     const summary = {
       ok: failures.length === 0,
       url: baseUrl,

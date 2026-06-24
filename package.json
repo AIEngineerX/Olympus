@@ -11,6 +11,7 @@
     "test:live": "node scripts/olympus-live-smoke.mjs",
     "test:performance": "node scripts/olympus-performance-smoke.mjs",
     "test:security": "node scripts/olympus-security-smoke.mjs",
+    "test:compat": "node scripts/olympus-backend-compat.mjs",
     "test:desktop": "node scripts/olympus-desktop-preflight.mjs"
   },
   "devDependencies": {
