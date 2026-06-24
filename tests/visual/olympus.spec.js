@@ -307,3 +307,17 @@ test("desktop noisy mode navigation stages deep inspection panels", async ({ pag
     expect(metrics.tinyVisibleText).toEqual([]);
   }
 });
+
+test("static user-plugin mode falls back to Hermes dashboard APIs", async ({ page }, testInfo) => {
+  const messages = await openFixture(page, testInfo, { width: 1280, height: 720 }, "static-user-plugin");
+
+  expect(messages).toEqual([]);
+  await expect(page.locator(".olympus-static-compatibility")).toBeVisible();
+  await expect(page.locator(".olympus-static-compatibility")).toContainText("Static User-Plugin Mode");
+  await expect(page.locator(".olympus-static-compatibility")).toContainText("/api/dashboard/plugins");
+  await expect(page.locator(".olympus-static-compatibility")).toContainText("Readiness scoring and score deductions");
+  await expect(page.locator(".olympus-agent-hq")).toContainText("Static user-plugin mode detected");
+  await selectMode(page, "Diagnostics");
+  await expect(page.locator(".olympus-diagnostics")).toContainText("Evidence Sources");
+  await expect(page.locator(".olympus-diagnostics")).toContainText("/api/status");
+});
