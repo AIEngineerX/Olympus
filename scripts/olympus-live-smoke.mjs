@@ -5,6 +5,12 @@ import http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  backendCompatibilityStatus,
+  findOlympusPlugin,
+  manifestDeclaresApi,
+  parsePluginRows,
+} from "./olympus-compat-helper.mjs";
 import { chromium } from "playwright";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -15,6 +21,7 @@ const host = dashboardUrl.hostname;
 const dashboardSourceDir = path.join(repoRoot, "dashboard");
 const hermesHome = process.env.HERMES_HOME || path.join(process.env.HOME || "", ".hermes");
 const dashboardTargetDir = path.join(hermesHome, "plugins", "olympus", "dashboard");
+const manifestPath = path.join(dashboardSourceDir, "manifest.json");
 const viewports = [
   { name: "desktop", width: 1280, height: 720 },
   { name: "mobile", width: 390, height: 844 },
@@ -92,6 +99,25 @@ function requestText(url, timeoutMs = 3000) {
   });
 }
 
+function requestTextWithHeaders(url, headers = {}, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    const parsed = new URL(url);
+    const client = parsed.protocol === "https:" ? https : http;
+    const req = client.request(parsed, { headers }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => { body += chunk; });
+      res.on("end", () => resolve({ body, statusCode: res.statusCode || 0 }));
+    });
+    req.on("error", () => resolve({ body: "", statusCode: 0 }));
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      resolve({ body: "", statusCode: 0 });
+    });
+    req.end();
+  });
+}
+
 async function fetchSessionToken(url) {
   const response = await requestText(url);
   const match = response.body.match(/window\.__HERMES_SESSION_TOKEN__="([^"]+)"/);
@@ -112,6 +138,27 @@ async function waitForServer(url, timeoutMs = 30000) {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return false;
+}
+
+
+
+async function backendCompatibilityHint(sessionToken, routeStatus) {
+  const plugins = await requestTextWithHeaders(
+    new URL("/api/dashboard/plugins", baseUrl).toString(),
+    sessionToken ? { "X-Hermes-Session-Token": sessionToken } : {},
+    5000,
+  );
+  const discovered = findOlympusPlugin(parsePluginRows(plugins.body));
+  const compatibility = backendCompatibilityStatus({
+    backendMounted: false,
+    discovered,
+    manifestHasApi: manifestDeclaresApi(manifestPath),
+    routeStatus: {
+      dashboardPlugins: plugins.statusCode,
+      ...routeStatus,
+    },
+  });
+  return compatibility.hint;
 }
 
 function commandExists(command) {
@@ -307,6 +354,16 @@ async function inspectViewport(browser, viewport, sessionToken) {
 async function main() {
   const server = await startHermesIfNeeded();
   const sessionToken = await fetchSessionToken(baseUrl);
+  const healthUrl = new URL("/api/plugins/olympus/health", dashboardUrl).toString();
+  const health = await requestTextWithHeaders(
+    healthUrl,
+    sessionToken ? { "X-Hermes-Session-Token": sessionToken } : {},
+    5000,
+  );
+  if (health.statusCode === 404) {
+    const hint = await backendCompatibilityHint(sessionToken, { health: health.statusCode });
+    if (hint) throw new Error(`${healthUrl} returned 404. ${hint}`);
+  }
   const browser = await chromium.launch();
   try {
     const results = [];

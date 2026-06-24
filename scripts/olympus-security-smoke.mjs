@@ -5,6 +5,12 @@ import http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  backendCompatibilityStatus,
+  findOlympusPlugin,
+  manifestDeclaresApi,
+  parsePluginRows,
+} from "./olympus-compat-helper.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const baseUrl = process.env.OLYMPUS_SMOKE_URL || "http://127.0.0.1:9119/olympus";
@@ -12,6 +18,7 @@ const apiUrl = new URL("/api/plugins/olympus/overview", baseUrl).toString();
 const dashboardSourceDir = path.join(repoRoot, "dashboard");
 const hermesHome = process.env.HERMES_HOME || path.join(process.env.HOME || "", ".hermes");
 const dashboardTargetDir = path.join(hermesHome, "plugins", "olympus", "dashboard");
+const manifestPath = path.join(dashboardSourceDir, "manifest.json");
 
 const leakPatterns = [
   { name: "absolute user path", pattern: /\/Users\/|\\Users\\/ },
@@ -107,6 +114,25 @@ function linkAlreadyTargetsRepo() {
   }
 }
 
+
+
+async function backendCompatibilityHint(sessionToken, routeStatus) {
+  const plugins = await requestText(new URL("/api/dashboard/plugins", baseUrl).toString(), {
+    headers: sessionToken ? { "X-Hermes-Session-Token": sessionToken } : {},
+  }, 5000);
+  const discovered = findOlympusPlugin(parsePluginRows(plugins.body));
+  const compatibility = backendCompatibilityStatus({
+    backendMounted: false,
+    discovered,
+    manifestHasApi: manifestDeclaresApi(manifestPath),
+    routeStatus: {
+      dashboardPlugins: plugins.statusCode,
+      ...routeStatus,
+    },
+  });
+  return compatibility.hint;
+}
+
 function ensureDashboardLink() {
   if (linkAlreadyTargetsRepo()) return;
   if (fs.existsSync(dashboardTargetDir) && process.env.OLYMPUS_SMOKE_RELINK !== "1") {
@@ -142,7 +168,10 @@ async function fetchOverview(sessionToken) {
     headers: sessionToken ? { "X-Hermes-Session-Token": sessionToken } : {},
   }, 10000);
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(`Overview request failed with ${response.statusCode}: ${response.body.slice(0, 500)}`);
+    const hint = response.statusCode === 404
+      ? await backendCompatibilityHint(sessionToken, { overview: response.statusCode })
+      : "";
+    throw new Error(`Overview request failed with ${response.statusCode}: ${response.body.slice(0, 500)}${hint ? "\n" + hint : ""}`);
   }
   try {
     return JSON.parse(response.body);
