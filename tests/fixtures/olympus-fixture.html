@@ -104,6 +104,25 @@
         return React.createElement("button", props, props.children);
       }
 
+      const fixtureParams = new URLSearchParams(window.location.search);
+      const fixtureState = fixtureParams.get("state") || "noisy";
+
+      async function fixtureFetchJSON(url) {
+        if (fixtureState !== "static-user-plugin") return window.__OLYMPUS_FIXTURE_DATA__;
+        if (String(url).startsWith("/api/plugins/olympus/overview")) {
+          throw new Error("404 /api/plugins/olympus/overview");
+        }
+        const responses = {
+          "/api/dashboard/plugins": [{ name: "olympus", source: "user", has_api: false }],
+          "/api/status": { version: "fixture", gateway_platforms: {}, active_sessions: 1 },
+          "/api/profiles": { profiles: [{ name: "default" }, { name: "vulcan", is_active: true }] },
+          "/api/skills": [{ name: "skill-one" }, { name: "skill-two" }],
+          "/api/sessions/stats": { total: 3, active_store: 3, archived: 0, messages: 12 },
+          "/api/cron/jobs": { jobs: [{ id: "job-one" }] }
+        };
+        return responses[String(url).split("?")[0]] || {};
+      }
+
       window.__HERMES_PLUGIN_SDK__ = {
         React,
         hooks: React,
@@ -111,7 +130,7 @@
           Badge: FixtureBadge,
           Button: FixtureButton
         },
-        fetchJSON: async () => window.__OLYMPUS_FIXTURE_DATA__
+        fetchJSON: fixtureFetchJSON
       };
 
       window.__HERMES_PLUGINS__ = {

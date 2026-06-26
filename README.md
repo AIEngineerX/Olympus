@@ -20,6 +20,7 @@ owns vs. what Hermes owns).
 - Surfaces safe config policy risks: turn limits, loop guardrails, browser privacy flags, fallbacks, toolsets, and auxiliary cost visibility.
 - Computes a transparent heuristic readiness score with a full deduction breakdown.
 - Opens with a Brief view for the next action, then stages deeper panels behind Agents, Skills, Kanban, Policy, and Diagnostics tabs.
+- Adds Metrics Spine in Diagnostics: aggregate Hermes-grounded usage visibility, profile workload, skill lifecycle, and work reliability for tuning.
 - Keeps v1 read-only: every action is a link to the Hermes page that owns it.
 
 ## What It Does Not Do
@@ -35,6 +36,14 @@ owns vs. what Hermes owns).
 - Python 3.10+ (the backend is a FastAPI router loaded by Hermes).
 - Node.js/npm for verification and Playwright-based visual smoke tests. There is
   no frontend build step; `dashboard/dist/*` is hand-authored SDK React/CSS.
+
+> **Current Hermes compatibility:** hardened Hermes builds load static user
+> dashboard plugins from `$HERMES_HOME/plugins`, but refuse non-bundled Python
+> backend imports. In that mode `/olympus` can load while
+> `/api/plugins/olympus/*` returns `404`. Full backend routes require Olympus to
+> be bundled into Hermes or a future trusted backend-plugin model. See
+> [`dashboard/docs/HERMES_BACKEND_PLUGIN_COMPATIBILITY.md`](dashboard/docs/HERMES_BACKEND_PLUGIN_COMPATIBILITY.md)
+> and [`dashboard/docs/STATIC_USER_PLUGIN_MODE.md`](dashboard/docs/STATIC_USER_PLUGIN_MODE.md).
 
 ## Install In A Local Hermes Dashboard
 
@@ -79,7 +88,7 @@ Deeper inspection is split into purpose-built tabs:
 - Skills: Skill Coverage and Skill Hygiene.
 - Kanban: Trace Spine and Kanban Intelligence.
 - Policy: Tool Policy & Aux Cost.
-- Diagnostics: Operational Evals, Production Diagnostics, and Evidence Sources.
+- Diagnostics: Operational Evals, Metrics Spine, Production Diagnostics, and Evidence Sources.
 
 ## Hermes Desktop
 
@@ -99,16 +108,18 @@ status before preparing an upstream Desktop PR.
 
 ## API
 
-Hermes mounts Olympus at `/api/plugins/olympus/`:
+When Olympus is bundled or another trusted backend-plugin path is available, Hermes mounts Olympus at `/api/plugins/olympus/`:
 
 | Route | Purpose |
 | --- | --- |
 | `GET /health` | Liveness and a coarse runtime status summary |
-| `GET /overview` | Full dashboard read model: health, tuning, profiles, gateways, cron, sessions, Kanban, performance, Trace Spine, Operational Evals, skill hygiene, config policy, and evidence sources |
-| `GET /tuning` | Tuning-focused read model with score breakdown, Kanban intelligence, Trace Spine, Operational Evals, skill hygiene, config policy, performance, and evidence sources |
+| `GET /overview` | Full dashboard read model: health, tuning, profiles, gateways, cron, sessions, Kanban, performance, Trace Spine, Operational Evals, Metrics Spine, skill hygiene, config policy, and evidence sources |
+| `GET /tuning` | Tuning-focused read model with score breakdown, Kanban intelligence, Trace Spine, Operational Evals, Metrics Spine, skill hygiene, config policy, performance, and evidence sources |
 
 Routes sit behind the Hermes dashboard session-token middleware. The frontend
-calls them through the plugin SDK's `fetchJSON`, which injects the token.
+calls them through the plugin SDK's `fetchJSON`, which injects the token. In
+static user-plugin mode these routes are not mounted; run `npm run test:compat`
+to identify the active mode.
 
 ## Privacy
 
@@ -159,6 +170,7 @@ build step. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflo
 
 ```bash
 npm run verify
+npm run test:compat
 npm run test:visual
 npm run test:live
 npm run test:performance
@@ -172,6 +184,12 @@ hand-authored dashboard assets directly, checks desktop/mobile readability acros
 multiple fixture states, validates link destinations, verifies empty evidence
 sections stay hidden, verifies staged dashboard modes, and catches private-label
 leaks in the no-labels scenario.
+
+`npm run test:compat` diagnoses whether the current Hermes install mounted
+Olympus backend routes or is running in static-user-plugin mode. If it reports
+`backendMounted: false` with the non-bundled backend refusal reason, the live
+backend gates are blocked by Hermes' security boundary rather than by a frontend
+or syntax failure.
 
 `npm run test:live` checks the real Hermes dashboard route at
 `http://127.0.0.1:9119/olympus`. It starts Hermes when needed, verifies

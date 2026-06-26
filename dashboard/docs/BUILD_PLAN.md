@@ -162,7 +162,17 @@ Frontend:
 - Does not return prompt text, personality text, base URLs, API keys, env
   values, provider secrets, local paths, or exact route labels by default.
 
-### 7. Hermes Desktop Plugin Parity (planned)
+### 7. Metrics Spine V1 (shipped)
+
+- Adds `metrics_spine` to `/overview` and `/tuning` without adding new routes or storage.
+- Aggregates Hermes-configured profile `state.db` counters for usage visibility, not ledger ownership.
+- Reads root/profile `skills/.usage.json` files for skill lifecycle counts across configured profiles.
+- Shows profile workload, skill lifecycle, work reliability, eval state, and cost/token confidence in Diagnostics.
+- Labels cost as visibility/confidence because Hermes provider pricing, streaming usage, and delegated cost persistence can be incomplete.
+- Links raw usage questions to Hermes `/analytics`; Olympus does not render daily bars, model leaderboards, skill leaderboards, raw spend ledgers, transcripts, or raw session tables.
+- Keeps raw paths, raw session IDs, raw skill names, prompt text, config text, and secret-like values out of the payload by default.
+
+### 8. Hermes Desktop Plugin Parity (planned)
 
 - Keep Olympus Dashboard-first until Desktop exposes dashboard plugin tabs.
 - Run `npm run test:desktop` before preparing the upstream PR.
@@ -173,7 +183,7 @@ Frontend:
 - The Desktop preflight passes locally with a warning until plugin-tab route
   parity lands.
 
-### 8. Deterministic Operational Evals (shipped)
+### 9. Deterministic Operational Evals (shipped)
 
 - Adds `ops_evals` to `/overview` and `/tuning`.
 - Uses fixed reliability, routing, skill-use, and efficiency checks from Hermes

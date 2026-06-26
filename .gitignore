@@ -71,7 +71,8 @@ bandit-report*.json
 .vscode/
 .idea/
 
-# Local scratch
+# Local scratch / generated artifacts
+outputs/
 tmp/
 temp/
 *.tmp
