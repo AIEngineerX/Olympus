@@ -48,6 +48,20 @@ class PrivacyContractTest(unittest.TestCase):
         self.assertIn("cron:", payload[0]["id"])
         self.assertEqual(payload[0]["id"], payload[0]["job_id"])
 
+    def test_kanban_conn_reads_existing_board_db(self):
+        db = self.home / "kanban.db"
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE tasks (id TEXT, status TEXT)")
+        con.commit()
+        con.close()
+
+        ro = plugin_api._kanban_conn(db)
+
+        self.assertIsNotNone(ro)
+        assert ro is not None
+        self.assertEqual(ro.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 0)
+        ro.close()
+
     def test_kanban_worker_run_and_pid_ids_are_public_refs_when_local_labels_are_hidden(self):
         db = self.home / "kanban.db"
         con = sqlite3.connect(db)

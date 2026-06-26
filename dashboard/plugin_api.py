@@ -942,12 +942,23 @@ def discover_kanban_boards() -> List[Dict[str, Any]]:
 def _kanban_conn(path: Path) -> Optional[sqlite3.Connection]:
     if not path.exists():
         return None
-    try:
-        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1.5)
-        con.row_factory = sqlite3.Row
-        return con
-    except Exception:
-        return None
+    # Some Kanban SQLite files can be opened in `mode=ro` but fail on the
+    # first read when SQLite tries to resolve journal/WAL sidecars. Verify the
+    # connection before returning it and fall back to immutable read-only mode.
+    for uri in (f"file:{path}?mode=ro", f"file:{path}?mode=ro&immutable=1"):
+        con: Optional[sqlite3.Connection] = None
+        try:
+            con = sqlite3.connect(uri, uri=True, timeout=1.5)
+            con.row_factory = sqlite3.Row
+            con.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+            return con
+        except Exception:
+            if con is not None:
+                try:
+                    con.close()
+                except Exception:
+                    pass
+    return None
 
 
 def profile_config(profile_home: Path) -> Dict[str, Any]:
