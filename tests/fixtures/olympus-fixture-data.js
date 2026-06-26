@@ -460,6 +460,91 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       }
     ]
   },
+  metrics_spine: {
+    schema_version: "olympus.metrics_spine.v1",
+    generated_at: "2026-06-26T16:00:00Z",
+    window: { days: 30, session_sample_limit: 60, ledger_owner: "/analytics" },
+    ownership: {
+      olympus: "operational metrics, risk, readiness, usability signals, and handoff evidence",
+      hermes_analytics: "usage ledger, daily token bars, top models, top skills, and raw cost totals"
+    },
+    coverage: {
+      state_store: "warning",
+      state_stores_seen: 5,
+      skill_usage: "ok",
+      skill_usage_sources: 5,
+      kanban: "ok",
+      cost_visibility: "partial",
+      config_grounding: { toolsets: 6, enabled_toolsets: 4, max_turns: 120, auxiliary_routes: 2 }
+    },
+    usage: {
+      sessions: 37,
+      api_calls: 94,
+      total_tokens: 184000,
+      tool_calls: 412,
+      costed_sessions: 9,
+      estimated_cost_usd: 1.42,
+      actual_cost_usd: 0,
+      cost_confidence: "partial",
+      zero_usage_suspect_sessions: 3,
+      zero_cost_token_sessions: 8,
+      recommended_view: "/analytics",
+      note: "Operational evidence only. Hermes Analytics owns raw usage and cost ledgers."
+    },
+    agents: {
+      profiles: 5,
+      active_profiles: 3,
+      idle_profiles: 2,
+      profiles_with_skills: 4,
+      needs_review: 1,
+      average_score: 82,
+      cohorts: [],
+      recommended_view: "/profiles"
+    },
+    skills: {
+      recorded: 42,
+      created_30d: 4,
+      agent_created: 2,
+      used: 31,
+      never_used: 11,
+      stale: 6,
+      archived: 1,
+      recently_patched: 5,
+      forced_skill_tasks: 3,
+      metadata_gaps: 1,
+      by_profile: [],
+      recommended_view: "/skills"
+    },
+    work: {
+      open: 12,
+      ready: 3,
+      running: 2,
+      blocked: 1,
+      failed_runs: 1,
+      stale_workers: 1,
+      recommended_view: "/kanban"
+    },
+    evals: {
+      state: "critical",
+      score: 62,
+      reliability: "warning",
+      routing: "warning",
+      skill_use: "critical",
+      efficiency: "warning",
+      recommended_view: "/sessions"
+    },
+    signals: [
+      {
+        kind: "usage",
+        severity: "warning",
+        title: "Token accounting has gaps",
+        detail: "Some Hermes sessions have work evidence but zero recorded token usage. Treat usage and cost totals as lower-bound evidence.",
+        evidence: "3 zero-usage suspect session(s)",
+        recommended_view: "/analytics",
+        action_label: "Open Analytics"
+      }
+    ]
+  },
   config_policy: {
     summary: {
       state: "warning",

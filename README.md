@@ -20,6 +20,7 @@ owns vs. what Hermes owns).
 - Surfaces safe config policy risks: turn limits, loop guardrails, browser privacy flags, fallbacks, toolsets, and auxiliary cost visibility.
 - Computes a transparent heuristic readiness score with a full deduction breakdown.
 - Opens with a Brief view for the next action, then stages deeper panels behind Agents, Skills, Kanban, Policy, and Diagnostics tabs.
+- Adds Metrics Spine in Diagnostics: aggregate Hermes-grounded usage visibility, profile workload, skill lifecycle, and work reliability for tuning.
 - Keeps v1 read-only: every action is a link to the Hermes page that owns it.
 
 ## What It Does Not Do
@@ -87,7 +88,7 @@ Deeper inspection is split into purpose-built tabs:
 - Skills: Skill Coverage and Skill Hygiene.
 - Kanban: Trace Spine and Kanban Intelligence.
 - Policy: Tool Policy & Aux Cost.
-- Diagnostics: Operational Evals, Production Diagnostics, and Evidence Sources.
+- Diagnostics: Operational Evals, Metrics Spine, Production Diagnostics, and Evidence Sources.
 
 ## Hermes Desktop
 
@@ -112,8 +113,8 @@ When Olympus is bundled or another trusted backend-plugin path is available, Her
 | Route | Purpose |
 | --- | --- |
 | `GET /health` | Liveness and a coarse runtime status summary |
-| `GET /overview` | Full dashboard read model: health, tuning, profiles, gateways, cron, sessions, Kanban, performance, Trace Spine, Operational Evals, skill hygiene, config policy, and evidence sources |
-| `GET /tuning` | Tuning-focused read model with score breakdown, Kanban intelligence, Trace Spine, Operational Evals, skill hygiene, config policy, performance, and evidence sources |
+| `GET /overview` | Full dashboard read model: health, tuning, profiles, gateways, cron, sessions, Kanban, performance, Trace Spine, Operational Evals, Metrics Spine, skill hygiene, config policy, and evidence sources |
+| `GET /tuning` | Tuning-focused read model with score breakdown, Kanban intelligence, Trace Spine, Operational Evals, Metrics Spine, skill hygiene, config policy, performance, and evidence sources |
 
 Routes sit behind the Hermes dashboard session-token middleware. The frontend
 calls them through the plugin SDK's `fetchJSON`, which injects the token. In

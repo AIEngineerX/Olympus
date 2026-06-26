@@ -519,45 +519,106 @@ def _stored_skill_audits(meta: Dict[str, Any]) -> List[Dict[str, str]]:
     return audits
 
 
-def collect_skill_metadata() -> Dict[str, Any]:
+def _profile_skill_usage_sources(profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """Return read-only skill usage files grounded in configured Hermes profiles."""
+    base = get_hermes_home()
+    sources: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(label: str, public_name: str, home: Path) -> None:
+        key = str(home.resolve()) if home.exists() else str(home)
+        if key in seen:
+            return
+        seen.add(key)
+        sources.append({
+            "profile": public_name,
+            "label": label,
+            "path": home / "skills" / ".usage.json",
+        })
+
+    if profiles:
+        for idx, profile in enumerate(profiles):
+            raw_path = profile.get("_path")
+            if not raw_path:
+                continue
+            label = str(profile.get("label") or f"Profile {idx}")
+            public_name = str(profile.get("_public_name") or profile.get("id") or f"profile_{idx}")
+            add(label, public_name, Path(str(raw_path)))
+    else:
+        add("Default", "default", base)
+
+    return sources
+
+
+def collect_skill_metadata(profiles: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     skills_dir = get_hermes_home() / "skills"
-    usage_path = skills_dir / ".usage.json"
     hub_lock_path = skills_dir / ".hub" / "lock.json"
-    usage_data = read_json(usage_path)
     hub_data = read_json(hub_lock_path)
-    usage = usage_data if isinstance(usage_data, dict) else {}
     installed = hub_data.get("installed") if isinstance(hub_data, dict) and isinstance(hub_data.get("installed"), dict) else {}
     now_ts = time.time()
 
     usage_items: List[Dict[str, Any]] = []
+    profile_usage: List[Dict[str, Any]] = []
+    usage_sources = _profile_skill_usage_sources(profiles)
+    usage_present = False
+    usage_read_failures = 0
 
-    for name, meta in sorted(usage.items()):
-        if not isinstance(meta, dict):
-            continue
-        use_count = safe_int(meta.get("use_count"))
-        view_count = safe_int(meta.get("view_count"))
-        patch_count = safe_int(meta.get("patch_count"))
-        last_used_ts = _epoch_seconds(meta.get("last_used_at"))
-        last_patched_ts = _epoch_seconds(meta.get("last_patched_at"))
-        archived = bool(meta.get("archived_at")) or str(meta.get("state") or "").lower() == "archived"
-        stale = not last_used_ts or now_ts - last_used_ts > 90 * 24 * 60 * 60
-        recently_patched = bool(last_patched_ts and now_ts - last_patched_ts <= 14 * 24 * 60 * 60)
-        usage_items.append({
-            "_name": str(name),
-            "id": _public_skill_label(name),
-            "label": _public_skill_label(name),
-            "state": "archived" if archived else (str(meta.get("state") or "active")),
-            "use_count": use_count,
-            "view_count": view_count,
-            "patch_count": patch_count,
-            "pinned": bool(meta.get("pinned")),
-            "archived": archived,
-            "stale": stale,
-            "recently_patched": recently_patched,
-            "created_at": ts_to_iso(meta.get("created_at")),
-            "last_used_at": ts_to_iso(meta.get("last_used_at")),
-            "last_viewed_at": ts_to_iso(meta.get("last_viewed_at")),
-            "last_patched_at": ts_to_iso(meta.get("last_patched_at")),
+    for source in usage_sources:
+        usage_path = Path(source["path"])
+        usage_data = read_json(usage_path)
+        if usage_path.exists():
+            usage_present = True
+        if usage_path.exists() and not isinstance(usage_data, dict):
+            usage_read_failures += 1
+        usage = usage_data if isinstance(usage_data, dict) else {}
+        source_items: List[Dict[str, Any]] = []
+        for name, meta in sorted(usage.items()):
+            if not isinstance(meta, dict):
+                continue
+            use_count = safe_int(meta.get("use_count"))
+            view_count = safe_int(meta.get("view_count"))
+            patch_count = safe_int(meta.get("patch_count"))
+            last_used_ts = _epoch_seconds(meta.get("last_used_at"))
+            last_patched_ts = _epoch_seconds(meta.get("last_patched_at"))
+            archived = bool(meta.get("archived_at")) or str(meta.get("state") or "").lower() == "archived"
+            stale = not last_used_ts or now_ts - last_used_ts > 90 * 24 * 60 * 60
+            recently_patched = bool(last_patched_ts and now_ts - last_patched_ts <= 14 * 24 * 60 * 60)
+            created_ts = _epoch_seconds(meta.get("created_at"))
+            item = {
+                "_name": str(name),
+                "_profile": source.get("profile"),
+                "id": _public_skill_label(f"{source.get('profile')}:{name}"),
+                "label": _public_skill_label(name),
+                "profile": source.get("profile"),
+                "profile_label": source.get("label"),
+                "state": "archived" if archived else (str(meta.get("state") or "active")),
+                "created_by": "agent" if meta.get("created_by") == "agent" or meta.get("agent_created") is True else None,
+                "use_count": use_count,
+                "view_count": view_count,
+                "patch_count": patch_count,
+                "pinned": bool(meta.get("pinned")),
+                "archived": archived,
+                "stale": stale,
+                "recently_patched": recently_patched,
+                "created_recently": bool(created_ts and now_ts - created_ts <= 30 * 24 * 60 * 60),
+                "created_at": ts_to_iso(meta.get("created_at")),
+                "last_used_at": ts_to_iso(meta.get("last_used_at")),
+                "last_viewed_at": ts_to_iso(meta.get("last_viewed_at")),
+                "last_patched_at": ts_to_iso(meta.get("last_patched_at")),
+            }
+            usage_items.append(item)
+            source_items.append(item)
+        profile_usage.append({
+            "profile": source.get("profile"),
+            "label": source.get("label"),
+            "usage_present": usage_path.exists(),
+            "skills": len(source_items),
+            "created_30d": sum(1 for item in source_items if item.get("created_recently")),
+            "used": sum(1 for item in source_items if int(item.get("use_count") or 0) > 0),
+            "never_used": sum(1 for item in source_items if int(item.get("use_count") or 0) == 0),
+            "stale": sum(1 for item in source_items if item.get("stale")),
+            "archived": sum(1 for item in source_items if item.get("archived")),
+            "recently_patched": sum(1 for item in source_items if item.get("recently_patched")),
         })
 
     hub_items: List[Dict[str, Any]] = []
@@ -590,12 +651,16 @@ def collect_skill_metadata() -> Dict[str, Any]:
     audit_records = [audit for item in hub_items for audit in as_list(item.get("security_audits")) if isinstance(audit, dict)]
     return {
         "summary": {
-            "usage_present": usage_path.exists(),
+            "usage_present": usage_present,
+            "usage_sources": len(usage_sources),
             "hub_lock_present": hub_lock_path.exists(),
             "total_skills": len(usage_items),
+            "created_30d": sum(1 for item in usage_items if item.get("created_recently")),
+            "agent_created": sum(1 for item in usage_items if item.get("created_by") == "agent"),
             "archived": len(archived),
             "pinned": sum(1 for item in usage_items if item.get("pinned")),
             "never_used": len(never_used),
+            "used": sum(1 for item in usage_items if int(item.get("use_count") or 0) > 0),
             "stale": len(stale),
             "recently_patched": len(recently_patched),
             "hub_installed": len(hub_items),
@@ -604,8 +669,9 @@ def collect_skill_metadata() -> Dict[str, Any]:
             "hub_audit_pass": sum(1 for item in audit_records if item.get("verdict") == "pass"),
             "hub_audit_warn": sum(1 for item in audit_records if item.get("verdict") == "warn"),
             "hub_audit_fail": sum(1 for item in audit_records if item.get("verdict") == "fail"),
-            "read_failures": int(usage_path.exists() and not isinstance(usage_data, dict)) + int(hub_lock_path.exists() and not isinstance(hub_data, dict)),
+            "read_failures": usage_read_failures + int(hub_lock_path.exists() and not isinstance(hub_data, dict)),
         },
+        "profile_usage": profile_usage,
         "usage_items": usage_items,
         "hub_items": hub_items,
     }
@@ -1260,9 +1326,11 @@ def collect_profiles() -> List[Dict[str, Any]]:
 
     candidates = [("default", base)]
     prof_dir = base / "profiles"
+    if not prof_dir.exists() and base.parent.name == "profiles":
+        prof_dir = base.parent
     if prof_dir.exists():
         for p in sorted(prof_dir.iterdir()):
-            if p.is_dir():
+            if p.is_dir() and p.resolve() != base.resolve():
                 candidates.append((p.name, p))
 
     for name, home in candidates:
@@ -1954,6 +2022,180 @@ def score_state(score: int) -> str:
     if score < 90:
         return "info"
     return "ok"
+
+
+def collect_usage_rollup(profiles: Optional[List[Dict[str, Any]]] = None, days: int = 30) -> Dict[str, Any]:
+    """Aggregate Hermes usage counters from configured profile state stores.
+
+    Olympus uses this only as operational evidence. Hermes Analytics owns the
+    usage ledger, daily bars, model leaderboards, skill leaderboards, and raw
+    cost totals.
+    """
+    cutoff = time.time() - max(1, int(days)) * 86400
+    sources = profiles or [{"label": "Default", "_public_name": "default", "_path": str(get_hermes_home())}]
+    totals = {
+        "sessions": 0,
+        "messages": 0,
+        "tool_calls": 0,
+        "api_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "total_tokens": 0,
+        "estimated_cost_usd": 0.0,
+        "actual_cost_usd": 0.0,
+        "costed_sessions": 0,
+        "actual_costed_sessions": 0,
+        "estimated_costed_sessions": 0,
+        "zero_usage_suspect_sessions": 0,
+        "zero_cost_token_sessions": 0,
+        "completed_sessions": 0,
+        "errored_sessions": 0,
+        "stale_or_open_sessions": 0,
+    }
+    profile_rollups: List[Dict[str, Any]] = []
+    read_failures = 0
+    stores_seen = 0
+
+    def sum_expr(col: str, alias: Optional[str] = None) -> str:
+        alias = alias or col
+        return f"COALESCE(SUM({col}), 0) AS {alias}"
+
+    for idx, profile in enumerate(sources):
+        raw_path = profile.get("_path")
+        if not raw_path:
+            continue
+        db = Path(str(raw_path)) / "state.db"
+        label = str(profile.get("label") or f"Profile {idx}")
+        public_name = str(profile.get("_public_name") or profile.get("id") or f"profile_{idx}")
+        roll = {
+            "profile": public_name,
+            "label": label,
+            "state_store": "missing",
+            "sessions": 0,
+            "tool_calls": 0,
+            "api_calls": 0,
+            "total_tokens": 0,
+            "costed_sessions": 0,
+            "zero_usage_suspect_sessions": 0,
+            "zero_cost_token_sessions": 0,
+        }
+        if not db.exists():
+            profile_rollups.append(roll)
+            continue
+        con: Optional[sqlite3.Connection] = None
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+            con.row_factory = sqlite3.Row
+            cols = table_columns(con, "sessions")
+            if not cols:
+                raise RuntimeError("sessions table missing")
+            stores_seen += 1
+            terms = ["COUNT(*) AS sessions"]
+            for col, alias in [
+                ("message_count", "messages"),
+                ("tool_call_count", "tool_calls"),
+                ("api_call_count", "api_calls"),
+                ("input_tokens", "input_tokens"),
+                ("output_tokens", "output_tokens"),
+                ("reasoning_tokens", "reasoning_tokens"),
+                ("cache_read_tokens", "cache_read_tokens"),
+                ("cache_write_tokens", "cache_write_tokens"),
+                ("estimated_cost_usd", "estimated_cost_usd"),
+                ("actual_cost_usd", "actual_cost_usd"),
+            ]:
+                terms.append(sum_expr(col, alias) if col in cols else f"0 AS {alias}")
+            if "actual_cost_usd" in cols:
+                terms.append("SUM(CASE WHEN COALESCE(actual_cost_usd, 0) > 0 THEN 1 ELSE 0 END) AS actual_costed_sessions")
+            else:
+                terms.append("0 AS actual_costed_sessions")
+            if "estimated_cost_usd" in cols:
+                terms.append("SUM(CASE WHEN COALESCE(estimated_cost_usd, 0) > 0 THEN 1 ELSE 0 END) AS estimated_costed_sessions")
+            else:
+                terms.append("0 AS estimated_costed_sessions")
+            token_expr = " + ".join(f"COALESCE({c}, 0)" for c in ("input_tokens", "output_tokens", "reasoning_tokens") if c in cols) or "0"
+            work_expr = " + ".join(f"COALESCE({c}, 0)" for c in ("message_count", "tool_call_count", "api_call_count") if c in cols) or "0"
+            terms.append(f"SUM(CASE WHEN ({work_expr}) > 0 AND ({token_expr}) = 0 THEN 1 ELSE 0 END) AS zero_usage_suspect_sessions")
+            cost_expr = " + ".join(f"COALESCE({c}, 0)" for c in ("actual_cost_usd", "estimated_cost_usd") if c in cols) or "0"
+            terms.append(f"SUM(CASE WHEN ({token_expr}) > 0 AND ({cost_expr}) = 0 THEN 1 ELSE 0 END) AS zero_cost_token_sessions")
+            if "end_reason" in cols:
+                terms.append("SUM(CASE WHEN end_reason IN ('completed', 'end', 'user_exit') THEN 1 ELSE 0 END) AS completed_sessions")
+                terms.append("SUM(CASE WHEN end_reason IS NOT NULL AND end_reason NOT IN ('completed', 'end', 'user_exit') THEN 1 ELSE 0 END) AS errored_sessions")
+            else:
+                terms.append("0 AS completed_sessions")
+                terms.append("0 AS errored_sessions")
+            if "ended_at" in cols:
+                terms.append("SUM(CASE WHEN ended_at IS NULL THEN 1 ELSE 0 END) AS stale_or_open_sessions")
+            else:
+                terms.append("0 AS stale_or_open_sessions")
+            where = ""
+            params: tuple[Any, ...] = ()
+            if "started_at" in cols:
+                where = " WHERE started_at >= ?"
+                params = (cutoff,)
+            row = con.execute(f"SELECT {', '.join(terms)} FROM sessions{where}", params).fetchone()
+            if row is None:
+                profile_rollups.append(roll)
+                continue
+            token_total = safe_int(row_value(row, "input_tokens")) + safe_int(row_value(row, "output_tokens")) + safe_int(row_value(row, "reasoning_tokens"))
+            actual_costed = safe_int(row_value(row, "actual_costed_sessions"))
+            estimated_costed = safe_int(row_value(row, "estimated_costed_sessions"))
+            roll.update({
+                "state_store": "ok",
+                "sessions": safe_int(row_value(row, "sessions")),
+                "tool_calls": safe_int(row_value(row, "tool_calls")),
+                "api_calls": safe_int(row_value(row, "api_calls")),
+                "total_tokens": token_total,
+                "costed_sessions": actual_costed + estimated_costed,
+                "zero_usage_suspect_sessions": safe_int(row_value(row, "zero_usage_suspect_sessions")),
+                "zero_cost_token_sessions": safe_int(row_value(row, "zero_cost_token_sessions")),
+            })
+            for key in totals:
+                if key in ("estimated_cost_usd", "actual_cost_usd"):
+                    totals[key] += float(row_value(row, key, 0) or 0)
+                elif key == "total_tokens":
+                    totals[key] += token_total
+                elif key == "costed_sessions":
+                    totals[key] += actual_costed + estimated_costed
+                elif key in row.keys():
+                    totals[key] += safe_int(row_value(row, key))
+            profile_rollups.append(roll)
+        except Exception as exc:
+            read_failures += 1
+            log_read_warning("usage rollup failed", exc)
+            roll["state_store"] = "warning"
+            profile_rollups.append(roll)
+        finally:
+            if con is not None:
+                try:
+                    con.close()
+                except Exception:
+                    pass
+
+    cost_confidence = "unknown"
+    if totals["actual_costed_sessions"]:
+        cost_confidence = "actual"
+    elif totals["estimated_costed_sessions"] and totals["zero_cost_token_sessions"]:
+        cost_confidence = "partial"
+    elif totals["estimated_costed_sessions"]:
+        cost_confidence = "estimated"
+    elif totals["total_tokens"]:
+        cost_confidence = "missing"
+
+    return {
+        "window_days": max(1, int(days)),
+        "state": "warning" if read_failures or totals["zero_usage_suspect_sessions"] or cost_confidence in {"partial", "missing"} else ("active" if totals["sessions"] else "unknown"),
+        "stores_seen": stores_seen,
+        "read_failures": read_failures,
+        "cost_confidence": cost_confidence,
+        **totals,
+        "estimated_cost_usd": round(float(totals["estimated_cost_usd"]), 4),
+        "actual_cost_usd": round(float(totals["actual_cost_usd"]), 4),
+        "profiles": profile_rollups[:12],
+        "recommended_view": "/analytics",
+    }
 
 
 def build_metrics(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -3204,6 +3446,181 @@ def build_ops_evals(
     }
 
 
+def build_metrics_spine(
+    profiles: List[Dict[str, Any]],
+    sessions: List[Dict[str, Any]],
+    kanban: Optional[Dict[str, Any]],
+    skill_metadata: Dict[str, Any],
+    skill_coverage: Dict[str, Any],
+    skill_hygiene: Dict[str, Any],
+    profile_fitness: Dict[str, Any],
+    performance: Dict[str, Any],
+    ops_evals: Dict[str, Any],
+    config_policy: Dict[str, Any],
+    usage_rollup: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Hermes-grounded operational metrics for tuning, not a usage ledger."""
+    kanban = kanban or {}
+    rollup = usage_rollup or collect_usage_rollup(profiles)
+    skill_summary = skill_metadata.get("summary") if isinstance(skill_metadata.get("summary"), dict) else {}
+    coverage_summary = skill_coverage.get("summary") if isinstance(skill_coverage.get("summary"), dict) else {}
+    hygiene_summary = skill_hygiene.get("summary") if isinstance(skill_hygiene.get("summary"), dict) else {}
+    fitness_summary = profile_fitness.get("summary") if isinstance(profile_fitness.get("summary"), dict) else {}
+    performance_summary = performance.get("summary") if isinstance(performance.get("summary"), dict) else {}
+    ops_summary = ops_evals.get("summary") if isinstance(ops_evals.get("summary"), dict) else {}
+    policy_summary = config_policy.get("summary") if isinstance(config_policy.get("summary"), dict) else {}
+    kanban_totals = kanban.get("totals") if isinstance(kanban.get("totals"), dict) else {}
+    active_profiles = sum(1 for profile in profiles if profile.get("state") == "active")
+    idle_profiles = sum(1 for profile in profiles if profile.get("state") == "idle")
+    profiles_with_skills = sum(1 for profile in profiles if int(profile.get("skill_count") or 0) > 0)
+    profile_rows = as_list(skill_metadata.get("profile_usage"))[:8]
+    usage_state = rollup.get("state") or "unknown"
+    cost_confidence = rollup.get("cost_confidence") or "unknown"
+
+    signals: List[Dict[str, Any]] = []
+    def add_signal(kind: str, severity: str, title: str, detail: str, evidence: str, view: str) -> None:
+        signals.append({
+            "kind": kind,
+            "severity": severity,
+            "title": title,
+            "detail": detail,
+            "evidence": evidence,
+            "recommended_view": view,
+            "action_label": _action_label_for_view(view),
+        })
+
+    if int(rollup.get("zero_usage_suspect_sessions") or 0):
+        add_signal(
+            "usage",
+            "warning",
+            "Token accounting has gaps",
+            "Some Hermes sessions have work evidence but zero recorded token usage. Treat usage and cost totals as lower-bound evidence.",
+            f"{rollup.get('zero_usage_suspect_sessions')} zero-usage suspect session(s)",
+            "/analytics",
+        )
+    if cost_confidence in {"partial", "missing"}:
+        add_signal(
+            "cost",
+            "warning",
+            "Cost visibility is incomplete",
+            "Hermes recorded tokens without reliable cost on some routes. Olympus should use cost as a risk signal, not a spend ledger.",
+            f"cost confidence: {cost_confidence}",
+            "/analytics",
+        )
+    if int(hygiene_summary.get("never_used") or 0):
+        add_signal(
+            "skill",
+            "info",
+            "Unused skills need review",
+            "Skills with no use evidence may be stale, over-specific, or created before the workflow repeated.",
+            f"{hygiene_summary.get('never_used')} never-used skill record(s)",
+            "/skills",
+        )
+    if int(performance_summary.get("avg_tools_per_session") or 0) >= TOOL_HEAVY_THRESHOLD:
+        add_signal(
+            "efficiency",
+            "warning",
+            "Tool pressure is high",
+            "High tool calls per session usually means missing procedure, weak routing, or too-broad tasks.",
+            f"avg {performance_summary.get('avg_tools_per_session')} tools/session",
+            "/sessions",
+        )
+    if int(kanban_totals.get("blocked") or 0) or int(kanban.get("stale_workers") or 0):
+        add_signal(
+            "work",
+            "warning",
+            "Work reliability needs review",
+            "Blocked work or stale workers reduce agent usability even when usage volume looks healthy.",
+            f"{kanban_totals.get('blocked') or 0} blocked / {kanban.get('stale_workers') or 0} stale worker(s)",
+            "/kanban",
+        )
+
+    return {
+        "schema_version": "olympus.metrics_spine.v1",
+        "generated_at": now_iso(),
+        "window": {
+            "days": int(rollup.get("window_days") or 30),
+            "session_sample_limit": len(sessions),
+            "ledger_owner": "/analytics",
+        },
+        "ownership": {
+            "olympus": "operational metrics, risk, readiness, usability signals, and handoff evidence",
+            "hermes_analytics": "usage ledger, daily token bars, top models, top skills, and raw cost totals",
+        },
+        "coverage": {
+            "state_store": usage_state,
+            "state_stores_seen": rollup.get("stores_seen") or 0,
+            "skill_usage": "warning" if skill_summary.get("read_failures") else ("ok" if skill_summary.get("usage_present") else "missing"),
+            "skill_usage_sources": skill_summary.get("usage_sources") or 0,
+            "kanban": "warning" if any(isinstance(board, dict) and board.get("error") for board in as_list(kanban.get("boards"))) else ("ok" if kanban.get("boards") else "missing"),
+            "cost_visibility": cost_confidence,
+            "config_grounding": {
+                "toolsets": policy_summary.get("toolsets") or 0,
+                "enabled_toolsets": policy_summary.get("enabled_toolsets") or 0,
+                "max_turns": policy_summary.get("max_turns") or 0,
+                "auxiliary_routes": policy_summary.get("aux_configured") or 0,
+            },
+        },
+        "usage": {
+            "sessions": rollup.get("sessions") or 0,
+            "api_calls": rollup.get("api_calls") or 0,
+            "total_tokens": rollup.get("total_tokens") or 0,
+            "tool_calls": rollup.get("tool_calls") or 0,
+            "costed_sessions": rollup.get("costed_sessions") or 0,
+            "estimated_cost_usd": rollup.get("estimated_cost_usd") or 0,
+            "actual_cost_usd": rollup.get("actual_cost_usd") or 0,
+            "cost_confidence": cost_confidence,
+            "zero_usage_suspect_sessions": rollup.get("zero_usage_suspect_sessions") or 0,
+            "zero_cost_token_sessions": rollup.get("zero_cost_token_sessions") or 0,
+            "recommended_view": "/analytics",
+            "note": "Operational evidence only. Hermes Analytics owns raw usage and cost ledgers.",
+        },
+        "agents": {
+            "profiles": len(profiles),
+            "active_profiles": active_profiles,
+            "idle_profiles": idle_profiles,
+            "profiles_with_skills": profiles_with_skills,
+            "needs_review": fitness_summary.get("needs_review") or 0,
+            "average_score": fitness_summary.get("average_score") or 0,
+            "cohorts": strip_internal(rollup.get("profiles") or []),
+            "recommended_view": "/profiles",
+        },
+        "skills": {
+            "recorded": skill_summary.get("total_skills") or 0,
+            "created_30d": skill_summary.get("created_30d") or 0,
+            "agent_created": skill_summary.get("agent_created") or 0,
+            "used": skill_summary.get("used") or 0,
+            "never_used": hygiene_summary.get("never_used") or skill_summary.get("never_used") or 0,
+            "stale": hygiene_summary.get("stale") or skill_summary.get("stale") or 0,
+            "archived": hygiene_summary.get("archived") or skill_summary.get("archived") or 0,
+            "recently_patched": hygiene_summary.get("recently_patched") or skill_summary.get("recently_patched") or 0,
+            "forced_skill_tasks": coverage_summary.get("forced_skill_tasks") or 0,
+            "metadata_gaps": hygiene_summary.get("forced_skill_metadata_gaps") or 0,
+            "by_profile": strip_internal(profile_rows),
+            "recommended_view": "/skills",
+        },
+        "work": {
+            "open": kanban.get("open") or 0,
+            "ready": kanban_totals.get("ready") or 0,
+            "running": kanban_totals.get("running") or 0,
+            "blocked": kanban_totals.get("blocked") or 0,
+            "failed_runs": performance.get("metrics", {}).get("failed_kanban_runs") if isinstance(performance.get("metrics"), dict) else 0,
+            "stale_workers": kanban.get("stale_workers") or 0,
+            "recommended_view": "/kanban",
+        },
+        "evals": {
+            "state": ops_summary.get("state") or "unknown",
+            "score": ops_summary.get("score") or 0,
+            "reliability": next((item.get("state") for item in as_list(ops_evals.get("items")) if isinstance(item, dict) and item.get("id") == "reliability"), "unknown"),
+            "routing": next((item.get("state") for item in as_list(ops_evals.get("items")) if isinstance(item, dict) and item.get("id") == "routing"), "unknown"),
+            "skill_use": next((item.get("state") for item in as_list(ops_evals.get("items")) if isinstance(item, dict) and item.get("id") == "skill_use"), "unknown"),
+            "efficiency": next((item.get("state") for item in as_list(ops_evals.get("items")) if isinstance(item, dict) and item.get("id") == "efficiency"), "unknown"),
+            "recommended_view": "/sessions",
+        },
+        "signals": signals[:8],
+    }
+
+
 def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]], cron: List[Dict[str, Any]], sessions: List[Dict[str, Any]], health: Dict[str, Any], attention: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     failed_cron = [j for j in cron if j.get("state") == "error"]
     paused_cron = [j for j in cron if j.get("state") == "paused"]
@@ -3497,7 +3914,7 @@ async def overview() -> Dict[str, Any]:
     party = build_party(profiles, gateways, cron, sessions, kanban, orchestration)
     activity_events = build_activity_events(sessions, cron, gateways, kanban)
     skill_coverage = build_skill_coverage(profiles, sessions, kanban)
-    skill_metadata = collect_skill_metadata()
+    skill_metadata = collect_skill_metadata(profiles)
     skill_hygiene = build_skill_hygiene(skill_metadata, skill_coverage, kanban)
     profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
     performance = build_performance_tracking(sessions, kanban)
@@ -3505,6 +3922,20 @@ async def overview() -> Dict[str, Any]:
     evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
     config_policy = collect_config_policy(profiles, sessions, kanban)
     ops_evals = build_ops_evals(sessions, kanban, skill_coverage, skill_hygiene, config_policy)
+    usage_rollup = collect_usage_rollup(profiles)
+    metrics_spine = build_metrics_spine(
+        profiles,
+        sessions,
+        kanban,
+        skill_metadata,
+        skill_coverage,
+        skill_hygiene,
+        profile_fitness,
+        performance,
+        ops_evals,
+        config_policy,
+        usage_rollup,
+    )
     health = collect_health(profiles, cron)
     attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
     tuning = build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)
@@ -3527,6 +3958,7 @@ async def overview() -> Dict[str, Any]:
         "performance": strip_internal(performance),
         "trace_spine": strip_internal(trace_spine),
         "ops_evals": strip_internal(ops_evals),
+        "metrics_spine": strip_internal(metrics_spine),
         "evidence_sources": strip_internal(evidence_sources),
         "config_policy": strip_internal(config_policy),
     }
@@ -3546,7 +3978,7 @@ async def tuning() -> Dict[str, Any]:
     party = build_party(profiles, gateways, cron, sessions, kanban, orchestration)
     activity_events = build_activity_events(sessions, cron, gateways, kanban)
     skill_coverage = build_skill_coverage(profiles, sessions, kanban)
-    skill_metadata = collect_skill_metadata()
+    skill_metadata = collect_skill_metadata(profiles)
     skill_hygiene = build_skill_hygiene(skill_metadata, skill_coverage, kanban)
     profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
     performance = build_performance_tracking(sessions, kanban)
@@ -3554,6 +3986,20 @@ async def tuning() -> Dict[str, Any]:
     evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
     config_policy = collect_config_policy(profiles, sessions, kanban)
     ops_evals = build_ops_evals(sessions, kanban, skill_coverage, skill_hygiene, config_policy)
+    usage_rollup = collect_usage_rollup(profiles)
+    metrics_spine = build_metrics_spine(
+        profiles,
+        sessions,
+        kanban,
+        skill_metadata,
+        skill_coverage,
+        skill_hygiene,
+        profile_fitness,
+        performance,
+        ops_evals,
+        config_policy,
+        usage_rollup,
+    )
     health = collect_health(profiles, cron)
     attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
     payload = {
@@ -3570,6 +4016,7 @@ async def tuning() -> Dict[str, Any]:
         "performance": strip_internal(performance),
         "trace_spine": strip_internal(trace_spine),
         "ops_evals": strip_internal(ops_evals),
+        "metrics_spine": strip_internal(metrics_spine),
         "evidence_sources": strip_internal(evidence_sources),
         "config_policy": strip_internal(config_policy),
         "tuning": strip_internal(build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)),

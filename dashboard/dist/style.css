@@ -590,6 +590,8 @@
 .olympus-trace-list,
 .olympus-ops-eval-tiles,
 .olympus-ops-eval-grid,
+.olympus-metrics-grid,
+.olympus-metrics-signals,
 .olympus-policy-tiles,
 .olympus-policy-grid,
 .olympus-kanban-summary,
@@ -606,6 +608,8 @@
 .olympus-trace-item,
 .olympus-ops-eval-tile,
 .olympus-ops-eval-item,
+.olympus-metrics-card,
+.olympus-metrics-signal,
 .olympus-policy-tile,
 .olympus-policy-pane,
 .olympus-kanban-tile,
@@ -1304,6 +1308,80 @@
   overflow-wrap: anywhere;
 }
 
+.olympus-metrics-spine {
+  background:
+    linear-gradient(180deg, rgba(23, 30, 36, 0.92), rgba(9, 12, 17, 0.96)),
+    linear-gradient(90deg, rgba(67, 201, 191, 0.05), rgba(239, 196, 92, 0.04));
+}
+
+.olympus-metrics-ownership {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(67, 201, 191, 0.18);
+  border-radius: 6px;
+  background: rgba(6, 9, 14, 0.36);
+  color: rgba(246, 240, 223, 0.64);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.olympus-metrics-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.olympus-metrics-card,
+.olympus-metrics-signal {
+  min-width: 0;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.olympus-metrics-card-warning,
+.olympus-metrics-signal-warning {
+  border-color: rgba(239, 196, 92, 0.36);
+}
+
+.olympus-metrics-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.olympus-metrics-card h3,
+.olympus-metrics-signal h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.olympus-metrics-rows {
+  display: grid;
+  gap: 0;
+}
+
+.olympus-metrics-card p,
+.olympus-metrics-signal p {
+  margin: 0;
+  color: rgba(246, 240, 223, 0.72);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.olympus-metrics-signals {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.olympus-metrics-signal small {
+  color: rgba(246, 240, 223, 0.58);
+  font-size: 12px;
+}
+
 .olympus-policy {
   background:
     linear-gradient(180deg, rgba(24, 31, 40, 0.92), rgba(10, 12, 18, 0.96)),
@@ -1928,6 +2006,8 @@
   .olympus-trace-tiles,
   .olympus-ops-eval-tiles,
   .olympus-ops-eval-grid,
+  .olympus-metrics-grid,
+  .olympus-metrics-signals,
   .olympus-diagnostic-grid,
   .olympus-evidence-source-grid,
   .olympus-skill-tiles,
@@ -1979,6 +2059,8 @@
   .olympus-hq-grid,
   .olympus-trace-list,
   .olympus-ops-eval-grid,
+  .olympus-metrics-grid,
+  .olympus-metrics-signals,
   .olympus-policy-grid,
   .olympus-skill-grid,
   .olympus-skill-hygiene-grid,
