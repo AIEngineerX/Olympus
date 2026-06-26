@@ -20,7 +20,8 @@
 Complete each item in order and test before starting the next.
 
 0. Production QA Gate (ongoing)
-   - Keep `npm run verify`, `npm run test:visual`, `npm run test:live`, `npm run test:performance`, `npm run test:security`, `npm run test:desktop`, and `npm audit --audit-level=moderate` passing.
+   - Keep `npm run verify`, `npm run test:compat`, `npm run test:visual`, `npm run test:desktop`, and `npm audit --audit-level=moderate` passing.
+   - Run `npm run test:live`, `npm run test:performance`, and `npm run test:security` as live backend gates; in static user-plugin mode they may fail only if they include the explicit backend-compatibility reason from `npm run test:compat`.
    - Maintain fixture states for noisy, healthy, empty, overloaded, stale/blocked, high-cost, and hidden-label systems.
    - Track production gaps in `dashboard/docs/PRODUCTION_READINESS.md`.
    - Static checks and fixture visual smoke now run in CI; live Hermes smoke remains a local release gate.
@@ -48,7 +49,17 @@ Complete each item in order and test before starting the next.
    - Keep Olympus read-only and avoid duplicating Desktop Command Center Usage.
    - Fallback: document browser-dashboard access if Desktop plugin parity is not accepted.
 
-5. Deterministic Eval Signals
+5. Hermes Backend Compatibility (current priority)
+   - Current hardened Hermes refuses Python backend auto-import for user/project
+     dashboard plugins. Olympus' `/api/plugins/olympus/*` routes only work when
+     Olympus is bundled into Hermes or Hermes gains an explicit trusted backend
+     plugin model.
+   - Shipped: compatibility doc and `npm run test:compat` diagnostic.
+   - Remaining: choose one path before feature work: bundled Hermes PR,
+     frontend-only user plugin against existing Hermes APIs, or upstream trusted
+     backend-plugin RFC.
+
+6. Deterministic Eval Signals
    - Shipped: local reliability, efficiency, routing, and skill-use eval signals.
    - Keep them labeled as operational evals, not answer-quality judgments.
 
@@ -58,6 +69,7 @@ Run after each implemented item:
 
 ```bash
 npm run verify
+npm run test:compat
 npm run test:visual
 npm run test:live
 npm run test:performance

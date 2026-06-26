@@ -40,6 +40,7 @@ const stagedModeSections = {
   ],
   Diagnostics: [
     { selector: ".olympus-ops-evals", text: "Operational Evals", minHeight: 180 },
+    { selector: ".olympus-metrics-spine", text: "Metrics Spine", minHeight: 180 },
     { selector: ".olympus-diagnostics", text: "Production Diagnostics", minHeight: 180 }
   ]
 };
@@ -214,6 +215,7 @@ async function collectVisualMetrics(page) {
       policyVisible: Boolean(document.querySelector(".olympus-policy") && renderedText.includes("Tool Policy & Aux Cost")),
       traceSpineVisible: Boolean(document.querySelector(".olympus-trace-spine") && renderedText.includes("Trace Spine")),
       opsEvalsVisible: Boolean(document.querySelector(".olympus-ops-evals") && renderedText.includes("Operational Evals")),
+      metricsSpineVisible: Boolean(document.querySelector(".olympus-metrics-spine") && renderedText.includes("Metrics Spine")),
       horizontalOverflow: Math.max(
         document.documentElement.scrollWidth - window.innerWidth,
         document.body.scrollWidth - window.innerWidth
@@ -251,6 +253,7 @@ for (const scenario of scenarios) {
     expect(metrics.policyVisible).toBe(false);
     expect(metrics.traceSpineVisible).toBe(false);
     expect(metrics.opsEvalsVisible).toBe(false);
+    expect(metrics.metricsSpineVisible).toBe(false);
     expect(metrics.pantheonVisible).toBe(false);
     expect(metrics.badLinks).toEqual([]);
     expect(metrics.modeTabs.map((item) => item.text)).toEqual(["Brief", "Agents", "Skills", "Kanban", "Policy", "Diagnostics"]);
@@ -278,6 +281,7 @@ for (const scenario of scenarios) {
     expect(metrics.policyVisible).toBe(false);
     expect(metrics.traceSpineVisible).toBe(false);
     expect(metrics.opsEvalsVisible).toBe(false);
+    expect(metrics.metricsSpineVisible).toBe(false);
     expect(metrics.pantheonVisible).toBe(false);
     expect(metrics.badLinks).toEqual([]);
     expect(metrics.modeTabs.map((item) => item.text)).toEqual(["Brief", "Agents", "Skills", "Kanban", "Policy", "Diagnostics"]);
@@ -306,4 +310,18 @@ test("desktop noisy mode navigation stages deep inspection panels", async ({ pag
     expect(metrics.smallControls).toEqual([]);
     expect(metrics.tinyVisibleText).toEqual([]);
   }
+});
+
+test("static user-plugin mode falls back to Hermes dashboard APIs", async ({ page }, testInfo) => {
+  const messages = await openFixture(page, testInfo, { width: 1280, height: 720 }, "static-user-plugin");
+
+  expect(messages).toEqual([]);
+  await expect(page.locator(".olympus-static-compatibility")).toBeVisible();
+  await expect(page.locator(".olympus-static-compatibility")).toContainText("Static User-Plugin Mode");
+  await expect(page.locator(".olympus-static-compatibility")).toContainText("/api/dashboard/plugins");
+  await expect(page.locator(".olympus-static-compatibility")).toContainText("Readiness scoring and score deductions");
+  await expect(page.locator(".olympus-agent-hq")).toContainText("Static user-plugin mode detected");
+  await selectMode(page, "Diagnostics");
+  await expect(page.locator(".olympus-diagnostics")).toContainText("Evidence Sources");
+  await expect(page.locator(".olympus-diagnostics")).toContainText("/api/status");
 });
