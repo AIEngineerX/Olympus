@@ -49,9 +49,12 @@
     return "olympus-severity olympus-severity-" + String(severity || "info").toLowerCase();
   }
 
+  const SAFE_ROUTES = new Set(["/analytics", "/config", "/cron", "/kanban", "/logs", "/profiles", "/sessions", "/skills"]);
+
   function routeLink(path) {
     if (!path) return "#";
-    return path.startsWith("/") ? path : "/" + path;
+    const route = path.startsWith("/") ? path : "/" + path;
+    return SAFE_ROUTES.has(route) ? route : "#";
   }
 
   function routeLabel(path) {
@@ -200,6 +203,7 @@
         findings: [{ kind: "compatibility", severity: "warning", title: "Policy synthesis hidden in static mode", detail: "The frontend does not inspect config/env details directly. Use Hermes-owned config pages or bundled Olympus backend mode.", evidence: "Static compatibility fallback", recommended_view: "/config", action_label: "Open Config" }]
       },
       ops_evals: null,
+      metrics_spine: null,
       trace_spine: null,
       kanban: null,
       party: null,
@@ -683,6 +687,115 @@
           item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
         ))
       )
+    );
+  }
+
+  function MetricsSpine({ metrics }) {
+    const data = metrics || {};
+    if (!data.schema_version) return null;
+    const usage = data.usage || {};
+    const agents = data.agents || {};
+    const skills = data.skills || {};
+    const work = data.work || {};
+    const coverage = data.coverage || {};
+    const signals = asList(data.signals);
+    const tiles = [
+      {
+        id: "usage",
+        label: "Usage Visibility",
+        state: coverage.cost_visibility === "missing" || coverage.cost_visibility === "partial" ? "warning" : coverage.cost_visibility ? "active" : "unknown",
+        rows: [
+          ["Sessions", formatCount(usage.sessions)],
+          ["API Calls", formatCount(usage.api_calls)],
+          ["Tokens", formatCount(usage.total_tokens)],
+          ["Cost", usage.cost_confidence || "unknown"]
+        ],
+        detail: "Operational evidence only. Hermes Analytics owns the ledger.",
+        view: usage.recommended_view || "/analytics"
+      },
+      {
+        id: "agents",
+        label: "Agent Workload",
+        state: agents.needs_review ? "warning" : agents.profiles ? "active" : "unknown",
+        rows: [
+          ["Profiles", formatCount(agents.profiles)],
+          ["Active", formatCount(agents.active_profiles)],
+          ["Idle", formatCount(agents.idle_profiles)],
+          ["With Skills", formatCount(agents.profiles_with_skills)]
+        ],
+        detail: "Profile workload and readiness grounded in Hermes profile stores.",
+        view: agents.recommended_view || "/profiles"
+      },
+      {
+        id: "skills",
+        label: "Skill Lifecycle",
+        state: skills.never_used || skills.metadata_gaps ? "warning" : skills.recorded ? "active" : "unknown",
+        rows: [
+          ["Recorded", formatCount(skills.recorded)],
+          ["Created 30d", formatCount(skills.created_30d)],
+          ["Used", formatCount(skills.used)],
+          ["Never Used", formatCount(skills.never_used)]
+        ],
+        detail: "Lifecycle counts come from Hermes skill usage metadata across profiles.",
+        view: skills.recommended_view || "/skills"
+      },
+      {
+        id: "work",
+        label: "Work Reliability",
+        state: work.blocked || work.failed_runs || work.stale_workers ? "warning" : work.open ? "active" : "idle",
+        rows: [
+          ["Open", formatCount(work.open)],
+          ["Ready", formatCount(work.ready)],
+          ["Blocked", formatCount(work.blocked)],
+          ["Failed Runs", formatCount(work.failed_runs)]
+        ],
+        detail: "Kanban reliability tells whether agent work is actually moving.",
+        view: work.recommended_view || "/kanban"
+      }
+    ];
+
+    return el("section", { className: "olympus-section olympus-metrics-spine" },
+      el("div", { className: "olympus-section-head" },
+        el("div", null,
+          el("h2", null, "Metrics Spine"),
+          el("p", null, "Operational metrics for tuning. Hermes Analytics owns the usage ledger.")
+        ),
+        el(StatePill, { state: data.coverage && data.coverage.state_store || "unknown" })
+      ),
+      el("div", { className: "olympus-metrics-ownership" },
+        el("span", null, "Olympus: " + ((data.ownership && data.ownership.olympus) || "operational evidence")),
+        el("span", null, "Hermes: " + ((data.ownership && data.ownership.hermes_analytics) || "usage ledger"))
+      ),
+      el("div", { className: "olympus-metrics-grid" },
+        tiles.map((tile) => el("article", { key: tile.id, className: cx("olympus-metrics-card", "olympus-metrics-card-" + String(tile.state || "unknown").toLowerCase()) },
+          el("div", { className: "olympus-metrics-card-head" },
+            el("h3", null, tile.label),
+            el(StatePill, { state: tile.state })
+          ),
+          el("div", { className: "olympus-metrics-rows" },
+            tile.rows.map((row) => el("div", { key: row[0], className: "olympus-mini-row" },
+              el("span", null, row[0]),
+              el("small", null, row[1])
+            ))
+          ),
+          el("p", null, tile.detail),
+          tile.view ? el("a", { className: "olympus-link", href: routeLink(tile.view) }, routeLabel(tile.view)) : null
+        ))
+      ),
+      signals.length ? el("div", { className: "olympus-metrics-signals" },
+        signals.map((item, idx) => el("article", { key: idx, className: cx("olympus-metrics-signal", "olympus-metrics-signal-" + String(item.severity || "info").toLowerCase()) },
+          el("div", { className: "olympus-item-head" },
+            el("div", null,
+              el("span", null, item.kind || "signal"),
+              el("h3", null, item.title || "Metrics signal")
+            ),
+            el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
+          ),
+          el("p", null, item.detail || ""),
+          item.evidence ? el("small", null, item.evidence) : null,
+          item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
+        ))
+      ) : null
     );
   }
 
@@ -1293,6 +1406,7 @@
       ),
       el(ModePanel, { id: "diagnostics", activeMode },
         el(OpsEvals, { evals: data && data.ops_evals }),
+        el(MetricsSpine, { metrics: data && data.metrics_spine }),
         el(ProductionDiagnostics, { diagnostics: data && data.diagnostics, clientDiagnostics, evidenceSources: data && data.evidence_sources })
       )
     );

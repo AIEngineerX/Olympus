@@ -51,6 +51,7 @@ const modeSections = {
   ],
   Diagnostics: [
     [".olympus-ops-evals", "Operational Evals"],
+    [".olympus-metrics-spine", "Metrics Spine"],
     [".olympus-diagnostics", "Production Diagnostics"],
     [".olympus-evidence-sources", "Evidence Sources"],
   ],
