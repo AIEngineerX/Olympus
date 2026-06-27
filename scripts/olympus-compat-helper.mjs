@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-export const COMPATIBILITY_HINT = "Olympus backend routes are not mounted. Current Hermes refuses non-bundled dashboard plugin Python backends for user/project plugins; bundle Olympus into Hermes or add a trusted backend-plugin model. Run npm run test:compat for details.";
+export const COMPATIBILITY_HINT = "Olympus backend routes are not mounted. Current Hermes allows bundled and user-plugin backends when manifest.api is safe; project plugins remain static-only. Check plugin source, API path validation, and dashboard restart state. Run npm run test:compat for details.";
 
 export function manifestDeclaresApi(manifestPath) {
   try {
@@ -24,8 +24,12 @@ export function findOlympusPlugin(rows) {
   return rows.find((row) => row && row.name === "olympus") || null;
 }
 
+export function isProjectPluginSource(source) {
+  return source === "project";
+}
+
 export function isNonBundledSource(source) {
-  return source === "user" || source === "project";
+  return isProjectPluginSource(source);
 }
 
 export function is2xx(statusCode) {
@@ -45,8 +49,14 @@ export function backendCompatibilityStatus({
 }) {
   if (backendMounted) {
     return {
+      backendUnavailableMode: false,
+      projectStaticPluginMode: false,
+      projectPluginBackendBlocked: false,
+      hermesBlocksProjectPluginBackendApis: false,
+      // Deprecated compatibility aliases. Prefer projectStaticPluginMode and
+      // hermesBlocksProjectPluginBackendApis in new callers.
       liveStaticUserPluginMode: false,
-      hermesBlocksNonBundledBackendApis: Boolean(sourceGuardDetected),
+      hermesBlocksNonBundledBackendApis: false,
       likelyReason: "backend routes mounted",
       hint: "",
     };
@@ -56,23 +66,29 @@ export function backendCompatibilityStatus({
   const backendRouteStatuses = [routeStatus && routeStatus.health, routeStatus && routeStatus.overview, routeStatus && routeStatus.tuning]
     .filter((value) => typeof value === "number");
   const backendRoutesAre404 = backendRouteStatuses.length > 0 && backendRouteStatuses.every((status) => status === 404);
-  const staticNonBundledPlugin = Boolean(
+  const projectStaticPluginMode = Boolean(
     discovered &&
-    isNonBundledSource(discovered.source) &&
+    isProjectPluginSource(discovered.source) &&
     discovered.has_api === false &&
     manifestHasApi &&
     backendRoutesAre404
   );
   const sourceGuardSupportsReason = Boolean(sourceGuardDetected && backendRoutesAre404);
-  const blocked = staticNonBundledPlugin || sourceGuardSupportsReason;
+  const projectPluginBackendBlocked = projectStaticPluginMode || sourceGuardSupportsReason;
 
   return {
-    liveStaticUserPluginMode: staticNonBundledPlugin,
-    hermesBlocksNonBundledBackendApis: blocked,
-    likelyReason: blocked
-      ? "current Hermes refuses non-bundled dashboard plugin Python backends"
+    backendUnavailableMode: true,
+    projectStaticPluginMode,
+    projectPluginBackendBlocked,
+    hermesBlocksProjectPluginBackendApis: projectPluginBackendBlocked,
+    // Deprecated compatibility aliases. Prefer projectStaticPluginMode and
+    // hermesBlocksProjectPluginBackendApis in new callers.
+    liveStaticUserPluginMode: projectStaticPluginMode,
+    hermesBlocksNonBundledBackendApis: projectPluginBackendBlocked,
+    likelyReason: projectPluginBackendBlocked
+      ? "current Hermes refuses project dashboard plugin Python backends"
       : "backend routes unavailable; inspect Hermes dashboard plugin discovery and logs",
-    hint: blocked ? COMPATIBILITY_HINT : "",
+    hint: projectPluginBackendBlocked ? COMPATIBILITY_HINT : "",
     routeStatusesObserved: statuses.length,
   };
 }

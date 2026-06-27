@@ -37,13 +37,12 @@ owns vs. what Hermes owns).
 - Node.js/npm for verification and Playwright-based visual smoke tests. There is
   no frontend build step; `dashboard/dist/*` is hand-authored SDK React/CSS.
 
-> **Current Hermes compatibility:** hardened Hermes builds load static user
-> dashboard plugins from `$HERMES_HOME/plugins`, but refuse non-bundled Python
-> backend imports. In that mode `/olympus` can load while
-> `/api/plugins/olympus/*` returns `404`. Full backend routes require Olympus to
-> be bundled into Hermes or a future trusted backend-plugin model. See
+> **Current Hermes compatibility:** current Hermes main loads static user
+> dashboard plugins from `$HERMES_HOME/plugins` and mounts their Python backend
+> routes when `manifest.api` points to a safe file inside the plugin dashboard.
+> Project plugins remain static-only and cannot auto-import Python. See
 > [`dashboard/docs/HERMES_BACKEND_PLUGIN_COMPATIBILITY.md`](dashboard/docs/HERMES_BACKEND_PLUGIN_COMPATIBILITY.md)
-> and [`dashboard/docs/STATIC_USER_PLUGIN_MODE.md`](dashboard/docs/STATIC_USER_PLUGIN_MODE.md).
+> and [Static / Backend-Unavailable Mode](dashboard/docs/STATIC_USER_PLUGIN_MODE.md).
 
 ## Install In A Local Hermes Dashboard
 
@@ -108,7 +107,8 @@ status before preparing an upstream Desktop PR.
 
 ## API
 
-When Olympus is bundled or another trusted backend-plugin path is available, Hermes mounts Olympus at `/api/plugins/olympus/`:
+When Olympus is bundled or installed as a user dashboard plugin with a safe
+`manifest.api` path, Hermes mounts Olympus at `/api/plugins/olympus/`:
 
 | Route | Purpose |
 | --- | --- |
@@ -118,8 +118,8 @@ When Olympus is bundled or another trusted backend-plugin path is available, Her
 
 Routes sit behind the Hermes dashboard session-token middleware. The frontend
 calls them through the plugin SDK's `fetchJSON`, which injects the token. In
-static user-plugin mode these routes are not mounted; run `npm run test:compat`
-to identify the active mode.
+project-plugin mode, or on older/stale Hermes builds, these routes may not be
+mounted; run `npm run test:compat` to identify the active mode.
 
 ## Privacy
 
@@ -186,10 +186,8 @@ sections stay hidden, verifies staged dashboard modes, and catches private-label
 leaks in the no-labels scenario.
 
 `npm run test:compat` diagnoses whether the current Hermes install mounted
-Olympus backend routes or is running in static-user-plugin mode. If it reports
-`backendMounted: false` with the non-bundled backend refusal reason, the live
-backend gates are blocked by Hermes' security boundary rather than by a frontend
-or syntax failure.
+Olympus backend routes. Current user-plugin installs should report
+`backendMounted: true`; project-plugin installs are static-only by design.
 
 `npm run test:live` checks the real Hermes dashboard route at
 `http://127.0.0.1:9119/olympus`. It starts Hermes when needed, verifies

@@ -137,11 +137,16 @@ function checkUsageOwnership() {
   }
   const text = readText(usagePath);
   const hasUsageApi = text.includes("getUsageAnalytics") || text.includes("/api/analytics/usage") || text.includes("analytics/usage");
-  const hasLedgerTerms = ["sessions", "api", "tokens", "cost"].every((term) => text.toLowerCase().includes(term));
-  if (hasUsageApi && hasLedgerTerms) {
-    ok("desktop usage ownership", "Command Center Usage owns sessions, API calls, tokens, and cost");
+  const lower = text.toLowerCase();
+  const hasRenderedLedgerTerms = ["sessions", "api", "tokens"].every((term) => lower.includes(term));
+  const typesPath = path.join(hermesSource, "apps", "desktop", "src", "types", "hermes.ts");
+  const hasCostModel = lower.includes("cost") || (exists(typesPath) && readText(typesPath).toLowerCase().includes("cost"));
+  if (hasUsageApi && hasRenderedLedgerTerms) {
+    ok("desktop usage ownership", hasCostModel
+      ? "Command Center Usage owns sessions, API calls, tokens, with cost available in analytics data"
+      : "Command Center Usage owns sessions, API calls, and tokens");
   } else {
-    warn("desktop usage ownership", "Command Center Usage source did not show the expected usage ledger terms");
+    warn("desktop usage ownership", "Command Center Usage source did not show usage API plus sessions/API/tokens terms");
   }
 }
 
