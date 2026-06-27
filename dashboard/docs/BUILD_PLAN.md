@@ -39,9 +39,10 @@ models, gateways, logs, Kanban, and plugin pages. Olympus does not rebuild
 those controls.
 
 Hermes Desktop also has Command Center Usage. It shows sessions, API calls,
-input/output tokens, daily token bars, top models, top skills, and cost. Olympus
-must not become a second Usage page. It may use usage evidence only to flag
-operator risk and link to Hermes Usage/Analytics for the ledger.
+input/output tokens, daily token bars, top models, and top skills; analytics
+types also carry cost fields. Olympus must not become a second Usage page. It
+may use usage evidence only to flag operator risk and link to Hermes
+Usage/Analytics for the ledger.
 
 Olympus adds the missing tuning layer:
 
@@ -127,8 +128,8 @@ Frontend:
 ### 4. Pantheon V2 Visual Restoration (shipped)
 
 - Restores Pantheon as an operational control, not a decorative diagram.
-- Impeccable product-UI review covered the live `/olympus` surface, product
-  register, build plan, `VIEWPORT_STRATEGY.md`, CSS, and browser screenshots.
+- Product-UI review covered the live `/olympus` surface, product register,
+  build plan, `VIEWPORT_STRATEGY.md`, CSS, and browser screenshots.
 - Uses current `/overview` evidence: profiles, trigger lanes, workload, profile
   state, selected profile details, orchestration summary, and activity events.
 - Keeps agent nodes as accessible HTML buttons with selected state and visible

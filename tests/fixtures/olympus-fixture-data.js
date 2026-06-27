@@ -74,8 +74,8 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         {
           kind: "skill",
           severity: "warning",
-          title: "Create a repeatable browser QA skill",
-          detail: "Two recent sessions repeated viewport checks and screenshot interpretation.",
+          title: "Use the existing browser QA workflow",
+          detail: "Repeated viewport and screenshot checks should route through the Playwright smoke harness or the dogfood workflow before adding another skill.",
           evidence: "2 tool-heavy sessions",
           threshold: ">= 20 tool calls",
           basis: "Hermes session tool_call_count",
@@ -85,8 +85,8 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         {
           kind: "route",
           severity: "warning",
-          title: "Move visual work to a specialist profile",
-          detail: "Design-heavy work is concentrated on the default profile.",
+          title: "Stop routing visual review through default",
+          detail: "Design-heavy checks are concentrated on the owner control plane instead of a scoped visual worker.",
           evidence: "6 open visual tasks",
           threshold: ">= 8 open tasks",
           basis: "Kanban assignee load",
@@ -112,8 +112,8 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       {
         kind: "skill",
         severity: "warning",
-        title: "Bundle visual QA and browser checks",
-        detail: "Repeated browser, screenshot, and layout work needs a named operating procedure.",
+        title: "Reuse browser QA before adding skills",
+        detail: "Repeated browser, screenshot, and layout work should use the existing dogfood/Playwright path before creating new procedure sprawl.",
         evidence: "4 tool-heavy visual sessions",
         recommended_view: "/skills",
         action_label: "Open Skills"

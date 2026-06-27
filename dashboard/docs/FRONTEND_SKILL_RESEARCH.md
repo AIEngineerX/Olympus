@@ -10,7 +10,7 @@ skills because they look useful in the abstract.
 
 | Need | Tooling | Status |
 | --- | --- | --- |
-| Product taste and copy | Impeccable product register | Adopted |
+| Product taste and copy | Product UI review and copy register | Adopted |
 | Frontend implementation judgment | `frontend-ui-engineering` guidance | Adopted |
 | Browser verification | Playwright visual fixture suite and live smoke | Adopted |
 | Security/privacy smoke | `scripts/olympus-security-smoke.mjs` | Adopted |

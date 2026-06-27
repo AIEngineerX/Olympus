@@ -10,7 +10,7 @@ is mounted into.
 | --- | --- | --- |
 | Visual QA | Keep screenshots and fixture coverage current as the dashboard changes. | Desktop and mobile fixture tests run in CI and attach screenshots. |
 | Hermes compatibility | Hermes dashboard, Kanban, skill, and plugin behavior is moving quickly. | Track the Hermes version tested and rerun plugin smoke tests after each Hermes upgrade. |
-| Backend plugin mounting | Current hardened Hermes refuses Python backend auto-import for user/project dashboard plugins. | Full `/api/plugins/olympus/*` routes require bundled installation or an upstream trusted backend-plugin contract; `npm run test:compat` must explain the mode before live gates are interpreted. |
+| Backend plugin mounting | Current Hermes main allows bundled and user-plugin Python backends when `manifest.api` is safe; project plugins remain static-only. | `npm run test:compat` must identify whether routes are mounted, blocked by project-plugin source, or missing because of version/process drift before live gates are interpreted. |
 | Fixture coverage | Add more edge cases as new panels ship. | Fixture states cover noisy, healthy, empty, overloaded, stale/blocked, high-cost, and hidden-label cases. |
 | Performance tracking | Budgets now have a live smoke gate; thresholds still need release history. | Track render time, API response time, payload size, tool-call pressure, context pressure, cost risk, loop count, and worker failures. |
 | Desktop compatibility | Hermes Desktop has Command Center Usage but does not yet expose dashboard plugin tabs. | Olympus must stay an operations monitor, link to Usage/Analytics for ledgers, and pass Desktop preflight before an upstream PR. |

@@ -6,8 +6,8 @@ const fixtureBaseUrl = pathToFileURL(path.join(__dirname, "../fixtures/olympus-f
 
 const briefSections = [
   { selector: ".olympus-hero", text: "Olympus", minHeight: 120 },
-  { selector: ".olympus-score-card", text: "What the Score Means", minHeight: 72 },
-  { selector: ".olympus-agent-hq", text: "Agent Monitor", minHeight: 180 }
+  { selector: ".olympus-score-card", text: "Readiness Score", minHeight: 60 },
+  { selector: ".olympus-agent-hq", text: "Agent Monitor", minHeight: 140 }
 ];
 const deepSections = [
   { selector: ".olympus-performance", text: "Performance Tracking", minHeight: 180 },
@@ -312,15 +312,15 @@ test("desktop noisy mode navigation stages deep inspection panels", async ({ pag
   }
 });
 
-test("static user-plugin mode falls back to Hermes dashboard APIs", async ({ page }, testInfo) => {
+test("backend-unavailable mode falls back to Hermes dashboard APIs", async ({ page }, testInfo) => {
   const messages = await openFixture(page, testInfo, { width: 1280, height: 720 }, "static-user-plugin");
 
   expect(messages).toEqual([]);
   await expect(page.locator(".olympus-static-compatibility")).toBeVisible();
-  await expect(page.locator(".olympus-static-compatibility")).toContainText("Static User-Plugin Mode");
+  await expect(page.locator(".olympus-static-compatibility")).toContainText("Backend Unavailable");
   await expect(page.locator(".olympus-static-compatibility")).toContainText("/api/dashboard/plugins");
-  await expect(page.locator(".olympus-static-compatibility")).toContainText("Readiness scoring and score deductions");
-  await expect(page.locator(".olympus-agent-hq")).toContainText("Static user-plugin mode detected");
+  await expect(page.locator(".olympus-static-compatibility")).toContainText("Readiness scoring and deductions");
+  await expect(page.locator(".olympus-agent-hq")).toContainText("Backend unavailable");
   await selectMode(page, "Diagnostics");
   await expect(page.locator(".olympus-diagnostics")).toContainText("Evidence Sources");
   await expect(page.locator(".olympus-diagnostics")).toContainText("/api/status");

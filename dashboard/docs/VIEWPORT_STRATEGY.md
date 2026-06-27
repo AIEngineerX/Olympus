@@ -23,8 +23,8 @@ constellation proved the direction, then got removed during hardening because
 SVG text and image-role wrapping made viewport and accessibility guarantees
 fragile.
 
-The Impeccable product-UI pass covered the live `/olympus` page, product
-register, existing CSS, this document, and browser screenshots.
+The product-UI pass covered the live `/olympus` page, product register,
+existing CSS, this document, and browser screenshots.
 
 Pantheon v2 rules:
 
@@ -74,7 +74,7 @@ Rank skill suggestions by observed repeatability:
 
 | Signal | Suggestion |
 | --- | --- |
-| Repeated tool-heavy sessions | Create or preload a skill for that workflow. |
+| Repeated tool-heavy sessions | Reuse an existing workflow first; create a skill only if the workflow is missing. |
 | Runaway tool calls | Add a checklist, loop breaker, or recap skill. |
 | Long threads | Add memory, recap, or task-splitting procedure. |
 | Cron work with thin skill coverage | Add runbook skills for scheduled agents. |
@@ -95,7 +95,7 @@ Current backend shape:
     },
     "suggestions": [
       {
-        "title": "Bundle visual QA workflow",
+        "title": "Reuse browser QA workflow",
         "severity": "warning",
         "evidence": "4 tool-heavy sessions / 2 forced-skill tasks",
         "recommended_view": "/skills",
@@ -143,5 +143,6 @@ not inferred trend decoration.
 - Attach screenshots as test artifacts.
 - Add fixture states before adding more visual complexity.
 
-See `FRONTEND_SKILL_RESEARCH.md` for GitHub-hosted skills and references to
-evaluate for taste, design critique, production UI engineering, and visual QA.
+See `FRONTEND_SKILL_RESEARCH.md` for the current browser QA harness and UI
+review references. Treat Playwright as verification infrastructure, not as a
+new user-facing plugin unless Hermes exposes one.

@@ -10,19 +10,19 @@
 
   const API = "/api/plugins/olympus";
   const STATIC_BACKEND_REQUIRED = [
-    "Readiness scoring and score deductions",
-    "Kanban board synthesis, Trace Spine, and worker attention items",
-    "Skill hygiene/audit synthesis and profile fitness scoring",
-    "Tool policy, config risk, and auxiliary cost recommendations",
-    "Operational evals and production diagnostics from Olympus evidence collectors"
+    "Readiness scoring and deductions",
+    "Kanban, Trace Spine, and worker synthesis",
+    "Skill hygiene and profile fitness scoring",
+    "Tool policy and auxiliary cost recommendations",
+    "Operational evals and production diagnostics"
   ];
   const OLYMPUS_MODES = [
-    { id: "brief", label: "Brief", summary: "Top actions and readiness" },
-    { id: "agents", label: "Agents", summary: "Profiles, performance, and live state" },
-    { id: "skills", label: "Skills", summary: "Coverage, hygiene, and reuse signals" },
-    { id: "kanban", label: "Kanban", summary: "Task, worker, and trace evidence" },
-    { id: "policy", label: "Policy", summary: "Tool and config risk" },
-    { id: "diagnostics", label: "Diagnostics", summary: "Eval, source, and payload checks" }
+    { id: "brief", label: "Brief", summary: "Top actions" },
+    { id: "agents", label: "Agents", summary: "Profiles" },
+    { id: "skills", label: "Skills", summary: "Reuse" },
+    { id: "kanban", label: "Kanban", summary: "Work" },
+    { id: "policy", label: "Policy", summary: "Risk" },
+    { id: "diagnostics", label: "Diagnostics", summary: "Evidence" }
   ];
 
   function el(type, props, ...children) {
@@ -160,11 +160,11 @@
           base: 0,
           score: 0,
           label: "Static mode",
-          explanation: "Readiness scoring requires /api/plugins/olympus/overview, which is not mounted for non-bundled user dashboard plugins.",
+          explanation: "Readiness scoring requires /api/plugins/olympus/overview. Current user-plugin installs should mount it when manifest.api is safe; project plugins stay static-only.",
           deductions: [{ label: "Olympus backend unavailable", points: 0, reason: reason || "backend unavailable", evidence: "/api/plugins/olympus/overview unavailable", source: "frontend compatibility fallback" }]
         },
         methodology: {
-          thresholds: STATIC_BACKEND_REQUIRED.map((item) => ({ signal: item, threshold: "requires bundled/trusted backend mode", why: "First-party Hermes dashboard APIs expose page data, not Olympus' redacted synthesis model." })),
+          thresholds: STATIC_BACKEND_REQUIRED.map((item) => ({ signal: item, threshold: "requires mounted Olympus backend", why: "First-party Hermes dashboard APIs expose page data, not Olympus' redacted synthesis model." })),
           sources: frontendApis.map((item) => ({ label: item.label, detail: item.redaction }))
         },
         agent_hq: {
@@ -172,8 +172,8 @@
           metrics: { median_duration_seconds: 0, p90_duration_seconds: 0, total_tokens: 0, total_tool_calls: 0, failed_kanban_runs: 0 },
           agents: [],
           recommendations: [
-            { kind: "compatibility", severity: "warning", title: "Static user-plugin mode detected", detail: "Hermes served the Olympus tab, but did not mount the non-bundled Python backend API.", evidence: reason || "backend unavailable", recommended_view: "/config", action_label: "Open Config" },
-            { kind: "integration", severity: "info", title: "Use bundled or trusted backend mode for full Olympus", detail: "Existing Hermes dashboard APIs can provide counts and links; Olympus scoring and evidence synthesis still require the backend.", evidence: availableCount + " of " + apiResults.length + " fallback APIs responded", recommended_view: "/profiles", action_label: "Open Profiles" }
+            { kind: "compatibility", severity: "warning", title: "Backend unavailable", detail: "Hermes served the Olympus tab, but the Olympus backend routes did not mount. Check plugin source, safe API path, dashboard restart state, and Hermes version.", evidence: reason || "backend unavailable", recommended_view: "/config", action_label: "Open Config" },
+            { kind: "integration", severity: "info", title: "Fallback APIs are limited", detail: "Existing Hermes dashboard APIs provide counts and links; Olympus scoring and evidence synthesis require mounted backend routes.", evidence: availableCount + " of " + apiResults.length + " fallback APIs responded", recommended_view: "/profiles", action_label: "Open Profiles" }
           ]
         }
       },
@@ -229,8 +229,8 @@
     return el("section", { className: "olympus-section olympus-static-compatibility" },
       el("div", { className: "olympus-section-head" },
         el("div", null,
-          el("h2", null, "Static User-Plugin Mode"),
-          el("p", null, "Hermes served Olympus as a static dashboard plugin. Backend synthesis panels are hidden or labelled because /api/plugins/olympus/* is unavailable.")
+          el("h2", null, "Backend Unavailable"),
+          el("p", null, "Hermes served the Olympus tab, but /api/plugins/olympus/* is unavailable. User-plugin backends should mount on current Hermes when manifest.api is safe; project plugins stay static-only.")
         ),
         el(StatePill, { state: "warning", label: "frontend only" })
       ),
@@ -240,7 +240,7 @@
           asList(info.frontend_available).map((item) => el("div", { key: item, className: "olympus-mini-row" }, el("span", null, item), el("small", null, "read-only dashboard API")))
         ),
         el("div", { className: "olympus-policy-pane" },
-          el("h3", null, "Requires bundled/trusted backend"),
+          el("h3", null, "Requires mounted backend"),
           asList(info.backend_required).map((item) => el("div", { key: item, className: "olympus-mini-row" }, el("span", null, item), el("small", null, "not synthesized in static mode")))
         )
       ),
@@ -255,7 +255,7 @@
       el("div", { className: "olympus-hero-copy" },
         el("div", { className: "olympus-kicker" }, "HermesOS Agent Monitor"),
         el("h1", null, "Olympus"),
-        el("p", null, "Live read-only view of agent health, workload, tool pressure, context pressure, and the next action owner."),
+        el("p", null, "Read-only operator view: readiness, top risks, and the Hermes page that owns each fix."),
         el("div", { className: "olympus-hero-actions" },
           el(StatePill, { state: status, label: statusLabel }),
           el(Button, { className: "olympus-refresh", onClick: onRefresh, disabled: loading }, loading ? "Refreshing" : "Refresh")
@@ -279,13 +279,13 @@
     return el("section", { className: "olympus-section olympus-score-card olympus-score-card-compact" },
       el("div", { className: "olympus-section-head" },
         el("div", null,
-          el("h2", null, "What the Score Means"),
-          el("p", null, breakdown.explanation || "A transparent heuristic readiness score from local Hermes evidence.")
+          el("h2", null, "Readiness Score"),
+          el("p", null, breakdown.explanation || "Heuristic score from local Hermes evidence. Open details for deductions and method.")
         ),
         el(StatePill, { state: (breakdown.score || 0) >= 85 ? "ok" : (breakdown.score || 0) >= 55 ? "warning" : "error", label: breakdown.label || "Score" })
       ),
       el("details", { className: "olympus-details olympus-score-details" },
-        el("summary", null, "Score details"),
+        el("summary", null, "Deductions and method"),
         el("div", { className: "olympus-score-grid" },
           el("div", { className: "olympus-score-pane" },
             el("h3", null, "Breakdown"),
@@ -357,10 +357,6 @@
       role: "tabpanel",
       "aria-labelledby": "olympus-mode-tab-" + id
     },
-      el("div", { className: "olympus-mode-intro" },
-        el("span", null, mode.label),
-        el("p", null, mode.summary)
-      ),
       children
     );
   }
@@ -386,10 +382,9 @@
       { label: "Outcome Risks", value: failedRuns || 0, state: failedRuns ? "warning" : "ok" },
       { label: "Cost Risks", value: costRisks, state: costRisks ? "warning" : "ok" },
     ];
-    const primaryTiles = tiles.slice(0, 6);
-    const secondaryTiles = tiles.slice(6);
-    const primaryTuningItems = tuningItems.slice(0, 3);
-    const backlogTuningItems = tuningItems.slice(3);
+    const primaryTiles = tiles.slice(0, 4);
+    const primaryTuningItems = tuningItems.slice(0, 2);
+    const backlogTuningItems = tuningItems.slice(2);
 
     function renderTuningItem(item, idx) {
       return el("article", { key: idx, className: cx("olympus-tuning-item", "olympus-tuning-item-" + String(item.severity || "info").toLowerCase()) },
@@ -401,13 +396,8 @@
           el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
         ),
         el("p", null, item.detail || ""),
-        (item.evidence || item.threshold || item.basis) ? el("details", { className: "olympus-details" },
-          el("summary", null, "Evidence"),
-          item.evidence ? el("small", null, "Observed: " + item.evidence) : null,
-          item.threshold ? el("small", { className: "olympus-threshold" }, "Trigger: " + item.threshold) : null,
-          item.basis ? el("small", { className: "olympus-basis" }, item.basis) : null
-        ) : null,
-        item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
+        (item.evidence || item.basis) ? el("small", { className: "olympus-evidence-line" }, [item.evidence, item.basis].filter(Boolean).join(" · ")) : null,
+        item.recommended_view ? el("a", { className: "olympus-inline-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
       );
     }
 
@@ -425,19 +415,9 @@
           el(StatePill, { state: item.state })
         ))
       ),
-      secondaryTiles.length ? el("details", { className: "olympus-details olympus-backlog-details olympus-metric-backlog" },
-        el("summary", null, "More monitor signals (" + secondaryTiles.length + ")"),
-        el("div", { className: "olympus-hq-mini-grid" },
-          secondaryTiles.map((item) => el("div", { key: item.label, className: "olympus-hq-mini-tile" },
-            el("span", null, item.label),
-            el("strong", null, String(item.value)),
-            el(StatePill, { state: item.state })
-          ))
-        )
-      ) : null,
       el("div", { className: "olympus-hq-grid" },
         el("div", { className: "olympus-hq-pane olympus-hq-tuning-items" },
-          el("h3", null, "Tuning Queue"),
+          el("h3", null, "Top Actions"),
           primaryTuningItems.length ? primaryTuningItems.map(renderTuningItem) : el("p", { className: "olympus-muted" }, "No tuning items in this scan."),
           backlogTuningItems.length ? el("details", { className: "olympus-details olympus-backlog-details" },
             el("summary", null, "More tuning items (" + backlogTuningItems.length + ")"),
