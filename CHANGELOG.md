@@ -51,6 +51,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   their own) read as running, and gateway liveness inside Hermes uses
   `gateway.status.live_gateway_pid_for_home`, so launch-service gateways
   without a pid file are detected.
+- Median duration uses the standard median and p90 uses nearest rank (the
+  upper middle value and the maximum of ten were used before).
+- Trace Spine reports "Trace incomplete" when a task's session, runs and events
+  cannot be found, and only counts resolved evidence as correlated.
 - The dashboard polls one request at a time, so a backend slower than the
   poll interval no longer discards every response.
 - Links keep the reverse-proxy base path (`__HERMES_BASE_PATH__`) and the

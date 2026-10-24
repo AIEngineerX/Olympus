@@ -97,5 +97,42 @@ class TraceSpineTest(unittest.TestCase):
         self.assertIn('"task_ref"', serialized)
 
 
+    def test_a_reference_alone_is_not_a_linked_trace(self):
+        task_ref = plugin_api.safe_id("raw-task-gamma", "task")
+        missing_session = plugin_api.safe_id("session-outside-window", "session")
+
+        payload = plugin_api.build_trace_spine(
+            sessions=[],
+            kanban={
+                "_tasks": [{"id": task_ref, "board": "default", "status": "done", "assignee": "default", "session_ref": missing_session}],
+                "_runs": [],
+                "recent_events": [],
+            },
+        )
+
+        item = payload["items"][0]
+        self.assertEqual(item["recommendation"], "Trace incomplete")
+        self.assertFalse(item["session_resolved"])
+        self.assertEqual(payload["summary"]["correlated_tasks"], 0)
+
+    def test_resolved_session_is_reported_as_linked(self):
+        session_ref = plugin_api.safe_id("raw-session-delta", "session")
+        task_ref = plugin_api.safe_id("raw-task-delta", "task")
+
+        payload = plugin_api.build_trace_spine(
+            sessions=[{"session_ref": session_ref, "state": "completed", "tool_call_count": 3, "message_count": 4}],
+            kanban={
+                "_tasks": [{"id": task_ref, "board": "default", "status": "done", "assignee": "default", "session_ref": session_ref}],
+                "_runs": [],
+                "recent_events": [],
+            },
+        )
+
+        item = payload["items"][0]
+        self.assertEqual(item["recommendation"], "Trace linked")
+        self.assertIn("session", item["detail"])
+        self.assertEqual(payload["summary"]["correlated_tasks"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

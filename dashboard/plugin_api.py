@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import logging
 import os
 import re
 import sqlite3
+import statistics
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2488,8 +2490,9 @@ def build_metrics(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any
     """Window rollup of the performance signals Hermes already records."""
     kanban = kanban or {}
     durations = sorted(float(s["duration_seconds"]) for s in sessions if isinstance(s.get("duration_seconds"), (int, float)))
-    median_duration = durations[len(durations) // 2] if durations else None
-    p90_duration = durations[min(len(durations) - 1, int(len(durations) * 0.9))] if durations else None
+    median_duration = statistics.median(durations) if durations else None
+    # Nearest-rank p90: the smallest duration at or above 90% of the sample.
+    p90_duration = durations[math.ceil(len(durations) * 0.9) - 1] if durations else None
     total_tools = sum(int(s.get("tool_call_count") or 0) for s in sessions)
     total_tokens = sum(int(s.get("total_tokens") or 0) for s in sessions)
     total_api_calls = sum(int(s.get("api_call_count") or 0) for s in sessions)
@@ -3499,10 +3502,26 @@ def build_trace_spine(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str,
                 "signals": signals,
                 "recommended_view": "/sessions",
             }
+        resolved = [
+            name for name, present in (("session", session is not None), ("runs", bool(runs)), ("events", bool(events)))
+            if present
+        ]
+        if not resolved:
+            return {
+                "severity": "info",
+                "label": "Trace incomplete",
+                "detail": (
+                    "The task's session is not in the scanned sessions and it has no recorded runs or events."
+                    if task.get("session_ref") else
+                    "The task has no session, runs, or events recorded yet."
+                ),
+                "signals": signals,
+                "recommended_view": "/kanban",
+            }
         return {
             "severity": "ok",
             "label": "Trace linked",
-            "detail": "Task, run, event, and session evidence are linked without an urgent threshold.",
+            "detail": f"Linked {', '.join(resolved)} evidence with no urgent threshold.",
             "signals": signals,
             "recommended_view": "/kanban",
         }
@@ -3526,6 +3545,7 @@ def build_trace_spine(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str,
             "status": task.get("status") or "unknown",
             "assignee": task.get("assignee") or "unassigned",
             "session_ref": session_ref,
+            "session_resolved": session is not None,
             "session_state": session.get("state") if session else None,
             "session_tools": int(session.get("tool_call_count") or 0) if session else 0,
             "session_messages": int(session.get("message_count") or 0) if session else 0,
@@ -3544,7 +3564,9 @@ def build_trace_spine(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str,
         items.append(item)
 
     items.sort(key=lambda item: (_severity_rank(str(item.get("severity"))), -len(as_list(item.get("signals"))), str(item.get("task_ref"))))
-    correlated = sum(1 for item in items if item.get("session_ref") or item.get("run_count") or item.get("event_count"))
+    # A reference alone is not a correlation: count tasks whose session,
+    # runs, or events were actually found.
+    correlated = sum(1 for item in items if item.get("session_resolved") or item.get("run_count") or item.get("event_count"))
     state = "warning" if any(item.get("severity") == "warning" for item in items) else ("active" if items else "unknown")
     return {
         "summary": {

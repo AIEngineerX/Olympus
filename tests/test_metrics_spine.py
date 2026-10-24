@@ -373,5 +373,17 @@ class MetricsSpineTest(unittest.TestCase):
         self.assertEqual(plugin_api.multiplexed_profile_names(self.home, "running"), {"coder"})
 
 
+    def test_duration_median_and_p90_use_standard_definitions(self):
+        sessions = [{"duration_seconds": d} for d in (10, 30)]
+        metrics = plugin_api.build_metrics(sessions)
+        self.assertEqual(metrics["median_duration_seconds"], 20)
+        self.assertEqual(metrics["p90_duration_seconds"], 30)
+
+        sessions = [{"duration_seconds": d} for d in range(1, 11)]
+        metrics = plugin_api.build_metrics(sessions)
+        self.assertEqual(metrics["median_duration_seconds"], 5.5)
+        self.assertEqual(metrics["p90_duration_seconds"], 9)
+
+
 if __name__ == "__main__":
     unittest.main()
