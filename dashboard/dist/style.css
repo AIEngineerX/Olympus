@@ -1409,6 +1409,78 @@
   opacity: 0.72;
 }
 
+.olympus-sparkline {
+  margin-top: 8px;
+  color: #43c9bf;
+}
+
+.olympus-trend {
+  margin-top: 4px;
+  text-transform: none !important;
+}
+
+.olympus-fix-button,
+.olympus-fix-stop {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid rgba(239, 196, 92, 0.42);
+  border-radius: 6px;
+  background: rgba(239, 196, 92, 0.08);
+  color: #f6f0df;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.olympus-fix-button:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.olympus-fix-button:focus-visible,
+.olympus-fix-stop:focus-visible {
+  outline: 2px solid rgba(239, 196, 92, 0.6);
+  outline-offset: 2px;
+}
+
+.olympus-fix-tracked {
+  color: #43c9bf;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.olympus-fix-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid rgba(246, 240, 223, 0.08);
+}
+
+.olympus-fix-row:first-of-type {
+  border-top: 0;
+}
+
+.olympus-fix-row small {
+  display: block;
+  margin-top: 2px;
+  color: rgba(246, 240, 223, 0.62);
+  font-size: 12px;
+}
+
+@media (max-width: 520px) {
+  .olympus-fix-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .olympus-fix-stop {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+
 .olympus-debug {
   margin-top: 16px;
 }

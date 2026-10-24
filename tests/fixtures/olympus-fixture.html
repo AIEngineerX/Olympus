@@ -124,20 +124,31 @@
         party.summary = Object.assign({}, party.summary, { members: fixtureProfiles });
       }
 
-      async function fixtureFetchJSON(url) {
+      async function fixtureFetchJSON(url, init) {
         fetchLog.started += 1;
         fetchLog.inFlight += 1;
         fetchLog.peak = Math.max(fetchLog.peak, fetchLog.inFlight);
         try {
           if (fixtureDelay) await new Promise((resolve) => setTimeout(resolve, fixtureDelay));
-          return await fixtureResponse(url);
+          return await fixtureResponse(url, init);
         } finally {
           fetchLog.inFlight -= 1;
           fetchLog.settled += 1;
         }
       }
 
-      async function fixtureResponse(url) {
+      async function fixtureResponse(url, init) {
+        if (String(url).startsWith("/api/plugins/olympus/fixes")) {
+          const key = new URLSearchParams(String(url).split("?")[1]).get("key");
+          const data = window.__OLYMPUS_FIXTURE_DATA__;
+          if ((init && init.method) === "DELETE") {
+            data.fixes = data.fixes.filter((fix) => fix.key !== key);
+            return { tracked: false };
+          }
+          const item = data.tuning.agent_hq.recommendations.find((rec) => rec.key === key);
+          data.fixes = [{ key, title: item.title, kind: item.kind, baseline: item.count, current: item.count, verdict: "unchanged", marked_at: data.generated_at, days_tracked: 0 }].concat(data.fixes);
+          return { tracked: true, fixes: data.fixes };
+        }
         if (String(url).startsWith("/api/plugins/olympus/open/session")) {
           const ref = new URLSearchParams(String(url).split("?")[1]).get("ref");
           return { href: ref === "session:91be04d6aa" ? null : "/chat?resume=fixture-session&profile=default" };

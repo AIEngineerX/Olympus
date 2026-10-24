@@ -58,6 +58,23 @@ test.describe("Olympus behaviour", () => {
     ]);
   });
 
+  test("marking a finding fixed tracks it until the operator stops", async ({ page }) => {
+    await openPage(page, { state: "noisy" });
+    const tracking = page.locator(".olympus-fix-tracking");
+    await expect(tracking.locator(".olympus-fix-row")).toHaveCount(1);
+    await expect(page.locator(".olympus-oracle")).toContainText("+9 in 7 days");
+
+    await page.getByRole("button", { name: "I fixed this" }).first().click();
+    await expect(page.locator(".olympus-fix-tracked").first()).toHaveText("Tracking your fix");
+    const row = tracking.locator(".olympus-fix-row").filter({ hasText: "Create a repeatable browser QA skill" });
+    await expect(row).toContainText("2 → 2");
+    await expect(row).toContainText("unchanged");
+
+    await row.getByRole("button", { name: "Stop tracking" }).click();
+    await expect(tracking.locator(".olympus-fix-row")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "I fixed this" })).toHaveCount(2);
+  });
+
   test("mode tabs follow the WAI-ARIA keyboard pattern", async ({ page }) => {
     await openPage(page, { state: "noisy" });
     const brief = page.getByRole("tab", { name: "Brief" });

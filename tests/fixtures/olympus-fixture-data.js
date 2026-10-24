@@ -1,5 +1,23 @@
 window.__OLYMPUS_FIXTURE_DATA__ = {
   generated_at: "2026-06-06T12:00:00Z",
+  history: {
+    days: [52, 54, 51, 55, 58, 57, 60, 59, 61, 63, 62, 64, 66, 68].map((score, idx) => ({ day: "2026-05-" + String(24 + idx).padStart(2, "0"), score })),
+    recorded_days: 14,
+    score_change_7d: 9,
+    storage: "Olympus plugin data (never Hermes state)"
+  },
+  fixes: [
+    {
+      key: "memory-runs-are-averaging-a-very-large-context-per-call",
+      title: "Runs are averaging a very large context per call",
+      kind: "memory",
+      baseline: 3,
+      current: 1,
+      verdict: "improved",
+      marked_at: "2026-06-02T09:00:00+00:00",
+      days_tracked: 4
+    }
+  ],
   health: {
     status: "warning",
     status_label: "Needs review",
@@ -76,6 +94,8 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       agents: [],
       recommendations: [
         {
+          key: "skill-create-a-repeatable-browser-qa-skill",
+          count: 2,
           kind: "skill",
           severity: "warning",
           title: "Create a repeatable browser QA skill",
@@ -91,6 +111,8 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
           action_label: "Open Skills"
         },
         {
+          key: "route-move-visual-work-to-a-specialist-profile",
+          count: 6,
           kind: "route",
           severity: "warning",
           title: "Move visual work to a specialist profile",

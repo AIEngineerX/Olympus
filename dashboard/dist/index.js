@@ -306,7 +306,34 @@
     return asList(hq.recommendations).filter((item) => item.severity === "critical" || item.severity === "warning");
   }
 
-  function Hero({ health, tuning, loading, onRefresh }) {
+  // A 14-day readiness trend drawn as a bare polyline: no text inside the SVG
+  // (labels stay HTML), hidden from assistive tech because the change is
+  // announced in words next to it.
+  function Sparkline({ points }) {
+    const values = points.filter((value) => typeof value === "number");
+    if (values.length < 2) return null;
+    const width = 120;
+    const height = 28;
+    // Scale to the recent range so a few points of movement stay visible.
+    const min = Math.max(0, Math.min(...values) - 5);
+    const max = Math.min(100, Math.max(...values) + 5);
+    const step = width / (values.length - 1);
+    const coords = values.map((value, idx) => (idx * step).toFixed(1) + "," + (height - ((value - min) / (max - min || 1)) * height).toFixed(1));
+    return el("svg", { className: "olympus-sparkline", viewBox: "0 0 " + width + " " + height, width, height, "aria-hidden": "true", focusable: "false" },
+      el("polyline", { points: coords.join(" "), fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinejoin: "round", strokeLinecap: "round" })
+    );
+  }
+
+  function trendLabel(history) {
+    const change = history && history.score_change_7d;
+    if (typeof change !== "number") {
+      return Number((history && history.recorded_days) || 0) ? "trend after 1 more day" : "trend starts today";
+    }
+    if (change === 0) return "no change in 7 days";
+    return (change > 0 ? "+" : "\u2212") + Math.abs(change) + " in 7 days";
+  }
+
+  function Hero({ health, tuning, history, loading, onRefresh }) {
     const status = health.status || (loading ? "checking" : "unknown");
     const statusLabel = health.status_label || status;
     const breakdown = tuning.score_breakdown || {};
@@ -336,12 +363,36 @@
       el("div", { className: "olympus-oracle" },
         el("span", null, "Readiness"),
         el("strong", null, typeof tuning.score === "number" ? String(tuning.score) : "\u2013"),
-        el("small", null, breakdown.label || "local evidence")
+        el("small", null, breakdown.label || "local evidence"),
+        el(Sparkline, { points: asList(history && history.days).map((day) => day.score) }),
+        el("small", { className: "olympus-trend" }, trendLabel(history))
       )
     );
   }
 
-  function renderTuningItem(item, idx) {
+  function FixButton({ item, tracked, onFixes }) {
+    const [state, setState] = useState("idle");
+    if (!item.key || item.severity === "ok") return null;
+    if (tracked) return el("span", { className: "olympus-fix-tracked" }, "Tracking your fix");
+    function track() {
+      setState("saving");
+      SDK.fetchJSON(API + "/fixes?key=" + encodeURIComponent(item.key), { method: "POST" })
+        .then((result) => {
+          if (result && result.tracked) {
+            setState("idle");
+            onFixes(result.fixes);
+            return;
+          }
+          setState("gone");
+        })
+        .catch(() => setState("failed"));
+    }
+    return el("button", { type: "button", className: "olympus-fix-button", onClick: track, disabled: state !== "idle" },
+      state === "saving" ? "Saving\u2026" : state === "gone" ? "Already cleared" : state === "failed" ? "Could not save" : "I fixed this"
+    );
+  }
+
+  function renderTuningItem(item, idx, fixKeys, onFixes) {
     return el("article", { key: idx, className: cx("olympus-tuning-item", "olympus-tuning-item-" + String(item.severity || "info").toLowerCase()) },
       el("div", { className: "olympus-item-head" },
         el("div", null,
@@ -354,12 +405,13 @@
       (item.evidence || item.basis) ? el("small", { className: "olympus-evidence-line" }, [item.evidence, item.basis].filter(Boolean).join(" \u00b7 ")) : null,
       el("div", { className: "olympus-item-actions" },
         el(SessionLinks, { targets: item.targets }),
+        onFixes ? el(FixButton, { item, tracked: fixKeys.has(item.key), onFixes }) : null,
         item.recommended_view ? el("a", { className: "olympus-inline-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
       )
     );
   }
 
-  function NeedsYou({ tuning }) {
+  function NeedsYou({ tuning, fixes, onFixes }) {
     const hq = (tuning && tuning.agent_hq) || {};
     const items = asList(hq.recommendations);
     if (!items.length) return null;
@@ -374,7 +426,7 @@
         )
       ),
       el("div", { className: "olympus-hq-tuning-items" },
-        primary.map(renderTuningItem),
+        primary.map((item, idx) => renderTuningItem(item, idx, new Set(asList(fixes).map((fix) => fix.key)), onFixes)),
         backlog.length ? el("details", { className: "olympus-details olympus-backlog-details" },
           el("summary", null, "More findings (" + backlog.length + ")"),
           backlog.map((item, idx) => el("div", { key: idx, className: "olympus-mini-row" },
@@ -384,6 +436,45 @@
           ))
         ) : null
       )
+    );
+  }
+
+  const VERDICT_STATE = { cleared: "ok", improved: "ok", unchanged: "warning", worse: "critical", "still present": "warning" };
+
+  function StopTrackingButton({ fixKey, rows, onFixes }) {
+    const [state, setState] = useState("idle");
+    function stop() {
+      setState("saving");
+      SDK.fetchJSON(API + "/fixes?key=" + encodeURIComponent(fixKey), { method: "DELETE" })
+        .then(() => onFixes(rows.filter((row) => row.key !== fixKey)))
+        .catch(() => setState("failed"));
+    }
+    return el("button", { type: "button", className: "olympus-fix-stop", onClick: stop, disabled: state === "saving" },
+      state === "failed" ? "Could not stop; retry" : "Stop tracking"
+    );
+  }
+
+  function FixTracking({ fixes, onFixes }) {
+    const rows = asList(fixes);
+    if (!rows.length) return null;
+    return el("section", { className: "olympus-section olympus-fix-tracking" },
+      el("div", { className: "olympus-section-head" },
+        el("div", null,
+          el("h2", null, "Did your fixes work?"),
+          el("p", null, "Each finding you marked fixed, compared with the latest scan.")
+        )
+      ),
+      rows.map((row) => el("div", { key: row.key, className: "olympus-fix-row" },
+        el("div", null,
+          el("strong", null, row.title),
+          el("small", null, [
+            row.baseline == null ? null : row.baseline + " \u2192 " + row.current,
+            row.days_tracked ? "tracked " + row.days_tracked + (row.days_tracked === 1 ? " day" : " days") : "tracked since today",
+          ].filter(Boolean).join(" \u00b7 "))
+        ),
+        el(StatePill, { state: VERDICT_STATE[row.verdict] || "unknown", label: row.verdict }),
+        el(StopTrackingButton, { fixKey: row.key, rows, onFixes })
+      ))
     );
   }
 
@@ -1428,14 +1519,17 @@
 
     const health = (data && data.health) || {};
     const tuning = (data && data.tuning) || {};
+    const fixes = data && data.fixes;
+    const setFixes = (next) => setData((prev) => Object.assign({}, prev, { fixes: next }));
 
     return el("div", { className: "olympus-page" },
-      el(Hero, { health, tuning, loading, onRefresh: load }),
+      el(Hero, { health, tuning, history: data && data.history, loading, onRefresh: load }),
       error ? el("div", { className: "olympus-error" }, error) : null,
       el(ModeTabs, { activeMode, onChange: setActiveMode }),
       el(ModePanel, { id: "brief", activeMode },
         el(StaticCompatibilityNotice, { compatibility: data && data.static_compatibility }),
-        el(NeedsYou, { tuning }),
+        el(NeedsYou, { tuning, fixes, onFixes: data && data.static_compatibility ? null : setFixes }),
+        el(FixTracking, { fixes, onFixes: setFixes }),
         el(ScoreExplainer, { tuning }),
         el(AgentHQ, { hq: tuning.agent_hq })
       ),
