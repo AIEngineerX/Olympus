@@ -40,6 +40,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Kanban scans read every open task and every in-flight run on every board;
   only closed history is sampled, so older running or failed work is no longer
   hidden behind newer completed tasks or the default board.
+- Loop-stop policy follows Hermes' `tool_loop_guardrails` semantics: unattended
+  gateway/cron sessions hard-stop by default, so default configs no longer
+  report a missing loop stop. Disabling `non_interactive_hard_stop_enabled`
+  with a high turn limit is a warning; warn-only interactive sessions are info.
 
 ## [1.0.3] - 2026-06-08
 
