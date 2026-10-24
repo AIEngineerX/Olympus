@@ -623,7 +623,7 @@
     if (!items.length) return null;
 
     const tiles = [
-      { label: "Score", value: summary.score || 0, state: summary.state || "unknown" },
+      { label: "Score", value: summary.score == null ? "n/a" : summary.score, state: summary.state || "unknown" },
       { label: "Checks", value: summary.checks || items.length, state: items.length ? "active" : "idle" },
       { label: "Passed", value: summary.passed || 0, state: summary.passed ? "ok" : "idle" },
       { label: "Warnings", value: summary.warnings || 0, state: summary.warnings ? "warning" : "ok" },
@@ -655,7 +655,7 @@
             el(StatePill, { state: item.state || "unknown" })
           ),
           el("div", { className: "olympus-ops-eval-score" },
-            el("strong", null, String(item.score || 0)),
+            el("strong", null, item.score == null ? "n/a" : String(item.score)),
             el("span", null, "score")
           ),
           el("p", null, item.evidence || item.detail || ""),

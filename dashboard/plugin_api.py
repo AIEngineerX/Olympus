@@ -3545,19 +3545,18 @@ def build_ops_evals(
     coverage_summary = skill_coverage.get("summary") if isinstance(skill_coverage.get("summary"), dict) else {}
     hygiene_summary = skill_hygiene.get("summary") if isinstance(skill_hygiene.get("summary"), dict) else {}
     policy_summary = config_policy.get("summary") if isinstance(config_policy.get("summary"), dict) else {}
-    has_evidence = bool(
-        sessions or
-        kanban.get("open") or
-        kanban.get("totals") or
-        kanban_items(kanban, "_runs") or
-        kanban_items(kanban, "_tasks") or
-        coverage_summary or
-        hygiene_summary or
-        policy_summary
-    )
-    if not has_evidence:
+    # Each check is scored only from evidence Olympus actually observed. An
+    # empty store produces zero counts, and zero counts must not read as a pass.
+    kanban_observed = kanban_store_state(kanban) != "missing"
+    observed = {
+        "reliability": bool(sessions) or bool(kanban_items(kanban, "_runs")),
+        "routing": kanban_observed,
+        "skill_use": int(coverage_summary.get("profiles") or 0) > 0 or int(hygiene_summary.get("total_skills") or 0) > 0,
+        "efficiency": bool(sessions),
+    }
+    if not any(observed.values()):
         return {
-            "summary": {"state": "unknown", "score": 0, "checks": 0, "passed": 0, "warnings": 0, "failures": 0},
+            "summary": {"state": "unknown", "score": None, "checks": 0, "passed": 0, "warnings": 0, "failures": 0, "unobserved": len(observed)},
             "items": [],
         }
 
@@ -3688,18 +3687,28 @@ def build_ops_evals(
         },
     ]
 
-    warnings = sum(1 for item in items if item["state"] == "warning")
-    failures = sum(1 for item in items if item["state"] == "critical")
-    score = max(0, int(sum(int(item["score"]) for item in items) / len(items))) if items else 100
+    for item in items:
+        if not observed[item["id"]]:
+            item.update({
+                "state": "unknown",
+                "score": None,
+                "evidence": "No Hermes evidence for this check yet.",
+                "signals": [],
+            })
+    scored = [item for item in items if observed[item["id"]]]
+    warnings = sum(1 for item in scored if item["state"] == "warning")
+    failures = sum(1 for item in scored if item["state"] == "critical")
+    score = max(0, int(sum(int(item["score"]) for item in scored) / len(scored)))
     state = "critical" if failures else ("warning" if warnings else "ok")
     return {
         "summary": {
             "state": state,
             "score": score,
-            "checks": len(items),
-            "passed": sum(1 for item in items if item["state"] == "ok"),
+            "checks": len(scored),
+            "passed": sum(1 for item in scored if item["state"] == "ok"),
             "warnings": warnings,
             "failures": failures,
+            "unobserved": len(items) - len(scored),
         },
         "items": items,
     }

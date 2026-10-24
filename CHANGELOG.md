@@ -44,6 +44,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gateway/cron sessions hard-stop by default, so default configs no longer
   report a missing loop stop. Disabling `non_interactive_hard_stop_enabled`
   with a high turn limit is a warning; warn-only interactive sessions are info.
+- Operational evals score only checks with observed evidence; unobserved checks
+  show as unknown (`n/a`) instead of passing, and an empty Hermes home no longer
+  scores 100.
 
 ## [1.0.3] - 2026-06-08
 
