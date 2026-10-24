@@ -978,6 +978,16 @@ def row_value(row: sqlite3.Row, key: str, default: Any = None) -> Any:
     return default
 
 
+def recency_expr(columns: List[str], fallback: str = "rowid") -> str:
+    """Latest-of expression for the given timestamp columns.
+
+    SQLite's COALESCE needs at least two arguments, so one column is used as is.
+    """
+    if len(columns) > 1:
+        return f"COALESCE({', '.join(columns)})"
+    return columns[0] if columns else fallback
+
+
 def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     try:
         return {str(r["name"]) for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -1527,6 +1537,23 @@ def profile_stores(profiles: Optional[List[Dict[str, Any]]]) -> List[tuple[str, 
     return stores or [(active_profile_name(), get_hermes_home())]
 
 
+def profile_role(home: Path) -> Dict[str, Any]:
+    """Role from Hermes' profile.yaml (what the Kanban decomposer routes by).
+
+    The description is the operator's own text, so like other labels it is
+    returned only when local labels are enabled; its state always is.
+    """
+    meta = read_yaml(home / "profile.yaml")
+    description = str(meta.get("description") or "").strip()
+    if not description:
+        state = "missing"
+    elif meta.get("description_auto"):
+        state = "auto"
+    else:
+        state = "described"
+    return {"role_state": state, "role": redact_text(description, 200) if EXPOSE_LOCAL_LABELS and description else None}
+
+
 def collect_profiles() -> List[Dict[str, Any]]:
     base = get_hermes_home().resolve()
     profiles: List[Dict[str, Any]] = []
@@ -1574,6 +1601,7 @@ def collect_profiles() -> List[Dict[str, Any]]:
             "gateway_state": gstate,
             "gateway_mode": gateway_mode,
             "dashboard_home": home.resolve() == base,
+            **profile_role(home),
         })
     return profiles
 
@@ -1682,12 +1710,7 @@ def _store_sessions(db: Path, limit: int, since: Optional[float] = None) -> List
         # Most recent activity first: a long-running session that is still
         # working must not sort behind newer, idle ones.
         recency = [c for c in ("last_activity_at", "ended_at", "started_at") if c in cols]
-        if len(recency) > 1:
-            order = f"COALESCE({', '.join(recency)})"
-        elif recency:
-            order = recency[0]
-        else:
-            order = "id"
+        order = recency_expr(recency, "id")
         where = ""
         params: tuple[Any, ...] = (limit,)
         if since is not None and recency:
@@ -1899,7 +1922,7 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                 # stale, unassigned); only closed history is sampled. A
                 # recency LIMIT over all tasks let newer completed work push
                 # an older running task out of the scan.
-                recency = ", ".join(c for c in ("completed_at", "started_at", "created_at") if c in task_cols) or "rowid"
+                recency = recency_expr([c for c in ("completed_at", "started_at", "created_at") if c in task_cols])
                 open_marks = ", ".join("?" for _ in OPEN_KANBAN_STATUSES)
                 open_params = tuple(sorted(OPEN_KANBAN_STATUSES))
                 task_rows.extend(con.execute(
@@ -1908,7 +1931,7 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                 ).fetchall())
                 task_rows.extend(con.execute(
                     f"SELECT {', '.join(task_select)} FROM tasks WHERE status NOT IN ({open_marks}) AND status != 'archived' "
-                    f"ORDER BY COALESCE({recency}) DESC LIMIT ?",
+                    f"ORDER BY {recency} DESC LIMIT ?",
                     open_params + (KANBAN_CLOSED_TASK_SAMPLE,),
                 ).fetchall())
 
@@ -2015,14 +2038,14 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                 if run_select:
                     # In-flight runs are always read; finished runs are a
                     # recency sample ordered by time, not by id.
-                    run_recency = ", ".join(c for c in ("ended_at", "started_at") if c in run_cols) or "rowid"
+                    run_recency = recency_expr([c for c in ("ended_at", "started_at") if c in run_cols])
                     in_flight = "ended_at IS NULL" if "ended_at" in run_cols else "0"
                     run_rows.extend(con.execute(
                         f"SELECT {', '.join(run_select)} FROM task_runs WHERE {in_flight}"
                     ).fetchall())
                     run_rows.extend(con.execute(
                         f"SELECT {', '.join(run_select)} FROM task_runs WHERE NOT ({in_flight}) "
-                        f"ORDER BY COALESCE({run_recency}) DESC LIMIT ?",
+                        f"ORDER BY {run_recency} DESC LIMIT ?",
                         (KANBAN_FINISHED_RUN_SAMPLE,),
                     ).fetchall())
                 for r in run_rows:
@@ -2582,7 +2605,7 @@ def _store_cost_breakdown(db: Path, since: float) -> Dict[str, Any]:
         if "source" in cols and recency and cost_cols:
             row = con.execute(
                 f"SELECT COALESCE(SUM(COALESCE({', '.join(cost_cols)}, 0)), 0) AS cost, COUNT(*) AS n "
-                f"FROM sessions WHERE source = 'cron' AND COALESCE({', '.join(recency)}) >= ?",
+                f"FROM sessions WHERE source = 'cron' AND {recency_expr(recency)} >= ?",
                 (since,),
             ).fetchone()
             out["cron_cost"] = float(row["cost"] or 0.0)
@@ -3345,6 +3368,76 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
         "profiles": profile_rows,
         "suggestions": suggestions[:5],
     }
+
+
+def build_fleet(
+    profiles: List[Dict[str, Any]],
+    sessions: List[Dict[str, Any]],
+    cron: List[Dict[str, Any]],
+    profile_fitness: Dict[str, Any],
+) -> Dict[str, Any]:
+    """One row per profile: what it is for, how it runs, what it is doing."""
+    fitness_by_id = {row.get("id"): row for row in as_list(profile_fitness.get("profiles"))}
+    cron_by_profile = group_cron_by_profile(cron)
+    rows: List[Dict[str, Any]] = []
+    for profile in profiles:
+        raw_name = str(profile.get("name"))
+        own_sessions = [s for s in sessions if session_matches_profile(s, raw_name)]
+        last_ts = max((safe_float(s.get("_last_ts")) for s in own_sessions), default=0.0)
+        fitness = fitness_by_id.get(profile.get("id"), {})
+        metrics = fitness.get("metrics") or {}
+        rows.append({
+            "id": profile.get("id"),
+            "label": profile.get("label"),
+            "role_state": profile.get("role_state"),
+            "role": profile.get("role"),
+            "route": "configured" if profile.get("model") or profile.get("provider") else "inherited",
+            "gateway_state": profile.get("gateway_state"),
+            "gateway_mode": profile.get("gateway_mode"),
+            "skills": int(profile.get("skill_count") or 0),
+            "cron_jobs": len(cron_by_profile.get(raw_name, [])),
+            "running": int(metrics.get("running") or 0),
+            "open": int(metrics.get("open") or 0),
+            "blocked": int(metrics.get("blocked") or 0),
+            "sessions_7d": len(own_sessions),
+            "spend_7d_usd": round(sum(_session_cost(s) for s in own_sessions), 4),
+            "last_active_at": ts_to_iso(last_ts) if last_ts else None,
+            "state": fitness.get("state") or "unknown",
+            "top_issue": fitness.get("top_issue"),
+            "reasons": fitness.get("reasons") or [],
+            "recommended_view": fitness.get("recommended_view") or "/profiles",
+        })
+    rows.sort(key=lambda row: (_severity_rank(str(row["state"])), -row["sessions_7d"], str(row["label"])))
+    return {
+        "summary": {
+            "profiles": len(rows),
+            "needs_review": sum(1 for row in rows if row["state"] in ("warning", "critical", "error")),
+            "roles_missing": sum(1 for row in rows if row["role_state"] == "missing"),
+            "roles_unreviewed": sum(1 for row in rows if row["role_state"] == "auto"),
+        },
+        "profiles": rows,
+    }
+
+
+def fleet_findings(fleet: Dict[str, Any], kanban: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Roles matter once work is routed between several profiles."""
+    rows = as_list(fleet.get("profiles"))
+    missing = [row for row in rows if row.get("role_state") == "missing"]
+    if len(rows) < 2 or not missing or not int(kanban.get("open") or 0):
+        return []
+    return [_tuning_item(
+        "route",
+        "info",
+        "Describe each profile's role",
+        "Hermes' Kanban decomposer routes work by each profile's role description. Profiles without one are routed by name alone.",
+        ", ".join(str(row.get("label")) for row in missing[:4]),
+        "/profiles",
+        "Open Profiles",
+        "Olympus",
+        "Role descriptions live in each profile's profile.yaml (`hermes profile describe`).",
+        "two or more profiles, open Kanban work, and a profile without a role description",
+        count=len(missing),
+    )]
 
 
 def build_profile_fitness(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]], cron: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -4521,7 +4614,7 @@ def resolve_session_ref(ref: str) -> Optional[Dict[str, str]]:
         try:
             cols = table_columns(con, "sessions")
             recency = [c for c in ("last_activity_at", "ended_at", "started_at") if c in cols]
-            order = f"COALESCE({', '.join(recency)})" if len(recency) > 1 else (recency[0] if recency else "rowid")
+            order = recency_expr(recency)
             ids = [row["id"] for row in con.execute(f"SELECT id FROM sessions ORDER BY {order} DESC LIMIT ?", (SESSION_RESOLVE_SCAN,))]
         except sqlite3.Error as exc:
             log_read_warning("session resolve scan failed", exc)
@@ -4563,9 +4656,11 @@ def scan_hermes() -> Dict[str, Any]:
     health = collect_health(profiles, cron)
     attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
     cost_attribution = collect_cost_attribution(profiles, cron, sessions, time.time() - SESSION_WINDOW_DAYS * 86400)
+    fleet = build_fleet(profiles, sessions, cron, profile_fitness)
     tuning = build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)
-    add_findings(tuning, cost_findings(cost_attribution))
+    add_findings(tuning, cost_findings(cost_attribution) + fleet_findings(fleet, kanban))
     return {
+        "fleet": fleet,
         "cost_attribution": cost_attribution,
         "profiles": profiles,
         "cron": cron,
@@ -4787,6 +4882,7 @@ def overview_payload(scan: Dict[str, Any]) -> Dict[str, Any]:
         "attention": scan["attention"],
         "tuning": strip_internal(scan["tuning"]),
         "cost_attribution": scan["cost_attribution"],
+        "fleet": strip_internal(scan["fleet"]),
         "history": history,
         "fixes": fixes,
         "profiles": [public_profile(p) for p in scan["profiles"]],

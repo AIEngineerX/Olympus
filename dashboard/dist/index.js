@@ -186,12 +186,19 @@
     const profileRows = profiles.slice(0, 6).map((profile, idx) => ({
       id: "profile:" + idx,
       label: "Profile " + String(idx + 1),
-      state: profile && profile.is_active ? "active" : "unknown",
-      score: 0,
-      top_issue: "Static mode can count this profile but cannot score fitness without the Olympus backend.",
-      recommended_view: "/profiles",
-      metrics: { skills: 0, cron: 0, gateways: 0, open: 0, ready: 0, running: 0, blocked: 0, failed_runs: 0 },
-      reasons: []
+      role_state: null,
+      route: "inherited",
+      gateway_state: "unknown",
+      running: 0,
+      open: 0,
+      blocked: 0,
+      sessions_7d: 0,
+      spend_7d_usd: 0,
+      last_active_at: null,
+      state: "unknown",
+      top_issue: null,
+      reasons: [],
+      recommended_view: "/profiles"
     }));
 
     return {
@@ -230,7 +237,7 @@
           ]
         }
       },
-      profile_fitness: { summary: { profiles: profiles.length, needs_review: profiles.length, average_score: 0, lowest_score: 0 }, profiles: profileRows },
+      fleet: { summary: { profiles: profiles.length, needs_review: 0, roles_missing: 0, roles_unreviewed: 0 }, profiles: profileRows },
       skill_coverage: {
         summary: { profiles: profiles.length, total_skills: skills.length, zero_skill_profiles: 0, forced_skill_tasks: 0, looping_sessions: 0, tool_heavy_sessions: 0, long_threads: 0, context_pressure_sessions: 0 },
         suggestions: [{ kind: "compatibility", severity: "info", title: "Skill counts available; skill coverage synthesis unavailable", detail: "The frontend can read /api/skills, but repeated-use recommendations require the Olympus backend collectors.", evidence: formatCount(skills.length) + " skills returned by /api/skills", recommended_view: "/skills", action_label: "Open Skills" }],
@@ -1243,61 +1250,59 @@
     );
   }
 
-  function ProfileFitness({ fitness }) {
-    const data = fitness || {};
-    const summary = data.summary || {};
-    const profiles = asList(data.profiles);
-    if (!profiles.length) return null;
-    const tiles = [
-      { label: "Profiles", value: summary.profiles || profiles.length || 0, state: profiles.length ? "active" : "unknown" },
-      { label: "Needs Review", value: summary.needs_review || 0, state: summary.needs_review ? "warning" : "ok" },
-    ];
+  function formatAgo(iso) {
+    if (!iso) return "no sessions this week";
+    const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+    if (minutes < 60) return minutes + " min ago";
+    if (minutes < 60 * 24) return Math.round(minutes / 60) + " h ago";
+    return Math.round(minutes / (60 * 24)) + " d ago";
+  }
 
-    return el("section", { className: "olympus-section olympus-profile-fitness" },
+  const ROLE_TEXT = { described: "Role described", auto: "Role auto-generated, not reviewed", missing: "No role description" };
+
+  function Fleet({ fleet }) {
+    const data = fleet || {};
+    const summary = data.summary || {};
+    const rows = asList(data.profiles);
+    if (!rows.length) return null;
+    return el("section", { className: "olympus-section olympus-fleet" },
       el("div", { className: "olympus-section-head" },
         el("div", null,
-          el("h2", null, "Profile Fitness"),
-          el("p", null, "Which Hermes profiles are ready for work, overloaded, missing setup, or carrying risky tasks.")
+          el("h2", null, "Fleet"),
+          el("p", null, [
+            rows.length + (rows.length === 1 ? " profile" : " profiles"),
+            summary.needs_review ? summary.needs_review + " need review" : null,
+            summary.roles_missing ? summary.roles_missing + " without a role" : null,
+          ].filter(Boolean).join(" \u00b7 ") + ". Sessions and spend cover the last 7 days.")
         ),
         el("a", { className: "olympus-link", href: routeLink("/profiles") }, "Open Profiles")
       ),
-      el("div", { className: "olympus-fitness-tiles" },
-        tiles.map((item) => el("div", { key: item.label, className: "olympus-fitness-tile" },
-          el("span", null, item.label),
-          el("strong", null, String(item.value)),
-          el(MetricPill, { state: item.state })
-        ))
-      ),
-      el("div", { className: "olympus-fitness-list" },
-        profiles.map((profile) => {
-          const metrics = profile.metrics || {};
-          const reasons = asList(profile.reasons);
-          return el("article", { key: profile.id || profile.label, className: "olympus-fitness-row" },
-            el("div", { className: "olympus-fitness-head" },
-              el("div", null,
-                el("h3", null, profile.label || "Profile"),
-                el("small", null, [
-                  (metrics.skills || 0) + " skills",
-                  (metrics.cron || 0) + " cron",
-                  (metrics.gateways || 0) + " gateways",
-                  (metrics.open || 0) + " open",
-                  (metrics.failed_runs || 0) + " failed runs",
-                ].join(" / "))
-              ),
-              el("div", { className: "olympus-fitness-score" },
-                el(StatePill, { state: profile.state || "unknown" })
-              )
+      el("div", { className: "olympus-fleet-table", role: "table", "aria-label": "Profiles" },
+        el("div", { className: "olympus-fleet-row olympus-fleet-row-head", role: "row" },
+          ["Profile", "Gateway", "Work", "Sessions", "Spend", "Last active"].map((label) => el("span", { key: label, role: "columnheader" }, label))
+        ),
+        rows.map((row) => el("div", { key: row.id, className: "olympus-fleet-entry" },
+          el("div", { className: "olympus-fleet-row", role: "row" },
+            el("span", { role: "cell" },
+              el("strong", null, row.label),
+              el("small", null, row.role || ROLE_TEXT[row.role_state] || "", row.route === "inherited" ? " \u00b7 inherited route" : "")
             ),
-            el("p", null, profile.top_issue || "No current profile issue."),
-            reasons.length ? el("div", { className: "olympus-fitness-reasons" },
-              reasons.map((reason, idx) => el("small", { key: idx },
-                reason.points ? el("span", { className: "olympus-reason-points" }, "\u2212" + String(reason.points) + " pts") : null,
-                [reason.label !== profile.top_issue ? reason.label : null, reason.detail].filter(Boolean).join(": ")
-              ))
-            ) : null,
-            profile.recommended_view ? el("a", { className: "olympus-link", href: routeLink(profile.recommended_view) }, routeLabel(profile.recommended_view)) : null
-          );
-        })
+            el("span", { role: "cell" }, row.gateway_state === "running" ? (row.gateway_mode === "multiplexed" ? "via default gateway" : "running") : row.gateway_state || "unknown"),
+            el("span", { role: "cell" }, row.running + " running \u00b7 " + row.open + " open" + (row.blocked ? " \u00b7 " + row.blocked + " blocked" : "")),
+            el("span", { role: "cell" }, formatCount(row.sessions_7d)),
+            el("span", { role: "cell" }, row.sessions_7d ? formatMoney(row.spend_7d_usd) : "–"),
+            el("span", { role: "cell" }, formatAgo(row.last_active_at))
+          ),
+          row.top_issue && row.state !== "ok" ? el("div", { className: "olympus-fleet-issue" },
+            el(MetricPill, { state: row.state }),
+            el("span", null, row.top_issue),
+            asList(row.reasons).map((reason, idx) => el("small", { key: idx },
+              reason.points ? el("span", { className: "olympus-reason-points" }, "\u2212" + String(reason.points) + " pts") : null,
+              [reason.label !== row.top_issue ? reason.label : null, reason.detail].filter(Boolean).join(": ")
+            )),
+            row.recommended_view ? el("a", { className: "olympus-inline-link", href: routeLink(row.recommended_view) }, routeLabel(row.recommended_view)) : null
+          ) : null
+        ))
       )
     );
   }
@@ -1585,7 +1590,7 @@
       el(ModePanel, { id: "agents", activeMode },
         el(CostAttribution, { attribution: data && data.cost_attribution }),
         el(PerformanceTracking, { performance: data && data.performance }),
-        el(ProfileFitness, { fitness: data && data.profile_fitness }),
+        el(Fleet, { fleet: data && data.fleet }),
         el(PartyView, { party: data && data.party, events: data && data.activity_events })
       ),
       el(ModePanel, { id: "skills", activeMode },

@@ -17,7 +17,7 @@ const deepSections = [
   { selector: ".olympus-policy", text: "Tool Policy & Aux Cost", minHeight: 180 },
   { selector: ".olympus-skill-coverage", text: "Skill Coverage", minHeight: 180 },
   { selector: ".olympus-skill-hygiene", text: "Skill Hygiene", minHeight: 180 },
-  { selector: ".olympus-profile-fitness", text: "Profile Fitness", minHeight: 180 },
+  { selector: ".olympus-fleet", text: "Fleet", minHeight: 180 },
   { selector: ".olympus-pantheon", text: "Live Work", minHeight: 240 },
   { selector: ".olympus-kanban", text: "Kanban Intelligence", minHeight: 180 }
 ];
@@ -25,7 +25,7 @@ const stagedModeSections = {
   Agents: [
     { selector: ".olympus-cost", text: "Where spend goes", minHeight: 180 },
     { selector: ".olympus-performance", text: "Performance Tracking", minHeight: 180 },
-    { selector: ".olympus-profile-fitness", text: "Profile Fitness", minHeight: 180 },
+    { selector: ".olympus-fleet", text: "Fleet", minHeight: 180 },
     { selector: ".olympus-pantheon", text: "Live Work", minHeight: 240 }
   ],
   Skills: [

@@ -1,5 +1,13 @@
 window.__OLYMPUS_FIXTURE_DATA__ = {
   generated_at: "2026-06-06T12:00:00Z",
+  fleet: {
+    summary: { profiles: 5, needs_review: 2, roles_missing: 1, roles_unreviewed: 1 },
+    profiles: [
+      { id: "profile:default", label: "Default", role_state: "described", role: null, route: "configured", gateway_state: "running", gateway_mode: "own", skills: 12, cron_jobs: 3, running: 2, open: 6, blocked: 1, sessions_7d: 31, spend_7d_usd: 5.12, last_active_at: "2026-06-06T11:52:00+00:00", state: "warning", top_issue: "Open work concentrated", reasons: [{ label: "Open work concentrated", detail: "6 open Kanban tasks are assigned here.", points: 14 }], recommended_view: "/kanban" },
+      { id: "profile:profile_1", label: "Profile 1", role_state: "auto", role: null, route: "configured", gateway_state: "running", gateway_mode: "multiplexed", skills: 10, cron_jobs: 0, running: 1, open: 2, blocked: 0, sessions_7d: 8, spend_7d_usd: 1.44, last_active_at: "2026-06-06T10:30:00+00:00", state: "ok", top_issue: "No profile fitness issue found.", reasons: [], recommended_view: "/profiles" },
+      { id: "profile:profile_2", label: "Profile 2", role_state: "missing", role: null, route: "inherited", gateway_state: "stopped", gateway_mode: null, skills: 0, cron_jobs: 0, running: 0, open: 0, blocked: 0, sessions_7d: 0, spend_7d_usd: 0, last_active_at: null, state: "warning", top_issue: "No local skills detected.", reasons: [], recommended_view: "/skills" }
+    ]
+  },
   cost_attribution: {
     window_days: 7,
     window_cost_usd: 7.42,
