@@ -46,6 +46,14 @@
     return el("span", { className: stateClass(state) }, label || state || "unknown");
   }
 
+  // Metric tiles show a chip only when the value needs attention; healthy,
+  // idle and unknown values stay quiet so warnings keep their meaning.
+  const PROBLEM_STATES = new Set(["warning", "critical", "error", "failed", "stale", "blocked"]);
+
+  function MetricPill({ state, label }) {
+    return PROBLEM_STATES.has(String(state || "").toLowerCase()) ? el(StatePill, { state, label }) : null;
+  }
+
   function severityClass(severity) {
     return "olympus-severity olympus-severity-" + String(severity || "info").toLowerCase();
   }
@@ -86,6 +94,35 @@
       "/skills": "Open Skills"
     };
     return labels[route] || "Open Route";
+  }
+
+  // Tuning items name sessions by hashed ref. The raw session ID is looked up
+  // only when the operator clicks, and opens in Hermes chat.
+  function SessionLink({ target }) {
+    const [state, setState] = useState("idle");
+    function open() {
+      setState("opening");
+      SDK.fetchJSON(API + "/open/session?ref=" + encodeURIComponent(target.ref))
+        .then((result) => {
+          if (result && result.href) {
+            window.location.assign(basePath() + result.href);
+            return;
+          }
+          setState("missing");
+        })
+        .catch(() => setState("missing"));
+    }
+    return el("button", { type: "button", className: "olympus-session-link", onClick: open, disabled: state !== "idle" },
+      state === "missing" ? "Session no longer available" : state === "opening" ? "Opening\u2026" : "Open " + (target.label || "session") + " session"
+    );
+  }
+
+  function SessionLinks({ targets }) {
+    const sessions = asList(targets).filter((target) => target && target.kind === "session" && target.ref);
+    if (!sessions.length) return null;
+    return el("div", { className: "olympus-session-links" },
+      sessions.map((target) => el(SessionLink, { key: target.ref, target }))
+    );
   }
 
   function formatCount(value) {
@@ -264,24 +301,88 @@
     );
   }
 
-  function Hero({ health, score, loading, onRefresh }) {
+  function needsYou(tuning) {
+    const hq = (tuning && tuning.agent_hq) || {};
+    return asList(hq.recommendations).filter((item) => item.severity === "critical" || item.severity === "warning");
+  }
+
+  function Hero({ health, tuning, loading, onRefresh }) {
     const status = health.status || (loading ? "checking" : "unknown");
     const statusLabel = health.status_label || status;
+    const breakdown = tuning.score_breakdown || {};
+    const metrics = (tuning.agent_hq && tuning.agent_hq.metrics) || {};
+    const urgent = needsYou(tuning);
+    const sessions24h = Number(metrics.sessions_24h || 0);
+    const facts = [
+      ["Needs you", urgent.length ? urgent.length + (urgent.length === 1 ? " item" : " items") : "Nothing urgent"],
+      ["Spend, last 24h", sessions24h ? formatMoney(metrics.spend_24h_usd) + " across " + sessions24h + (sessions24h === 1 ? " session" : " sessions") : "No sessions"],
+      ["Session window", (metrics.window && metrics.window.label) || breakdown.window || "No sessions yet"],
+    ];
     return el("section", { className: "olympus-hero" },
       el("div", { className: "olympus-hero-copy" },
-        el("div", { className: "olympus-kicker" }, "Hermes Agent Workstation"),
-        el("h1", null, "Olympus"),
-        el("p", null, "Read-only operator view: readiness, top risks, and the Hermes page that owns each fix."),
-        el("div", { className: "olympus-hero-actions" },
+        el("div", { className: "olympus-hero-title" },
+          el("h1", null, "Olympus"),
           el(StatePill, { state: status, label: statusLabel }),
           el(Button, { className: "olympus-refresh", onClick: onRefresh, disabled: loading }, loading ? "Refreshing" : "Refresh")
         ),
-        health.summary ? el("p", { className: "olympus-health-summary" }, health.summary) : null
+        health.summary ? el("p", { className: "olympus-health-summary" }, health.summary) : null,
+        el("dl", { className: "olympus-hero-facts" },
+          facts.map((fact) => el("div", { key: fact[0] },
+            el("dt", null, fact[0]),
+            el("dd", null, fact[1])
+          ))
+        )
       ),
       el("div", { className: "olympus-oracle" },
-        el("span", null, "Agent readiness"),
-        el("strong", null, String(score)),
-        el("small", null, "local evidence")
+        el("span", null, "Readiness"),
+        el("strong", null, typeof tuning.score === "number" ? String(tuning.score) : "\u2013"),
+        el("small", null, breakdown.label || "local evidence")
+      )
+    );
+  }
+
+  function renderTuningItem(item, idx) {
+    return el("article", { key: idx, className: cx("olympus-tuning-item", "olympus-tuning-item-" + String(item.severity || "info").toLowerCase()) },
+      el("div", { className: "olympus-item-head" },
+        el("div", null,
+          el("span", null, String(item.kind || "signal")),
+          el("h4", null, item.title || "Tuning item")
+        ),
+        el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
+      ),
+      el("p", null, item.detail || ""),
+      (item.evidence || item.basis) ? el("small", { className: "olympus-evidence-line" }, [item.evidence, item.basis].filter(Boolean).join(" \u00b7 ")) : null,
+      el("div", { className: "olympus-item-actions" },
+        el(SessionLinks, { targets: item.targets }),
+        item.recommended_view ? el("a", { className: "olympus-inline-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
+      )
+    );
+  }
+
+  function NeedsYou({ tuning }) {
+    const hq = (tuning && tuning.agent_hq) || {};
+    const items = asList(hq.recommendations);
+    if (!items.length) return null;
+    const urgent = needsYou(tuning);
+    const primary = items.slice(0, 3);
+    const backlog = items.slice(3);
+    return el("section", { className: "olympus-section olympus-needs-you" },
+      el("div", { className: "olympus-section-head" },
+        el("div", null,
+          el("h2", null, urgent.length ? "Needs you (" + urgent.length + ")" : "Nothing urgent"),
+          el("p", null, urgent.length ? "Ranked by severity. Each item names its evidence and the Hermes page that owns the fix." : "No warning or critical findings in this scan.")
+        )
+      ),
+      el("div", { className: "olympus-hq-tuning-items" },
+        primary.map(renderTuningItem),
+        backlog.length ? el("details", { className: "olympus-details olympus-backlog-details" },
+          el("summary", null, "More findings (" + backlog.length + ")"),
+          backlog.map((item, idx) => el("div", { key: idx, className: "olympus-mini-row" },
+            el("span", null, item.title || "Tuning item"),
+            el("small", null, [item.severity, item.kind, item.evidence].filter(Boolean).join(" / ")),
+            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
+          ))
+        ) : null
       )
     );
   }
@@ -296,47 +397,42 @@
       el("div", { className: "olympus-section-head" },
         el("div", null,
           el("h2", null, "Readiness Score"),
-          el("p", null, breakdown.explanation || "Heuristic score from local Hermes evidence. Open details for deductions and method.")
-        ),
-        el(StatePill, { state: (breakdown.score || 0) >= 85 ? "ok" : (breakdown.score || 0) >= 55 ? "warning" : "error", label: breakdown.label || "Score" })
+          el("p", null, breakdown.explanation || "Heuristic score from local Hermes evidence.")
+        )
       ),
+      deductions.length ? el("div", { className: "olympus-score-deductions" },
+        deductions.slice(0, 4).map((item, idx) => el("div", { key: idx, className: "olympus-score-deduction" },
+          el("span", { className: "olympus-reason-points" }, "\u2212" + String(item.points || 0) + " pts"),
+          el("div", null,
+            el("strong", null, item.label || "Deduction"),
+            el("small", null, [item.evidence, item.reason].filter(Boolean).join(" \u00b7 "))
+          )
+        )),
+        deductions.length > 4 ? el("small", { className: "olympus-muted" }, "+" + (deductions.length - 4) + " smaller deductions under Method and sources") : null
+      ) : el("p", { className: "olympus-muted" }, "No deductions in this scan."),
       el("details", { className: "olympus-details olympus-score-details" },
-        el("summary", null, "Deductions and method"),
+        el("summary", null, "Method and sources"),
         el("div", { className: "olympus-score-grid" },
           el("div", { className: "olympus-score-pane" },
-            el("h3", null, "Breakdown"),
-            el("div", { className: "olympus-score-total" },
-              el("span", null, "Starts at"),
-              el("strong", null, String(breakdown.base || 100)),
-              el("span", null, "Current"),
-              el("strong", null, String(breakdown.score || 0))
-            ),
-            deductions.length ? deductions.map((item, idx) => el("div", { key: idx, className: "olympus-score-deduction" },
-              el("div", null,
-                el("strong", null, item.label || "Deduction"),
-                el("small", null, item.reason || "")
-              ),
-              el("span", null, "-" + String(item.points || 0)),
-              el("em", null, [item.evidence, item.source].filter(Boolean).join(" / "))
-            )) : el("p", { className: "olympus-muted" }, "No deductions in this scan.")
+            el("h3", null, "All deductions"),
+            deductions.length ? deductions.map((item, idx) => el("div", { key: idx, className: "olympus-method-row" },
+              el("strong", null, item.label || "Deduction"),
+              el("span", null, "\u2212" + String(item.points || 0) + " pts"),
+              el("small", null, [item.reason, item.source].filter(Boolean).join(" \u00b7 "))
+            )) : el("p", { className: "olympus-muted" }, "None.")
           ),
           el("div", { className: "olympus-score-pane" },
-            el("h3", null, "Method"),
-            el("details", { className: "olympus-details olympus-method-list" },
-              el("summary", null, "Why these signals are used"),
-              thresholds.map((item, idx) => el("div", { key: idx, className: "olympus-method-row" },
-                el("strong", null, item.signal || "Signal"),
-                el("span", null, item.threshold || ""),
-                el("small", null, item.why || "")
-              ))
-            ),
-            sources.length ? el("details", { className: "olympus-details olympus-source-list" },
-              el("summary", null, "Source basis"),
-              sources.map((item, idx) => el("div", { key: idx, className: "olympus-source-row" },
-                el("strong", null, item.label || "Source"),
-                el("small", null, item.detail || "")
-              ))
-            ) : null
+            el("h3", null, "Thresholds"),
+            thresholds.map((item, idx) => el("div", { key: idx, className: "olympus-method-row" },
+              el("strong", null, item.signal || "Signal"),
+              el("span", null, item.threshold || ""),
+              el("small", null, item.why || "")
+            )),
+            sources.length ? el("h3", null, "Sources") : null,
+            sources.map((item, idx) => el("div", { key: "source-" + idx, className: "olympus-source-row" },
+              el("strong", null, item.label || "Source"),
+              el("small", null, item.detail || "")
+            ))
           )
         )
       )
@@ -396,79 +492,47 @@
     const summary = data.summary || {};
     const metrics = data.metrics || {};
     const agents = asList(data.agents);
-    const tuningItems = asList(data.recommendations);
-    const costRisks = Number(summary.expensive_sessions || metrics.expensive_sessions || 0);
-    const failedRuns = Number(metrics.failed_kanban_runs || 0);
     const medianDuration = Number(metrics.median_duration_seconds || 0);
     const p90Duration = Number(metrics.p90_duration_seconds || 0);
+    const failedRuns = Number(metrics.failed_kanban_runs || 0);
+    const costRisks = Number(summary.expensive_sessions || metrics.expensive_sessions || 0);
     const tiles = [
-      { label: "Agents", value: summary.agents || agents.length || 0, state: agents.length ? "active" : "unknown" },
-      { label: "Tuning Items", value: summary.recommendations || tuningItems.length || 0, state: tuningItems.length ? "warning" : "ok" },
-      { label: "Median Speed", value: formatDuration(medianDuration), state: medianDuration > 900 ? "warning" : medianDuration ? "active" : "idle" },
-      { label: "P90 Speed", value: formatDuration(p90Duration), state: p90Duration > 1800 ? "warning" : p90Duration ? "active" : "idle" },
-      { label: "Tool Calls", value: formatCount(metrics.total_tool_calls), state: metrics.total_tool_calls ? "active" : "idle" },
+      { label: "Profiles", value: summary.agents || agents.length || 0, state: "ok" },
+      { label: "Median run", value: formatDuration(medianDuration), state: medianDuration > 900 ? "warning" : "ok" },
+      { label: "P90 run", value: formatDuration(p90Duration), state: p90Duration > 1800 ? "warning" : "ok" },
+      { label: "Tool calls", value: formatCount(metrics.total_tool_calls), state: "ok" },
       { label: "Looping", value: summary.looping_sessions || 0, state: summary.looping_sessions ? "warning" : "ok" },
-      { label: "Context Pressure", value: summary.context_pressure_sessions || 0, state: summary.context_pressure_sessions ? "warning" : "ok" },
-      { label: "Outcome Risks", value: failedRuns || 0, state: failedRuns ? "warning" : "ok" },
-      { label: "Cost Risks", value: costRisks, state: costRisks ? "warning" : "ok" },
+      { label: "Context pressure", value: summary.context_pressure_sessions || 0, state: summary.context_pressure_sessions ? "warning" : "ok" },
+      { label: "Failed worker runs", value: failedRuns, state: failedRuns ? "warning" : "ok" },
+      { label: "Runs over $1", value: costRisks, state: costRisks ? "warning" : "ok" },
     ];
     // The first screen shows six tiles; the rest stay one click away.
     const primaryTiles = tiles.slice(0, 6);
     const secondaryTiles = tiles.slice(6);
-    const primaryTuningItems = tuningItems.slice(0, 2);
-    const backlogTuningItems = tuningItems.slice(2);
-
-    function renderTuningItem(item, idx) {
-      return el("article", { key: idx, className: cx("olympus-tuning-item", "olympus-tuning-item-" + String(item.severity || "info").toLowerCase()) },
-        el("div", { className: "olympus-item-head" },
-          el("div", null,
-            el("span", null, String(item.kind || "signal")),
-            el("h4", null, item.title || "Tuning item")
-          ),
-          el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
-        ),
-        el("p", null, item.detail || ""),
-        (item.evidence || item.basis) ? el("small", { className: "olympus-evidence-line" }, [item.evidence, item.basis].filter(Boolean).join(" · ")) : null,
-        item.recommended_view ? el("a", { className: "olympus-inline-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
-      );
-    }
+    const window = metrics.window || {};
 
     return el("section", { className: "olympus-section olympus-agent-hq" },
       el("div", { className: "olympus-section-head" },
         el("div", null,
           el("h2", null, "Agent Monitor"),
-          el("p", null, "Profiles, sessions, Kanban work, tool pressure, context risk, and reliability in one operational scan.")
+          el("p", null, window.label ? "Session signals from the " + window.label + "; Kanban counts are live." : "No sessions recorded yet; Kanban counts are live.")
         )
       ),
       el("div", { className: "olympus-hq-tiles" },
         primaryTiles.map((item) => el("div", { key: item.label, className: "olympus-hq-tile" },
           el("span", null, item.label),
           el("strong", null, String(item.value)),
-          el(StatePill, { state: item.state })
+          el(MetricPill, { state: item.state })
         ))
       ),
-      secondaryTiles.length ? el("details", { className: "olympus-details olympus-backlog-details olympus-metric-backlog" },
+      el("details", { className: "olympus-details olympus-backlog-details olympus-metric-backlog" },
         el("summary", null, "More monitor signals (" + secondaryTiles.length + ")"),
         el("div", { className: "olympus-hq-mini-grid" },
           secondaryTiles.map((item) => el("div", { key: item.label, className: "olympus-hq-mini-tile" },
             el("span", null, item.label),
             el("strong", null, String(item.value)),
-            el(StatePill, { state: item.state })
+            el(MetricPill, { state: item.state })
           ))
-        )
-      ) : null,
-      el("div", { className: "olympus-hq-grid" },
-        el("div", { className: "olympus-hq-pane olympus-hq-tuning-items" },
-          el("h3", null, "Top Actions"),
-          primaryTuningItems.length ? primaryTuningItems.map(renderTuningItem) : el("p", { className: "olympus-muted" }, "No tuning items in this scan."),
-          backlogTuningItems.length ? el("details", { className: "olympus-details olympus-backlog-details" },
-            el("summary", null, "More tuning items (" + backlogTuningItems.length + ")"),
-            backlogTuningItems.map((item, idx) => el("div", { key: idx, className: "olympus-mini-row" },
-              el("span", null, item.title || "Tuning item"),
-              el("small", null, [item.severity, item.kind, item.evidence].filter(Boolean).join(" / ")),
-              item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
-            ))
-          ) : null
         )
       )
     );
@@ -539,13 +603,13 @@
           el("h2", null, "Performance Tracking"),
           el("p", null, "Latency, tool pressure, context risk, and reliability from the latest scan.")
         ),
-        el(StatePill, { state: summary.state || "unknown" })
+        el(MetricPill, { state: summary.state || "unknown" })
       ),
       el("div", { className: "olympus-performance-grid" },
         lanes.map((item) => el("article", { key: item.id || item.label, className: cx("olympus-performance-lane", "olympus-performance-lane-" + String(item.state || "unknown").toLowerCase()) },
           el("div", { className: "olympus-performance-lane-head" },
             el("span", null, item.label || "Signal"),
-            el(StatePill, { state: item.state || "unknown" })
+            el(MetricPill, { state: item.state })
           ),
           el("strong", null, laneValue(item)),
           el("p", null, item.detail || ""),
@@ -587,7 +651,7 @@
         ].map((item) => el("div", { key: item.label, className: "olympus-diagnostic-tile" },
           el("span", null, item.label),
           el("strong", null, item.value),
-          el(StatePill, { state: item.state })
+          el(MetricPill, { state: item.state })
         ))
       ) : null,
       el(EvidenceSources, { evidenceSources })
@@ -623,13 +687,13 @@
           el("h2", null, "Trace Spine"),
           el("p", null, "Task, session, run, and event correlation without transcript content.")
         ),
-        el(StatePill, { state: summary.state || "unknown" })
+        el(MetricPill, { state: summary.state || "unknown" })
       ),
       el("div", { className: "olympus-trace-tiles" },
         tiles.map((item) => el("div", { key: item.label, className: "olympus-trace-tile" },
           el("span", null, item.label),
           el("strong", null, item.value),
-          el(StatePill, { state: item.state })
+          el(MetricPill, { state: item.state })
         ))
       ),
       visibleItems.length ? el("div", { className: "olympus-trace-list" },
@@ -666,7 +730,6 @@
     if (!items.length) return null;
 
     const tiles = [
-      { label: "Score", value: summary.score == null ? "n/a" : summary.score, state: summary.state || "unknown" },
       { label: "Checks", value: summary.checks || items.length, state: items.length ? "active" : "idle" },
       { label: "Passed", value: summary.passed || 0, state: summary.passed ? "ok" : "idle" },
       { label: "Warnings", value: summary.warnings || 0, state: summary.warnings ? "warning" : "ok" },
@@ -679,13 +742,13 @@
           el("h2", null, "Operational Evals"),
           el("p", null, "Deterministic reliability, routing, skill-use, and efficiency checks from current Hermes evidence.")
         ),
-        el(StatePill, { state: summary.state || "unknown" })
+        el(MetricPill, { state: summary.state || "unknown" })
       ),
       el("div", { className: "olympus-ops-eval-tiles" },
         tiles.map((item) => el("div", { key: item.label, className: "olympus-ops-eval-tile" },
           el("span", null, item.label),
           el("strong", null, String(item.value)),
-          el(StatePill, { state: item.state })
+          el(MetricPill, { state: item.state })
         ))
       ),
       el("div", { className: "olympus-ops-eval-grid" },
@@ -696,10 +759,6 @@
               el("h3", null, item.label || "Operational check")
             ),
             el(StatePill, { state: item.state || "unknown" })
-          ),
-          el("div", { className: "olympus-ops-eval-score" },
-            el("strong", null, item.score == null ? "n/a" : String(item.score)),
-            el("span", null, "score")
           ),
           el("p", null, item.evidence || item.detail || ""),
           asList(item.signals).length || item.basis ? el("small", null, [
@@ -792,7 +851,7 @@
         tiles.map((tile) => el("article", { key: tile.id, className: cx("olympus-metrics-card", "olympus-metrics-card-" + String(tile.state || "unknown").toLowerCase()) },
           el("div", { className: "olympus-metrics-card-head" },
             el("h3", null, tile.label),
-            el(StatePill, { state: tile.state })
+            el(MetricPill, { state: tile.state })
           ),
           el("div", { className: "olympus-metrics-rows" },
             tile.rows.map((row) => el("div", { key: row[0], className: "olympus-mini-row" },
@@ -852,7 +911,7 @@
           el("p", null, "Config limits, route audit, browser privacy, and background cost visibility.")
         ),
         el("div", { className: "olympus-section-actions" },
-          el(StatePill, { state: summary.state || "unknown" }),
+          el(MetricPill, { state: summary.state || "unknown" }),
           el("a", { className: "olympus-link", href: routeLink("/config") }, "Open Config")
         )
       ),
@@ -860,7 +919,7 @@
         tiles.map((item) => el("div", { key: item.label, className: "olympus-policy-tile" },
           el("span", null, item.label),
           el("strong", null, String(item.value)),
-          el(StatePill, { state: item.state })
+          el(MetricPill, { state: item.state })
         ))
       ),
       el("div", { className: "olympus-policy-grid" },
@@ -872,7 +931,7 @@
               el("strong", null, settingValue(item)),
               el("small", null, [item.detail, item.source].filter(Boolean).join(" / "))
             ),
-            el(StatePill, { state: item.state || "unknown" })
+            el(MetricPill, { state: item.state })
           )) : el("p", { className: "olympus-muted" }, "No config policy evidence in this scan.")
         ),
         el("div", { className: "olympus-policy-pane" },
@@ -923,7 +982,7 @@
         tiles.map((item) => el("div", { key: item.label, className: "olympus-skill-tile" },
           el("span", null, item.label),
           el("strong", null, String(item.value)),
-          el(StatePill, { state: item.state })
+          el(MetricPill, { state: item.state })
         ))
       ),
       el("div", { className: "olympus-skill-grid" },
@@ -988,7 +1047,7 @@
           el("p", null, "Activity, archive, patch, hub trust, and scan gaps from local skill metadata.")
         ),
         el("div", { className: "olympus-section-actions" },
-          el(StatePill, { state: summary.state || "unknown" }),
+          el(MetricPill, { state: summary.state || "unknown" }),
           el("a", { className: "olympus-link", href: routeLink("/skills") }, "Open Skills")
         )
       ),
@@ -996,7 +1055,7 @@
         tiles.map((item) => el("div", { key: item.label, className: "olympus-skill-hygiene-tile" },
           el("span", null, item.label),
           el("strong", null, String(item.value)),
-          el(StatePill, { state: item.state })
+          el(MetricPill, { state: item.state })
         ))
       ),
       el("div", { className: "olympus-skill-hygiene-grid" },
@@ -1052,8 +1111,6 @@
     const tiles = [
       { label: "Profiles", value: summary.profiles || profiles.length || 0, state: profiles.length ? "active" : "unknown" },
       { label: "Needs Review", value: summary.needs_review || 0, state: summary.needs_review ? "warning" : "ok" },
-      { label: "Average", value: summary.average_score || 0, state: Number(summary.average_score || 0) >= 90 ? "ok" : "warning" },
-      { label: "Lowest", value: summary.lowest_score || 0, state: Number(summary.lowest_score || 0) >= 90 ? "ok" : "warning" },
     ];
 
     return el("section", { className: "olympus-section olympus-profile-fitness" },
@@ -1068,7 +1125,7 @@
         tiles.map((item) => el("div", { key: item.label, className: "olympus-fitness-tile" },
           el("span", null, item.label),
           el("strong", null, String(item.value)),
-          el(StatePill, { state: item.state })
+          el(MetricPill, { state: item.state })
         ))
       ),
       el("div", { className: "olympus-fitness-list" },
@@ -1088,7 +1145,6 @@
                 ].join(" / "))
               ),
               el("div", { className: "olympus-fitness-score" },
-                el("strong", null, String(profile.score || 0)),
                 el(StatePill, { state: profile.state || "unknown" })
               )
             ),
@@ -1113,114 +1169,61 @@
     return fallback || "active";
   }
 
-  function PartyView({ party, orchestration, events, score }) {
+  // Live Work: which profile is running what right now, and the latest Kanban
+  // activity. Counts that other panels already own (readiness, Kanban totals,
+  // cron, gateways) are not repeated here.
+  function PartyView({ party, events }) {
     const data = party || {};
     const members = asList(data.members);
-    const summary = data.summary || {};
-    const orch = orchestration || {};
-    const orchSummary = orch.summary || {};
     const [selectedId, setSelectedId] = useState(members[0] && members[0].id);
     const selected = members.find((m) => m.id === selectedId) || members[0] || {};
     const activity = asList(events).slice(0, 8);
-    const hasOrchestrationSignal = Boolean(
-      orchSummary.open || orchSummary.running || orchSummary.ready || orchSummary.blocked ||
-      orchSummary.active_workers || orchSummary.stale_workers
-    );
     useEffect(() => {
       if (members.length && !members.some((member) => member.id === selectedId)) {
         setSelectedId(members[0].id);
       }
     }, [members.map((member) => member.id).join("|"), selectedId]);
-    if (!members.length && !activity.length && !hasOrchestrationSignal) return null;
-    const lanes = [
-      { key: "kanban", label: "Kanban", value: orchSummary.open || 0, detail: (orchSummary.running || 0) + " running / " + (orchSummary.ready || 0) + " ready", state: (orchSummary.active_workers || orchSummary.open) ? "running" : "idle" },
-      { key: "cron", label: "Cron", value: members.reduce((n, m) => n + Number(m.cron_jobs || 0), 0), detail: "scheduled triggers", state: "scheduled" },
-      { key: "gateway", label: "Gateway", value: members.reduce((n, m) => n + Number(m.gateway_count || 0), 0), detail: (summary.working || 0) + " working profiles", state: "running" },
-    ];
-    const status = [
-      { label: "Profiles", value: summary.members || members.length || 0, state: members.length ? "active" : "unknown" },
-      { label: "Workers", value: summary.workers || orchSummary.active_workers || 0, state: (summary.workers || orchSummary.active_workers) ? "running" : "idle" },
-      { label: "Blocked", value: summary.blocked || orchSummary.blocked || 0, state: (summary.blocked || orchSummary.blocked) ? "warning" : "ok" },
-      { label: "Stale", value: orchSummary.stale_workers || 0, state: orchSummary.stale_workers ? "warning" : "ok" },
-    ];
-    // Hand-placed ring slots around the readiness core. Larger fleets switch
-    // the map to a flowing grid so every profile keeps its own card and
-    // click target instead of reusing a slot.
-    const nodePositions = [
-      ["18%", "28%"], ["50%", "14%"], ["80%", "30%"], ["70%", "72%"],
-      ["32%", "74%"], ["12%", "60%"], ["88%", "60%"],
-    ];
-    const ringLayout = members.length <= nodePositions.length;
+    if (!members.length && !activity.length) return null;
 
     return el("section", { className: "olympus-section olympus-party olympus-pantheon" },
       el("div", { className: "olympus-section-head" },
         el("div", null,
-          el("h2", null, "Pantheon"),
-          el("p", null, "Clickable profile map for workload, trigger lanes, and current operational risk.")
+          el("h2", null, "Live Work"),
+          el("p", null, "Which profile is running what, and the latest Kanban activity. Select a profile for its current task.")
         ),
         el("a", { className: "olympus-link", href: routeLink("/kanban") }, "Open Kanban")
       ),
       el("div", { className: "olympus-command-viewport" },
-        el("div", { className: "olympus-viewport-main", role: "group", "aria-label": "Pantheon showing trigger lanes, profile workload, and current operational risk." },
-          members.length ? el("div", { className: cx("olympus-pantheon-map", !ringLayout && "olympus-pantheon-map-grid"), role: "group", "aria-label": "Clickable Pantheon profile map." },
-            el("div", { className: "olympus-pantheon-score", "aria-hidden": "true" },
-              el("span", null, "Readiness"),
-              el("strong", null, String(score || 0))
-            ),
-            members.map((member, idx) => {
-              const pos = ringLayout ? nodePositions[idx] : null;
-              return el("button", {
-                key: member.id,
-                type: "button",
-                style: pos ? { "--x": pos[0], "--y": pos[1] } : undefined,
-                "aria-pressed": selected.id === member.id,
-                "aria-label": "Select profile " + (member.label || "Agent"),
-                className: cx(
-                  "olympus-agent-card",
-                  "olympus-pantheon-node",
-                  "olympus-agent-card-" + String(member.state || "unknown").toLowerCase(),
-                  selected.id === member.id && "olympus-agent-card-selected",
-                  selected.id === member.id && "olympus-pantheon-node-selected"
-                ),
-                onClick: () => setSelectedId(member.id)
-              },
-                el("span", { className: "olympus-pantheon-node-kicker" }, "Profile"),
-                el("strong", null, member.label || "Agent"),
-                el("small", null, [
-                  (member.open_work || 0) + " open",
-                  (member.running_work || 0) + " running",
-                  (member.blocked_work || 0) + " blocked",
-                ].join(" / ")),
-                el(StatePill, { state: member.state || "unknown" })
-              );
-            })
-          ) : el("p", { className: "olympus-muted" }, "No Hermes profiles detected."),
-          el("div", { className: "olympus-viewport-head" },
-            el("div", null,
-              el("span", null, "Live Monitor"),
-              el("h3", null, "Operational State")
-            ),
-            el("div", { className: "olympus-viewport-status" },
-              status.map((item) => el("div", { key: item.label, className: "olympus-viewport-stat" },
-                el("span", null, item.label),
-                el("strong", null, String(item.value)),
-                el(StatePill, { state: item.state })
-              ))
-            )
-          ),
-          el("div", { className: "olympus-trigger-lanes" },
-            lanes.map((lane) => el("div", { key: lane.key, className: cx("olympus-trigger-card", "olympus-trigger-" + lane.key) },
-              el("span", null, lane.label),
-              el("strong", null, String(lane.value || 0)),
-              el("small", null, lane.detail),
-              el(StatePill, { state: lane.state })
+        el("div", { className: "olympus-viewport-main" },
+          members.length ? el("div", { className: "olympus-pantheon-map olympus-pantheon-map-grid", role: "group", "aria-label": "Profiles" },
+            members.map((member) => el("button", {
+              key: member.id,
+              type: "button",
+              "aria-pressed": selected.id === member.id,
+              "aria-label": "Select profile " + (member.label || "Agent"),
+              className: cx(
+                "olympus-agent-card",
+                "olympus-pantheon-node",
+                "olympus-agent-card-" + String(member.state || "unknown").toLowerCase(),
+                selected.id === member.id && "olympus-agent-card-selected",
+                selected.id === member.id && "olympus-pantheon-node-selected"
+              ),
+              onClick: () => setSelectedId(member.id)
+            },
+              el("strong", null, member.label || "Agent"),
+              el("small", null, [
+                (member.running_work || 0) + " running",
+                (member.open_work || 0) + " open",
+                (member.blocked_work || 0) + " blocked",
+              ].join(" / ")),
+              el(MetricPill, { state: member.state })
             ))
-          )
+          ) : el("p", { className: "olympus-muted" }, "No Hermes profiles detected.")
         ),
         el("aside", { className: "olympus-party-inspector" },
           el("div", { className: "olympus-party-inspector-head" },
             el("div", null,
-              el("span", null, "Selected Profile"),
+              el("span", null, "Selected profile"),
               el("h3", null, selected.label || "No profile")
             ),
             el(StatePill, { state: selected.state || "unknown" })
@@ -1228,10 +1231,10 @@
           selected.id ? [
             el("div", { key: "stats", className: "olympus-party-stat-grid" },
               [
-                ["Open", selected.open_work || 0],
                 ["Running", selected.running_work || 0],
                 ["Ready", selected.ready_work || 0],
                 ["Blocked", selected.blocked_work || 0],
+                ["Open", selected.open_work || 0],
                 ["Skills", selected.skill_count || 0],
                 ["Cron", selected.cron_jobs || 0],
               ].map((pair) => el("div", { key: pair[0], className: "olympus-party-stat" },
@@ -1240,14 +1243,14 @@
               ))
             ),
             el("div", { key: "current", className: "olympus-party-current" },
-              el("strong", null, "Current Work"),
+              el("strong", null, "Current work"),
               selected.current_task ? el("p", null, [selected.current_task.title, selected.current_task.status, selected.current_task.goal_mode ? "goal mode" : null].filter(Boolean).join(" / ")) : el("p", null, "No active Kanban task on this scan."),
               selected.current_task && selected.current_task.forced_skill_count ? el("small", null, "Forced skills: " + String(selected.current_task.forced_skill_count)) : null,
               selected.current_task && selected.current_task.model_override ? el("small", null, "Model override: " + selected.current_task.model_override) : null
             ),
-            el("div", { key: "flags", className: "olympus-flags" },
+            asList(selected.flags).length ? el("div", { key: "flags", className: "olympus-flags" },
               asList(selected.flags).map((flag) => el("span", { key: flag }, flag))
-            )
+            ) : null
           ] : el("p", { className: "olympus-muted" }, "No Hermes profiles detected.")
         )
       ),
@@ -1299,7 +1302,7 @@
         summary.map((item) => el("div", { key: item.label, className: "olympus-kanban-tile" },
           el("span", null, item.label),
           el("strong", null, item.value),
-          el(StatePill, { state: item.state })
+          el(MetricPill, { state: item.state })
         ))
       ),
       el("div", { className: "olympus-kanban-grid" },
@@ -1425,21 +1428,21 @@
 
     const health = (data && data.health) || {};
     const tuning = (data && data.tuning) || {};
-    const score = typeof tuning.score === "number" ? tuning.score : 0;
 
     return el("div", { className: "olympus-page" },
-      el(Hero, { health, score, loading, onRefresh: load }),
+      el(Hero, { health, tuning, loading, onRefresh: load }),
       error ? el("div", { className: "olympus-error" }, error) : null,
       el(ModeTabs, { activeMode, onChange: setActiveMode }),
       el(ModePanel, { id: "brief", activeMode },
         el(StaticCompatibilityNotice, { compatibility: data && data.static_compatibility }),
+        el(NeedsYou, { tuning }),
         el(ScoreExplainer, { tuning }),
         el(AgentHQ, { hq: tuning.agent_hq })
       ),
       el(ModePanel, { id: "agents", activeMode },
         el(PerformanceTracking, { performance: data && data.performance }),
         el(ProfileFitness, { fitness: data && data.profile_fitness }),
-        el(PartyView, { party: data && data.party, orchestration: data && data.orchestration, events: data && data.activity_events, score })
+        el(PartyView, { party: data && data.party, events: data && data.activity_events })
       ),
       el(ModePanel, { id: "skills", activeMode },
         el(SkillCoverage, { coverage: data && data.skill_coverage }),
@@ -1454,8 +1457,11 @@
       ),
       el(ModePanel, { id: "diagnostics", activeMode },
         el(OpsEvals, { evals: data && data.ops_evals }),
-        el(MetricsSpine, { metrics: data && data.metrics_spine }),
-        el(ProductionDiagnostics, { diagnostics: data && data.diagnostics, clientDiagnostics, evidenceSources: data && data.evidence_sources })
+        el("details", { className: "olympus-details olympus-debug" },
+          el("summary", null, "Debug details: metrics spine, payload budgets, evidence sources"),
+          el(MetricsSpine, { metrics: data && data.metrics_spine }),
+          el(ProductionDiagnostics, { diagnostics: data && data.diagnostics, clientDiagnostics, evidenceSources: data && data.evidence_sources })
+        )
       )
     );
   }

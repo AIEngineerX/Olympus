@@ -46,6 +46,18 @@ test.describe("Olympus behaviour", () => {
     }
   });
 
+  test("session links resolve on click and report sessions that are gone", async ({ page }) => {
+    await openPage(page, { state: "noisy", base: "/hermes" });
+    const gone = page.getByRole("button", { name: "Open telegram session" });
+    await gone.click();
+    await expect(page.getByRole("button", { name: "Session no longer available" })).toBeDisabled();
+
+    await Promise.all([
+      page.waitForRequest((request) => request.url().endsWith("/hermes/chat?resume=fixture-session&profile=default") && request.isNavigationRequest()),
+      page.getByRole("button", { name: "Open cli session" }).click(),
+    ]);
+  });
+
   test("mode tabs follow the WAI-ARIA keyboard pattern", async ({ page }) => {
     await openPage(page, { state: "noisy" });
     const brief = page.getByRole("tab", { name: "Brief" });
