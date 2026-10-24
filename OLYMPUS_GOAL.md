@@ -1,65 +1,44 @@
 # Olympus Goal
 
-Olympus is the HermesOS Agent Monitor.
+Olympus is where you manage your Hermes agents.
 
-It is not a new orchestrator, Kanban clone, or admin dashboard. Hermes runs the
-agents. Kanban coordinates durable work. The Hermes dashboard owns admin pages.
-Olympus explains how the agent system is performing and what to tune next.
+Hermes runs the agents. Olympus shows every agent you have, what each one is
+doing right now, what it is waiting on, and what went wrong, and lets you act on
+it safely through Hermes' own APIs.
 
 ## Core Question
 
-What needs tuning, routing, unblocking, or review so my HermesOS agents perform
-better?
+Which of my agents needs me right now, and what do I do about it?
 
 ## Own
 
-- Cross-surface recommendations.
-- Evidence from profiles, routes, skills, sessions, cron, gateways, Kanban, MCP,
-  memory, tools, and runtime health.
-- Agent/profile workload and readiness signals.
-- Handoff links to the Hermes page that owns each action.
-- Read-only diagnostics until a write action is approved.
-- A visual Olympus layer that clarifies live state.
+- The agent roster: one row per agent (Hermes profile) with live state, current
+  task, helpers (subagents, Kanban workers, cron jobs), last activity and
+  issues.
+- One "Needs you" queue across everything Olympus checks: agents waiting on an
+  answer, failed or overdue cron, stalled or failed workers, failed skill
+  audits, risky config.
+- The agent inspector: recent activity, scheduled jobs, Kanban work, tokens and
+  cost per agent, and whether your fixes worked.
+- Safe controls, each confirmed and logged, executed by Hermes' own endpoints:
+  pause / resume / run a cron job, retry / reclaim / reassign / answer a Kanban
+  task.
+- Checks that are not about one agent: backlog triage, skill hygiene, policy
+  audit, where spend goes, diagnostics.
+- Opt-in alerts through a Hermes no-agent cron job.
 
 ## Do Not Own
 
-- Kanban board mechanics, task creation, comments, drag/drop, or worker drawers.
-- Sessions, Analytics, Cron, Skills, Models, Logs, Profiles, Config, Keys, MCP,
-  Webhooks, Memory, or System admin clones.
-- Usage ledgers, token charts, model spend totals, or raw cost reporting.
-  Hermes Desktop Command Center Usage and Hermes web Analytics own those views.
-- Profile CRUD, skill install/toggle, toolset editing, gateway start/stop, cron
-  edit/trigger, or config mutation in v1.
-- Visual elements that do not clarify operational state.
+- Writing Hermes files directly. Every change goes through a Hermes endpoint.
+- Creating or deleting agents, cron jobs or tasks, editing prompts, models,
+  skills, toolsets, keys or config. Those stay on Hermes' pages; Olympus links
+  to them.
+- Usage ledgers and model leaderboards. Hermes Analytics owns those; Olympus
+  shows tokens and cost only per agent, as evidence.
+- Decoration that does not clarify an agent's state.
 
-## Useful Signals
+## Boundary
 
-- failed or stale runs
-- blocked or unassigned ready work
-- overloaded or idle profiles
-- missing route metadata
-- missing skill coverage
-- long threads and tool-heavy sessions
-- cron failures and noisy schedules
-- gateway health and delivery errors
-- repeated Kanban retries, crashes, stale heartbeats, and orphaned runs
-
-## Product Boundary
-
-If a feature mutates tasks, profiles, cron, gateway, memory, credentials, or
-config, first check whether an existing Hermes page or API owns it. If Hermes
-already owns it, Olympus recommends, explains, and links rather than
-duplicate the control.
-
-If a feature is mainly sessions, API calls, tokens, daily usage, top models, top
-skills, or cost totals, Hermes Usage/Analytics owns the ledger. Olympus may use
-that evidence only to explain risk, routing, skill hygiene, or the next action.
-
-## Next Direction
-
-Keep the shipped monitor stable while preparing the upstream Desktop path:
-
-1. Keep Trace Spine V0 green in visual, live, and security checks.
-2. Keep Operational Evals deterministic and tied to Hermes evidence.
-3. Prepare the Hermes Desktop plugin-tab parity PR.
-4. Keep action buttons as handoff links unless a write action is approved.
+If an action is not one of the safe controls above, Olympus explains it and
+links to the Hermes page that owns it. Controls can be turned off with
+`dashboard.olympus.controls: false` in `config.yaml`.
