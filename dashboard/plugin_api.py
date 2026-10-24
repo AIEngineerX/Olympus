@@ -113,24 +113,42 @@ LOG_ERROR_PATTERNS = [
 ]
 
 
+def olympus_settings() -> Dict[str, Any]:
+    """The ``dashboard.olympus`` block of config.yaml (raises if unreadable)."""
+    try:
+        from hermes_cli.config import load_config_readonly
+        cfg: Any = load_config_readonly() or {}
+    except ImportError:
+        # Standalone loads (plugin unit tests) run without hermes_cli on
+        # sys.path; read the active HERMES_HOME config directly.
+        cfg = read_yaml(get_hermes_home() / "config.yaml")
+    dashboard_cfg = cfg.get("dashboard") if isinstance(cfg, dict) else None
+    olympus_cfg = dashboard_cfg.get("olympus") if isinstance(dashboard_cfg, dict) else None
+    return olympus_cfg if isinstance(olympus_cfg, dict) else {}
+
+
 def refresh_expose_local_labels() -> bool:
     global EXPOSE_LOCAL_LABELS
     try:
-        try:
-            from hermes_cli.config import load_config_readonly
-            cfg: Any = load_config_readonly() or {}
-        except ImportError:
-            # Standalone loads (plugin unit tests) run without hermes_cli on
-            # sys.path; read the active HERMES_HOME config directly.
-            cfg = read_yaml(get_hermes_home() / "config.yaml")
-        dashboard_cfg = cfg.get("dashboard") if isinstance(cfg, dict) else None
-        olympus_cfg = dashboard_cfg.get("olympus") if isinstance(dashboard_cfg, dict) else None
-        value = bool(olympus_cfg.get("expose_local_labels", False)) if isinstance(olympus_cfg, dict) else False
+        value = bool(olympus_settings().get("expose_local_labels", False))
     except Exception as exc:
         log_read_warning("expose_local_labels config read failed", exc)
         value = False
     EXPOSE_LOCAL_LABELS = value
     return value
+
+
+def controls_enabled() -> bool:
+    """Whether the page may act through Hermes (dashboard.olympus.controls).
+
+    On by default; every action is still confirmed. Fails closed when the
+    config cannot be read.
+    """
+    try:
+        return _cfg_flag(olympus_settings().get("controls"), True)
+    except Exception as exc:
+        log_read_warning("controls config read failed", exc)
+        return False
 
 
 def now_iso() -> str:
@@ -1936,6 +1954,18 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                     open_params + (KANBAN_CLOSED_TASK_SAMPLE,),
                 ).fetchall())
 
+            # When each blocked task last blocked: the task row has no
+            # timestamp for it, task_events does.
+            blocked_at: Dict[str, Any] = {}
+            if {"task_id", "kind", "created_at"}.issubset(table_columns(con, "task_events")):
+                blocked_at = {
+                    str(r["task_id"]): r["at"]
+                    for r in con.execute(
+                        "SELECT e.task_id, MAX(e.created_at) AS at FROM task_events e JOIN tasks t ON t.id = e.task_id "
+                        "WHERE t.status = 'blocked' AND e.kind = 'blocked' GROUP BY e.task_id"
+                    )
+                }
+
             for t in task_rows:
                 status = str(row_value(t, "status", "unknown"))
                 assignee = str(row_value(t, "assignee") or "unassigned")
@@ -2024,6 +2054,8 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                     "goal_mode": bool(row_value(t, "goal_mode", 0)),
                     "block_kind": row_value(t, "block_kind"),
                     "block_recurrences": safe_int(row_value(t, "block_recurrences")),
+                    "blocked_at": ts_to_iso(blocked_at.get(task_id)),
+                    "last_failure_error": public_error(row_value(t, "last_failure_error"), 160),
                     "_created_ts": safe_float(created_at),
                     "goal_max_turns": row_value(t, "goal_max_turns"),
                     "_skills": forced_skills,
@@ -2077,6 +2109,7 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                         "board": slug,
                         "task_id": public_task_id,
                         "profile": public_profile_label(row_value(r, "profile"), profile_public_names),
+                        "_profile": row_value(r, "profile"),
                         "status": run_status,
                         "outcome": outcome,
                         "started_at": ts_to_iso(row_value(r, "started_at")),
@@ -2253,7 +2286,7 @@ def _recommendation(severity: str, title: str, detail: str, evidence: str, view:
 def session_targets(sessions: List[Dict[str, Any]], limit: int = 3) -> List[Dict[str, Any]]:
     """Sessions a tuning item points at, openable through ``/open/session``."""
     return [
-        {"kind": "session", "ref": s.get("session_ref"), "label": s.get("label")}
+        {"kind": "session", "ref": s.get("session_ref"), "label": s.get("label"), "agent": f"profile:{s.get('profile') or 'default'}"}
         for s in sessions[:limit]
         if s.get("session_ref")
     ]
@@ -2264,11 +2297,15 @@ def tuning_key(kind: str, title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", f"{kind} {title}".lower()).strip("-")
 
 
-def _tuning_item(kind: str, severity: str, title: str, detail: str, evidence: str, view: str, action: str, owner: str = "Olympus", basis: str = "", threshold: str = "", targets: Optional[List[Dict[str, Any]]] = None, count: Optional[int] = None) -> Dict[str, Any]:
+def _tuning_item(kind: str, severity: str, title: str, detail: str, evidence: str, view: str, action: str, owner: str = "Olympus", basis: str = "", threshold: str = "", targets: Optional[List[Dict[str, Any]]] = None, count: Optional[int] = None, scope: str = "fleet") -> Dict[str, Any]:
+    # scope "entity": the Needs-you queue already lists each task behind this
+    # finding with its own action, so the queue skips the summary; Checks
+    # still shows it.
     return {
         "key": tuning_key(kind, title),
         "count": count,
         "targets": targets or [],
+        "scope": scope,
         "kind": kind,
         "severity": severity,
         "title": title,
@@ -2411,6 +2448,7 @@ def backlog_findings(triage: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "Hermes records why a task blocked (block_kind needs_input).",
                 f">= {BACKLOG_NEEDS_INPUT_WARNING} needs-input tasks or one waiting >= {BACKLOG_STALE_DAYS} days",
                 count=group["count"],
+                scope="entity",
             ))
         if group["kind"] == "capability" and group["count"]:
             findings.append(_tuning_item(
@@ -2425,6 +2463,7 @@ def backlog_findings(triage: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "Hermes records why a task blocked (block_kind capability).",
                 "any task blocked with kind capability",
                 count=group["count"],
+                scope="entity",
             ))
     return findings
 
@@ -3215,6 +3254,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Kanban blocked status is first-party orchestration evidence.",
             "task status = blocked",
             count=len(blocked_tasks),
+            scope="entity",
         ))
     if ready_unassigned:
         tuning_items.append(_tuning_item(
@@ -3229,6 +3269,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Kanban ready tasks need an assignee before worker routing can run.",
             "task status = ready and assignee is empty/unassigned",
             count=len(ready_unassigned),
+            scope="entity",
         ))
     if failed_runs:
         tuning_items.append(_tuning_item(
@@ -3243,6 +3284,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Kanban task_runs record worker failures, crashes, and timeouts.",
             "task_run status/outcome indicates failure",
             count=len(failed_runs),
+            scope="entity",
         ))
     if missing_models:
         tuning_items.append(_tuning_item(
@@ -4773,7 +4815,12 @@ def scan_hermes() -> Dict[str, Any]:
     backlog = build_backlog_triage(kanban)
     tuning = build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)
     add_findings(tuning, cost_findings(cost_attribution) + fleet_findings(fleet, kanban) + backlog_findings(backlog))
+    agent_activity = collect_agent_activity(profiles)
+    needs_you = build_needs_you(profiles, cron, kanban, tuning)
     return {
+        "agents": build_agents(profiles, sessions, cron, kanban, agent_activity, needs_you),
+        "needs_you": needs_you,
+        "agent_activity": agent_activity,
         "backlog": backlog,
         "fleet": fleet,
         "cost_attribution": cost_attribution,
@@ -4823,6 +4870,626 @@ def add_findings(tuning: Dict[str, Any], findings: List[Dict[str, Any]]) -> None
     items.sort(key=lambda item: _severity_rank(str(item.get("severity"))))
     hq["recommendations"] = items[:8]
     hq.setdefault("summary", {})["recommendations"] = len(items)
+
+
+# ---------------------------------------------------------------------------
+# Agents: the roster, the one Needs-you queue and the agent inspector.
+#
+# An agent is a Hermes profile. Its status is one word derived from what
+# Hermes recorded, and everything that needs a person becomes one queue item
+# carrying the action that resolves it. Actions run through Hermes' own
+# endpoints from the page; Olympus resolves a public ref to the raw id only at
+# click time and keeps its own log of what was done.
+# ---------------------------------------------------------------------------
+
+AGENT_STATUS_LABELS = {
+    "waiting": "Waiting on you",
+    "stalled": "Stalled",
+    "failed": "Failed",
+    "offline": "Offline",
+    "working": "Working",
+    "idle": "Idle",
+}
+AGENT_STATUS_ORDER = list(AGENT_STATUS_LABELS)
+AGENT_ACTIVITY_DAYS = 7
+FAILING_TASK_ATTEMPTS = 2
+QUEUE_KIND_ORDER = ("answer", "stalled", "cron_failed", "failing", "blocked", "offline", "cron_overdue", "unassigned", "finding")
+ACTION_LABELS = {
+    "answer": "Answer",
+    "retry": "Retry",
+    "reclaim": "Reclaim",
+    "reassign": "Reassign",
+    "assign": "Assign",
+    "pause": "Pause",
+    "resume": "Resume",
+    "run_now": "Run now",
+    "fix": "I fixed this",
+}
+SUCCESS_RUN_OUTCOMES = {"completed", "review_requested"}
+CLOSED_KANBAN_STATUSES = {"done", "archived"}
+AGENT_TIMELINE_LIMIT = 40
+AGENT_TIMELINE_SESSIONS = 8
+AGENT_TIMELINE_TOOLS = 60
+AGENT_TASK_LIMIT = 20
+TASK_EVENT_TEXT = {
+    "created": "Task created",
+    "claimed": "Claimed",
+    "spawned": "Worker started",
+    "worker_bound": "Worker attached",
+    "worker_result": "Worker reported back",
+    "completed": "Finished",
+    "blocked": "Blocked",
+    "unblocked": "Unblocked",
+    "crashed": "Worker crashed",
+    "timed_out": "Worker timed out",
+    "gave_up": "Gave up",
+    "reclaimed": "Reclaimed",
+    "reassigned": "Reassigned",
+    "commented": "Comment added",
+    "review_requested": "Sent for review",
+    "status": "Status changed",
+}
+TASK_EVENT_STATE = {
+    "crashed": "error", "timed_out": "error", "gave_up": "error", "spawn_failed": "error",
+    "blocked": "waiting", "completed": "ok",
+}
+
+
+def agent_ref(profile: Dict[str, Any]) -> Dict[str, str]:
+    return {"id": str(profile["id"]), "label": str(profile["label"])}
+
+
+def agent_avatar(label: str) -> str:
+    """Initial for the avatar; hidden profiles ("Profile 3") show their number."""
+    match = re.fullmatch(r"Profile (\d+)", label)
+    return match.group(1) if match else (label[:1].upper() or "?")
+
+
+def _action(action_id: str, target: Dict[str, Any], effect: str) -> Dict[str, Any]:
+    return {"id": action_id, "label": ACTION_LABELS[action_id], "target": target, "effect": effect}
+
+
+def _queue_item(
+    key: str,
+    kind: str,
+    severity: str,
+    agent: Optional[Dict[str, str]],
+    title: str,
+    detail: str,
+    since: Optional[str],
+    actions: List[Dict[str, Any]],
+    link: str,
+    targets: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    return {
+        "key": key,
+        "kind": kind,
+        "severity": severity,
+        "agent": agent,
+        "title": title,
+        "detail": detail,
+        "since": since,
+        "actions": actions,
+        "link": link,
+        "link_label": _action_label_for_view(link),
+        "targets": targets or [],
+    }
+
+
+def gateway_start_command(raw_profile: str) -> str:
+    if raw_profile == "default":
+        return "hermes gateway start"
+    return f"hermes -p {raw_profile} gateway start" if EXPOSE_LOCAL_LABELS else "hermes -p <profile> gateway start"
+
+
+def task_actions(task: Dict[str, Any], who: str, now: float) -> List[Dict[str, Any]]:
+    """The safe controls that fit a Kanban task in its current state."""
+    target = {"kind": "task", "ref": task["id"], "board": task["board"]}
+    title = task["title"]
+    status = task.get("status")
+    if status == "blocked" and task.get("block_kind") == "needs_input":
+        return [_action("answer", target, f"Post your answer on {title} as a comment and move it back to ready for {who}.")]
+    if status == "blocked":
+        return [
+            _action("retry", target, f"Move {title} from blocked back to ready so {who} picks it up again."),
+            _action("reassign", target, f"Give {title} to another agent. It keeps its history and goes to their queue."),
+        ]
+    if status == "running":
+        stale = task_stale_reason(task, now)
+        return [
+            _action("reclaim", target, f"Stop {who}'s worker on {title}{' (' + stale + ')' if stale else ''} and put the task back to ready."),
+            _action("reassign", target, f"Stop the current worker and give {title} to another agent."),
+        ]
+    if status == "ready" and task.get("_assignee") in (None, "", "unassigned"):
+        return [_action("assign", target, f"Give {title} to an agent so the dispatcher can run it.")]
+    if status in ("ready", "todo", "triage", "review"):
+        return [_action("reassign", target, f"Give {title} to another agent.")]
+    return []
+
+
+def cron_actions(job: Dict[str, Any], who: str) -> List[Dict[str, Any]]:
+    target = {"kind": "cron", "ref": job["id"]}
+    label = job["label"]
+    toggle = (
+        _action("pause", target, f"Pause {label} for {who}. It will not run until you resume it.")
+        if job.get("enabled")
+        else _action("resume", target, f"Resume {label} for {who} on its schedule ({job.get('schedule') or 'as configured'}).")
+    )
+    return [_action("run_now", target, f"Run {label} for {who} once, now. Its schedule does not change."), toggle]
+
+
+def build_needs_you(
+    profiles: List[Dict[str, Any]],
+    cron: List[Dict[str, Any]],
+    kanban: Dict[str, Any],
+    tuning: Dict[str, Any],
+    now: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """Everything that needs a person, once, with the action that resolves it.
+
+    Tasks and cron jobs become one item each; Olympus' fleet-level findings
+    join them unless the per-task items already cover them (scope "entity").
+    """
+    now = time.time() if now is None else now
+    agents = {str(p["name"]): agent_ref(p) for p in profiles}
+    offline = {str(p["name"]) for p in profiles if p.get("gateway_state") != "running"}
+    queue: List[Dict[str, Any]] = []
+
+    for task in kanban_items(kanban, "_tasks"):
+        status = task.get("status")
+        if status in CLOSED_KANBAN_STATUSES:
+            continue
+        raw = str(task.get("_assignee") or "unassigned")
+        agent = agents.get(raw)
+        who = agent["label"] if agent else "its agent"
+        title = str(task.get("title"))
+        actions = task_actions(task, who, now)
+        kind = task.get("block_kind")
+        failures = int(task.get("consecutive_failures") or 0)
+        stale = task_stale_reason(task, now)
+        if status == "blocked" and kind == "needs_input":
+            queue.append(_queue_item(
+                f"answer:{task['id']}", "answer", "critical", agent,
+                f"{title} is waiting on your answer",
+                "The agent stopped on a question only you can answer.",
+                task.get("blocked_at") or task.get("created_at"), actions, "/kanban",
+            ))
+        elif status == "running" and stale:
+            queue.append(_queue_item(
+                f"stalled:{task['id']}", "stalled", "critical", agent,
+                f"Worker stalled on {title}",
+                f"The worker's {stale}. Reclaim it to free the task, or give the task to another agent.",
+                task.get("last_heartbeat_at") or task.get("started_at"), actions, "/kanban",
+            ))
+        elif status == "blocked" and kind == "capability":
+            queue.append(_queue_item(
+                f"blocked:{task['id']}", "blocked", "warning", agent,
+                f"{title} is missing a tool, skill or permission",
+                "Give the agent what it needs and retry, or reassign the task to an agent that has it.",
+                task.get("blocked_at") or task.get("created_at"), actions, "/kanban",
+            ))
+        elif status == "blocked" and kind not in ("transient", "dependency"):
+            queue.append(_queue_item(
+                f"blocked:{task['id']}", "blocked", "warning", agent,
+                f"{title} is blocked without a reason",
+                "Open the task to read why it stopped, then retry it or reassign it.",
+                task.get("blocked_at") or task.get("created_at"), actions, "/kanban",
+            ))
+        elif status in ("ready", "running") and failures >= FAILING_TASK_ATTEMPTS:
+            queue.append(_queue_item(
+                f"failing:{task['id']}", "failing", "warning", agent,
+                f"{title} failed {failures} times in a row",
+                task.get("last_failure_error") or "Hermes keeps retrying it. Reassign it if this agent cannot do it.",
+                task.get("started_at") or task.get("created_at"), actions, "/kanban",
+            ))
+        elif status == "ready" and raw == "unassigned":
+            queue.append(_queue_item(
+                f"unassigned:{task['id']}", "unassigned", "warning", None,
+                f"{title} is ready but has no agent",
+                "The dispatcher only runs ready tasks that have an assignee.",
+                task.get("created_at"), actions, "/kanban",
+            ))
+
+    for raw, jobs in group_cron_by_profile(cron).items():
+        agent = agents.get(raw)
+        who = agent["label"] if agent else "this agent"
+        for job in jobs:
+            label = str(job.get("label"))
+            if job.get("state") == "error":
+                queue.append(_queue_item(
+                    f"cron_failed:{job['id']}", "cron_failed", "critical", agent,
+                    f"Scheduled job {label} failed",
+                    job.get("last_error") or "Its last run reported an error.",
+                    job.get("last_run_at"), cron_actions(job, who), "/cron",
+                ))
+                continue
+            due = parse_iso_ts(job.get("next_run_at"))
+            if job.get("enabled") and due is not None and now - due > CRON_OVERDUE_SECONDS and raw not in offline:
+                queue.append(_queue_item(
+                    f"cron_overdue:{job['id']}", "cron_overdue", "critical", agent,
+                    f"{label} is {int((now - due) // 60)} min overdue",
+                    "Hermes runs scheduled jobs from the gateway's cron ticker. An overdue job means the ticker is not running for this agent.",
+                    job.get("next_run_at"), cron_actions(job, who)[:1], "/cron",
+                ))
+
+    cron_by_profile = group_cron_by_profile(cron)
+    tasks = kanban_items(kanban, "_tasks")
+    for profile in profiles:
+        raw = str(profile["name"])
+        if raw not in offline:
+            continue
+        jobs = sum(1 for job in cron_by_profile.get(raw, []) if job.get("enabled"))
+        ready = sum(1 for task in tasks if task.get("_assignee") == raw and task.get("status") == "ready")
+        if not (jobs or ready):
+            continue
+        waiting = " and ".join(part for part in (
+            f"{jobs} scheduled job{'s' if jobs != 1 else ''}" if jobs else "",
+            f"{ready} ready task{'s' if ready != 1 else ''}" if ready else "",
+        ) if part)
+        queue.append(_queue_item(
+            f"offline:{profile['id']}", "offline", "warning", agent_ref(profile),
+            f"{profile['label']}'s gateway is not running",
+            f"{waiting} wait on it. Start it with: {gateway_start_command(raw)}",
+            None, [], "/profiles",
+        ))
+
+    agent_ids = {a["id"]: a for a in agents.values()}
+    for finding in as_list((tuning.get("agent_hq") or {}).get("recommendations")):
+        if finding.get("severity") not in ("critical", "warning") or finding.get("scope") == "entity":
+            continue
+        owners = {t.get("agent") for t in as_list(finding.get("targets")) if t.get("agent")}
+        agent = agent_ids.get(next(iter(owners))) if len(owners) == 1 else None
+        queue.append(_queue_item(
+            str(finding["key"]), "finding", str(finding["severity"]), agent,
+            str(finding["title"]), str(finding.get("detail") or ""), None,
+            [_action("fix", {"kind": "finding", "ref": finding["key"]}, "Olympus notes the current count and tells you on later scans whether it cleared.")],
+            str(finding.get("recommended_view") or "/analytics"),
+            as_list(finding.get("targets")),
+        ))
+
+    queue.sort(key=lambda item: (
+        _severity_rank(item["severity"]),
+        QUEUE_KIND_ORDER.index(item["kind"]),
+        parse_iso_ts(item["since"]) or now,
+    ))
+    return queue
+
+
+def _store_daily_activity(db: Path, since: float) -> Dict[str, Any]:
+    """Sessions, tokens and cost per UTC day (by session start) from one state.db."""
+    out: Dict[str, Any] = {"days": {}, "last_active_ts": None}
+    if not db.exists():
+        return out
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        cols = table_columns(con, "sessions")
+        if "started_at" not in cols:
+            return out
+
+        def summed(*names: str) -> str:
+            present = [f"COALESCE({name}, 0)" for name in names if name in cols]
+            return f"SUM({' + '.join(present)})" if present else "0"
+
+        cost_cols = [c for c in ("actual_cost_usd", "estimated_cost_usd") if c in cols]
+        cost = f"SUM(COALESCE({', '.join(cost_cols)}, 0))" if cost_cols else "0"
+        for row in con.execute(
+            f"SELECT date(started_at, 'unixepoch') AS day, COUNT(*) AS sessions, "
+            f"{summed('input_tokens')} AS input, {summed('cache_read_tokens', 'cache_write_tokens')} AS cache, "
+            f"{summed('output_tokens')} AS output, {cost} AS cost "
+            "FROM sessions WHERE started_at >= ? GROUP BY day",
+            (since,),
+        ):
+            out["days"][str(row["day"])] = {
+                "sessions": int(row["sessions"] or 0),
+                "input_tokens": int(row["input"] or 0),
+                "cache_tokens": int(row["cache"] or 0),
+                "output_tokens": int(row["output"] or 0),
+                "cost_usd": round(float(row["cost"] or 0.0), 4),
+            }
+        recency = [c for c in ("last_activity_at", "ended_at", "started_at") if c in cols]
+        row = con.execute(f"SELECT MAX({recency_expr(recency)}) AS ts FROM sessions").fetchone()
+        out["last_active_ts"] = safe_float(row["ts"]) or None
+    except sqlite3.Error as exc:
+        log_read_warning("agent activity scan failed", exc)
+    finally:
+        con.close()
+    return out
+
+
+def activity_days(now: float) -> List[str]:
+    return [
+        datetime.fromtimestamp(now - offset * 86400, tz=timezone.utc).date().isoformat()
+        for offset in range(AGENT_ACTIVITY_DAYS - 1, -1, -1)
+    ]
+
+
+def collect_agent_activity(profiles: List[Dict[str, Any]], now: Optional[float] = None) -> Dict[str, Dict[str, Any]]:
+    """Per profile: the last seven UTC days of sessions, tokens and cost."""
+    now = time.time() if now is None else now
+    days = activity_days(now)
+    since = datetime.fromisoformat(days[0]).replace(tzinfo=timezone.utc).timestamp()
+    out: Dict[str, Dict[str, Any]] = {}
+    for raw_profile, home in profile_stores(profiles):
+        store = _store_daily_activity(home / "state.db", since)
+        empty = {"sessions": 0, "input_tokens": 0, "cache_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+        out[raw_profile] = {
+            "days": [{"day": day, **store["days"].get(day, empty)} for day in days],
+            "last_active_ts": store["last_active_ts"],
+        }
+    return out
+
+
+def agent_status(kinds: set[str], live: bool) -> str:
+    if kinds & {"answer", "blocked"}:
+        return "waiting"
+    if "stalled" in kinds:
+        return "stalled"
+    if kinds & {"cron_failed", "failing"}:
+        return "failed"
+    if "offline" in kinds:
+        return "offline"
+    return "working" if live else "idle"
+
+
+def build_agents(
+    profiles: List[Dict[str, Any]],
+    sessions: List[Dict[str, Any]],
+    cron: List[Dict[str, Any]],
+    kanban: Dict[str, Any],
+    activity: Dict[str, Dict[str, Any]],
+    queue: List[Dict[str, Any]],
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """One roster row per agent: status, current work, helpers and issues."""
+    now = time.time() if now is None else now
+    cron_by_profile = group_cron_by_profile(cron)
+    tasks = kanban_items(kanban, "_tasks")
+    rows: List[Dict[str, Any]] = []
+    for profile in profiles:
+        raw = str(profile["name"])
+        own_items = [item for item in queue if item["agent"] and item["agent"]["id"] == profile["id"]]
+        live_sessions = [
+            s for s in sessions
+            if session_matches_profile(s, raw) and not s.get("ended_at") and now - safe_float(s.get("_last_ts")) <= ACTIVE_SECONDS
+        ]
+        running = sorted(
+            (t for t in tasks if t.get("_assignee") == raw and t.get("status") == "running"),
+            key=lambda t: parse_iso_ts(t.get("started_at")) or 0.0,
+            reverse=True,
+        )
+        working = [t for t in running if not task_stale_reason(t, now)]
+        own_live = [s for s in live_sessions if s.get("source") != "subagent"]
+        answer = next((item for item in own_items if item["kind"] == "answer"), None)
+        if running:
+            current = {"kind": "task", "label": running[0]["title"], "since": running[0].get("started_at"), "ref": running[0]["id"], "board": running[0]["board"]}
+        elif own_live:
+            current = {"kind": "session", "label": own_live[0]["label"], "since": own_live[0].get("started_at"), "ref": own_live[0].get("session_ref")}
+        elif answer:
+            current = {"kind": "waiting", "label": answer["title"], "since": answer["since"]}
+        else:
+            current = None
+        stamps = [
+            safe_float(activity.get(raw, {}).get("last_active_ts")),
+            *(parse_iso_ts(t.get("last_heartbeat_at")) or 0.0 for t in tasks if t.get("_assignee") == raw),
+            *(parse_iso_ts(j.get("last_run_at")) or 0.0 for j in cron_by_profile.get(raw, [])),
+        ]
+        last_active = max(stamps, default=0.0)
+        live = bool(live_sessions or working)
+        status = agent_status({item["kind"] for item in own_items}, live)
+        rows.append({
+            "id": profile["id"],
+            "label": profile["label"],
+            "avatar": agent_avatar(str(profile["label"])),
+            "role": profile.get("role"),
+            "role_state": profile.get("role_state"),
+            "status": status,
+            "status_label": AGENT_STATUS_LABELS[status],
+            "status_reason": own_items[0]["title"] if own_items and status not in ("working", "idle") else None,
+            "live": live,
+            "current": current,
+            "helpers": {
+                "subagents": sum(1 for s in live_sessions if s.get("source") == "subagent"),
+                "workers": len(running),
+                "cron": sum(1 for job in cron_by_profile.get(raw, []) if job.get("enabled")),
+            },
+            "last_active_at": ts_to_iso(last_active) if last_active else None,
+            "activity_7d": [day["sessions"] for day in activity.get(raw, {}).get("days", [])],
+            "issues": len(own_items),
+            "gateway_state": profile.get("gateway_state"),
+            "gateway_mode": profile.get("gateway_mode"),
+            "dashboard_home": bool(profile.get("dashboard_home")),
+        })
+    rows.sort(key=lambda row: (AGENT_STATUS_ORDER.index(row["status"]), str(row["label"])))
+    return {
+        "summary": {
+            "agents": len(rows),
+            "working": sum(1 for row in rows if row["live"]),
+            "need_you": sum(1 for row in rows if row["issues"]),
+            "queue": len(queue),
+            "unattributed": sum(1 for item in queue if item["agent"] is None),
+        },
+        "agents": rows,
+    }
+
+
+def _store_timeline(db: Path, now: float) -> List[Dict[str, Any]]:
+    """Session and tool events from one profile's state.db, newest first."""
+    if not db.exists():
+        return []
+    events: List[Dict[str, Any]] = []
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        cols = table_columns(con, "sessions")
+        recency = [c for c in ("last_activity_at", "ended_at", "started_at") if c in cols]
+        if "id" not in cols or not recency:
+            return []
+        wanted = [c for c in ("id", "source", "title", "started_at", "ended_at", "end_reason") if c in cols]
+        rows = con.execute(
+            f"SELECT {', '.join(wanted)} FROM sessions ORDER BY {recency_expr(recency)} DESC LIMIT ?",
+            (AGENT_TIMELINE_SESSIONS,),
+        ).fetchall()
+        labels: Dict[str, str] = {}
+        for row in rows:
+            session_id = str(row_value(row, "id"))
+            source = str(row_value(row, "source") or "session")
+            ref = session_id if EXPOSE_LOCAL_LABELS else safe_id(session_id, "session")
+            label = public_label(row_value(row, "title"), source, "session")
+            labels[session_id] = label
+            subagent = source == "subagent"
+            if row_value(row, "started_at"):
+                events.append({
+                    "at": ts_to_iso(row_value(row, "started_at")), "_ts": safe_float(row_value(row, "started_at")),
+                    "kind": "subagent" if subagent else "session",
+                    "text": f"Started a subagent: {label}" if subagent else f"Started {label}",
+                    "detail": None if subagent else source, "state": None, "session_ref": ref,
+                })
+            if row_value(row, "ended_at"):
+                reason = str(row_value(row, "end_reason") or "")
+                events.append({
+                    "at": ts_to_iso(row_value(row, "ended_at")), "_ts": safe_float(row_value(row, "ended_at")),
+                    "kind": "subagent" if subagent else "session",
+                    "text": f"Ended {label}", "detail": reason.replace("_", " ") or None,
+                    "state": "error" if reason in ("error", "failed", "crashed") else None, "session_ref": ref,
+                })
+        message_cols = table_columns(con, "messages")
+        if labels and {"session_id", "tool_name", "timestamp"}.issubset(message_cols):
+            marks = ", ".join("?" for _ in labels)
+            role = " AND role = 'tool'" if "role" in message_cols else ""
+            tools = con.execute(
+                f"SELECT session_id, tool_name, timestamp FROM messages WHERE session_id IN ({marks}){role} "
+                "AND tool_name IS NOT NULL AND tool_name != '' ORDER BY timestamp DESC LIMIT ?",
+                (*labels, AGENT_TIMELINE_TOOLS),
+            ).fetchall()
+            # Consecutive calls of one tool in one session read as one step.
+            for row in tools:
+                tool = redact_text(row["tool_name"], 60)
+                last = events[-1] if events and events[-1]["kind"] == "tool" else None
+                if last and last["_tool"] == (row["session_id"], tool):
+                    last["count"] += 1
+                    last["text"] = f"Used {tool} ×{last['count']}"
+                    continue
+                events.append({
+                    "at": ts_to_iso(row["timestamp"]), "_ts": safe_float(row["timestamp"]),
+                    "kind": "tool", "text": f"Used {tool}", "detail": labels.get(str(row["session_id"])),
+                    "state": None, "count": 1, "_tool": (row["session_id"], tool),
+                })
+    except sqlite3.Error as exc:
+        log_read_warning("agent timeline scan failed", exc)
+    finally:
+        con.close()
+    return events
+
+
+def _kanban_timeline(raw_profile: str) -> List[Dict[str, Any]]:
+    """Recent task events for tasks assigned to one profile, on every board."""
+    events: List[Dict[str, Any]] = []
+    for board in discover_kanban_boards():
+        con = _kanban_conn(kanban_board_db(str(board["_slug"])))
+        if con is None:
+            continue
+        try:
+            if not {"task_id", "kind", "created_at"}.issubset(table_columns(con, "task_events")):
+                continue
+            for row in con.execute(
+                "SELECT e.kind, e.created_at, e.task_id, t.title FROM task_events e JOIN tasks t ON t.id = e.task_id "
+                "WHERE t.assignee = ? ORDER BY e.created_at DESC LIMIT ?",
+                (raw_profile, AGENT_TIMELINE_LIMIT),
+            ):
+                task_id = str(row["task_id"])
+                public_task = task_id if EXPOSE_LOCAL_LABELS else safe_id(task_id, "task")
+                kind = str(row["kind"] or "")
+                events.append({
+                    "at": ts_to_iso(row["created_at"]), "_ts": safe_float(row["created_at"]),
+                    "kind": "task",
+                    "text": f"{TASK_EVENT_TEXT.get(kind, kind.replace('_', ' ').capitalize())}: {public_label(row['title'], public_task, 'task')}",
+                    "detail": board["name"] if board["slug"] != "default" else None,
+                    "state": TASK_EVENT_STATE.get(kind),
+                })
+        except sqlite3.Error as exc:
+            log_read_warning("agent task events scan failed", exc)
+        finally:
+            con.close()
+    return events
+
+
+def agent_success(runs: List[Dict[str, Any]], raw_profile: str, now: float) -> Dict[str, Any]:
+    """Finished Kanban worker runs in the activity window: how many succeeded."""
+    since = now - AGENT_ACTIVITY_DAYS * 86400
+    finished = [
+        r for r in runs
+        if r.get("_profile") == raw_profile and r.get("ended_at") and safe_float(r.get("_sort_ts")) >= since
+    ]
+    ok = sum(1 for r in finished if r.get("outcome") in SUCCESS_RUN_OUTCOMES)
+    failed = sum(1 for r in finished if is_failed_run(r))
+    return {
+        "succeeded": ok,
+        "failed": failed,
+        "rate": round(ok / (ok + failed), 3) if ok + failed else None,
+        "basis": f"Kanban worker runs that finished in the last {AGENT_ACTIVITY_DAYS} days",
+    }
+
+
+def build_agent_detail(scan: Dict[str, Any], agent_id: str, actions: List[Dict[str, Any]], fixes: List[Dict[str, Any]], now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """Everything the inspector shows for one agent."""
+    now = time.time() if now is None else now
+    profile = next((p for p in scan["profiles"] if p["id"] == agent_id), None)
+    if profile is None:
+        return None
+    raw = str(profile["name"])
+    who = str(profile["label"])
+    row = next(a for a in scan["agents"]["agents"] if a["id"] == agent_id)
+    jobs = [
+        {**strip_internal(job), "actions": cron_actions(job, who)}
+        for job in scan["cron"] if cron_profile(job) == raw
+    ]
+    own_tasks = [t for t in kanban_items(scan["kanban"], "_tasks") if t.get("_assignee") == raw]
+    own_tasks.sort(key=lambda t: (t.get("status") in CLOSED_KANBAN_STATUSES, -safe_float(t.get("_sort_ts"))))
+    tasks = [
+        {
+            "id": t["id"], "board": t["board"], "title": t["title"], "status": t["status"],
+            "block_kind": t.get("block_kind"), "started_at": t.get("started_at"),
+            "blocked_at": t.get("blocked_at"), "completed_at": t.get("completed_at"),
+            "stale": task_stale_reason(t, now), "consecutive_failures": t.get("consecutive_failures"),
+            "actions": task_actions(t, who, now),
+        }
+        for t in own_tasks[:AGENT_TASK_LIMIT]
+    ]
+    timeline = _store_timeline(Path(str(profile["_path"])) / "state.db", now) + _kanban_timeline(raw)
+    for job in jobs:
+        if job.get("last_run_at"):
+            failed = job.get("state") == "error"
+            timeline.append({
+                "at": job["last_run_at"], "_ts": parse_iso_ts(job["last_run_at"]) or 0.0, "kind": "cron",
+                "text": f"Ran {job['label']}", "detail": job.get("last_error") if failed else job.get("last_status"),
+                "state": "error" if failed else "ok",
+            })
+    for action in actions:
+        timeline.append({
+            "at": ts_to_iso(action["at"]), "_ts": float(action["at"]), "kind": "action",
+            "text": f"You chose {ACTION_LABELS.get(action['action'], action['action'])}: {action['label']}",
+            "detail": action.get("detail"), "state": "ok" if action["ok"] else "error",
+        })
+    timeline.sort(key=lambda event: event["_ts"], reverse=True)
+    days = scan["agent_activity"].get(raw, {}).get("days", [])
+    return {
+        "agent": row,
+        "needs_you": [item for item in scan["needs_you"] if item["agent"] and item["agent"]["id"] == agent_id],
+        "timeline": strip_internal(timeline[:AGENT_TIMELINE_LIMIT]),
+        "cron": jobs,
+        "tasks": tasks,
+        "tasks_total": len(own_tasks),
+        "usage": {
+            "days": days,
+            "tokens_7d": sum(d["input_tokens"] + d["cache_tokens"] + d["output_tokens"] for d in days),
+            "cost_7d_usd": round(sum(d["cost_usd"] for d in days), 4),
+            "basis": "Hermes session totals by the UTC day each session started.",
+        },
+        "success": agent_success(kanban_items(scan["kanban"], "_runs"), raw, now),
+        "fixes": [fix for fix in fixes if fix.get("agent") == agent_id],
+        "start_gateway": gateway_start_command(raw) if profile.get("gateway_state") != "running" else None,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -4877,9 +5544,48 @@ def history_db() -> sqlite3.Connection:
             baseline INTEGER,
             marked_at REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            at REAL NOT NULL,
+            agent TEXT,
+            action TEXT NOT NULL,
+            target_kind TEXT NOT NULL,
+            target_ref TEXT NOT NULL,
+            label TEXT NOT NULL,
+            ok INTEGER NOT NULL,
+            detail TEXT
+        );
         """
     )
+    # 1.1.0 stores had no agent column on fixes.
+    if "agent" not in table_columns(con, "fixes"):
+        con.execute("ALTER TABLE fixes ADD COLUMN agent TEXT")
+        con.commit()
     return con
+
+
+ACTIONS_RETAINED = 500
+
+
+def record_action(con: sqlite3.Connection, entry: Dict[str, Any], now: Optional[float] = None) -> None:
+    """Olympus' own log of a control the operator confirmed, and its result."""
+    con.execute(
+        "INSERT INTO actions (at, agent, action, target_kind, target_ref, label, ok, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            time.time() if now is None else now, entry.get("agent"), entry["action"], entry["target_kind"],
+            entry["target_ref"], entry["label"], 1 if entry["ok"] else 0, entry.get("detail"),
+        ),
+    )
+    con.execute("DELETE FROM actions WHERE id NOT IN (SELECT id FROM actions ORDER BY id DESC LIMIT ?)", (ACTIONS_RETAINED,))
+    con.commit()
+
+
+def read_actions(con: sqlite3.Connection, agent: Optional[str] = None, limit: int = AGENT_TIMELINE_LIMIT) -> List[Dict[str, Any]]:
+    where, params = ("WHERE agent = ?", (agent, limit)) if agent else ("", (limit,))
+    return [
+        {**dict(row), "ok": bool(row["ok"])}
+        for row in con.execute(f"SELECT * FROM actions {where} ORDER BY id DESC LIMIT ?", params)
+    ]
 
 
 def snapshot_values(scan: Dict[str, Any]) -> Dict[str, Any]:
@@ -4943,10 +5649,10 @@ def read_history(con: sqlite3.Connection, now: Optional[float] = None) -> Dict[s
     }
 
 
-def mark_fix(con: sqlite3.Connection, item: Dict[str, Any], now: Optional[float] = None) -> None:
+def mark_fix(con: sqlite3.Connection, item: Dict[str, Any], now: Optional[float] = None, agent: Optional[str] = None) -> None:
     con.execute(
-        "INSERT OR REPLACE INTO fixes (key, title, kind, baseline, marked_at) VALUES (?, ?, ?, ?, ?)",
-        (item["key"], str(item.get("title") or item["key"]), str(item.get("kind") or "finding"), item.get("count"), time.time() if now is None else now),
+        "INSERT OR REPLACE INTO fixes (key, title, kind, baseline, marked_at, agent) VALUES (?, ?, ?, ?, ?, ?)",
+        (item["key"], str(item.get("title") or item["key"]), str(item.get("kind") or "finding"), item.get("count"), time.time() if now is None else now, agent),
     )
     con.commit()
 
@@ -4979,6 +5685,7 @@ def build_fix_tracking(con: sqlite3.Connection, tuning: Dict[str, Any], now: Opt
             "verdict": verdict,
             "marked_at": ts_to_iso(row["marked_at"]),
             "days_tracked": int((now - float(row["marked_at"])) // 86400),
+            "agent": row["agent"],
         })
     return out
 
@@ -4993,6 +5700,9 @@ def overview_payload(scan: Dict[str, Any]) -> Dict[str, Any]:
         con.close()
     return {
         "generated_at": now_iso(),
+        "controls": controls_enabled(),
+        "agents": scan["agents"],
+        "needs_you": scan["needs_you"],
         "health": scan["health"],
         "attention": scan["attention"],
         "tuning": strip_internal(scan["tuning"]),
@@ -5155,9 +5865,10 @@ def track_fix(key: str) -> Dict[str, Any]:
     item = next((i for i in as_list((scan["tuning"].get("agent_hq") or {}).get("recommendations")) if i.get("key") == key), None)
     if item is None:
         return {"tracked": False, "reason": "finding not in the current scan"}
+    queued = next((q for q in scan["needs_you"] if q["key"] == key), None)
     con = history_db()
     try:
-        mark_fix(con, item)
+        mark_fix(con, item, agent=queued["agent"]["id"] if queued and queued["agent"] else None)
         fixes = build_fix_tracking(con, scan["tuning"])
     finally:
         con.close()
@@ -5173,3 +5884,84 @@ def untrack_fix(key: str) -> Dict[str, Any]:
     finally:
         con.close()
     return {"tracked": False}
+
+
+@router.get("/agent")
+def agent(ref: str) -> Dict[str, Any]:
+    """The inspector for one agent (``ref`` is its roster id, e.g. profile:default)."""
+    refresh_expose_local_labels()
+    scan = scan_hermes()
+    con = history_db()
+    try:
+        actions = read_actions(con, ref)
+        fixes = build_fix_tracking(con, scan["tuning"])
+    finally:
+        con.close()
+    detail = build_agent_detail(scan, ref, actions, fixes)
+    if detail is None:
+        return {"found": False}
+    return {"found": True, "generated_at": now_iso(), "controls": controls_enabled(), **detail}
+
+
+def resolve_ref(kind: str, ref: str, board: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """Raw Hermes ids behind a public ref, read fresh from Hermes' stores."""
+    if kind == "cron":
+        for raw_profile, home in profile_stores(collect_profiles()):
+            data = read_json(home / "cron" / "jobs.json") or {}
+            for job in as_list(data.get("jobs") if isinstance(data, dict) else None):
+                if isinstance(job, dict) and job.get("id") and public_ref(job["id"], "cron") == ref:
+                    return {"job_id": str(job["id"]), "profile": raw_profile}
+        return None
+    if kind == "task":
+        for found_board in discover_kanban_boards():
+            if board is not None and found_board["slug"] != board:
+                continue
+            con = _kanban_conn(kanban_board_db(str(found_board["_slug"])))
+            if con is None:
+                continue
+            try:
+                ids = [row["id"] for row in con.execute("SELECT id FROM tasks")]
+            except sqlite3.Error as exc:
+                log_read_warning("task resolve scan failed", exc)
+                continue
+            finally:
+                con.close()
+            for task_id in ids:
+                if (str(task_id) if EXPOSE_LOCAL_LABELS else safe_id(task_id, "task")) == ref:
+                    return {"task_id": str(task_id), "board": str(found_board["_slug"])}
+        return None
+    if kind == "profile":
+        profile = next((p for p in collect_profiles() if p["id"] == ref), None)
+        return {"profile": str(profile["name"])} if profile else None
+    return None
+
+
+@router.get("/resolve")
+def resolve(kind: str, ref: str, board: Optional[str] = None) -> Dict[str, Any]:
+    """Raw ids for one confirmed control, looked up at click time.
+
+    Payloads carry only public refs; the page asks for the raw cron job id,
+    task id and board, or profile name immediately before it calls Hermes'
+    own endpoint. Refused when controls are turned off.
+    """
+    refresh_expose_local_labels()
+    if not controls_enabled():
+        return {"allowed": False, "reason": "Controls are off (dashboard.olympus.controls is false in config.yaml)."}
+    found = resolve_ref(kind, ref, board)
+    return {"allowed": True, "found": found is not None, **(found or {})}
+
+
+@router.post("/actions")
+def log_action(action: str, kind: str, ref: str, label: str, ok: bool, agent: Optional[str] = None, detail: Optional[str] = None) -> Dict[str, Any]:
+    """Record a control the operator confirmed and what Hermes answered."""
+    if action not in ACTION_LABELS or kind not in ("task", "cron"):
+        return {"recorded": False, "reason": "not an Olympus control"}
+    con = history_db()
+    try:
+        record_action(con, {
+            "agent": agent, "action": action, "target_kind": kind, "target_ref": ref,
+            "label": redact_text(label, 120), "ok": ok, "detail": redact_text(detail, 200) if detail else None,
+        })
+    finally:
+        con.close()
+    return {"recorded": True}
