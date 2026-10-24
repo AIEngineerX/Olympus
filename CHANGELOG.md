@@ -8,6 +8,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Opt-in alerts: `hermes olympus install-alerts --deliver <target>` sets up a
+  Hermes no-agent cron job that reports failed or overdue cron jobs, stalled or
+  failed Kanban workers, looping sessions and spend spikes, once per issue.
+- "Where spend goes": cost per cron job (shared by token share from
+  `cron/usage_audit.jsonl`) and per background task, over the last 7 days.
+- History: a 14-day readiness sparkline and 7-day change, and "Did your fixes
+  work?" tracking for findings you mark fixed, stored in Olympus' own plugin
+  data.
 - Brief answers "what needs me?" first: a Needs-you list with evidence, owning
   Hermes page, and "Open session" buttons that open the sessions behind a
   finding in Hermes chat; hero facts for spend in the last 24h and the session
