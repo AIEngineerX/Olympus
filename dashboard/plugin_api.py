@@ -163,10 +163,17 @@ def age_state(iso_or_ts: Any) -> str:
 
 
 def read_text(path: Path, limit: int = 12000) -> str:
+    """Return the last ``limit`` bytes of a file without reading the rest.
+
+    Hermes logs grow without bound; seeking keeps each scan O(limit) in time
+    and memory regardless of log size.
+    """
     try:
-        data = path.read_text(errors="replace")
-        return data[-limit:]
-    except Exception as exc:
+        with path.open("rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, size - limit))
+            return handle.read(limit).decode("utf-8", errors="replace")
+    except OSError as exc:
         if path.exists():
             log_read_warning(f"read_text failed for {path.name}", exc)
         return ""
@@ -4001,8 +4008,11 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
     }
 
 
+# Routes are plain ``def`` on purpose: every collector does blocking SQLite and
+# file I/O, and FastAPI runs sync endpoints in its threadpool instead of on the
+# event loop the rest of the Hermes dashboard shares.
 @router.get("/health")
-async def health() -> Dict[str, Any]:
+def health() -> Dict[str, Any]:
     refresh_expose_local_labels()
     profiles = collect_profiles()
     cron = collect_cron(profiles)
@@ -4011,7 +4021,7 @@ async def health() -> Dict[str, Any]:
 
 
 @router.get("/overview")
-async def overview() -> Dict[str, Any]:
+def overview() -> Dict[str, Any]:
     refresh_expose_local_labels()
     started_at = time.perf_counter()
     profiles = collect_profiles()
@@ -4077,7 +4087,7 @@ async def overview() -> Dict[str, Any]:
 
 
 @router.get("/tuning")
-async def tuning() -> Dict[str, Any]:
+def tuning() -> Dict[str, Any]:
     refresh_expose_local_labels()
     started_at = time.perf_counter()
     profiles = collect_profiles()
