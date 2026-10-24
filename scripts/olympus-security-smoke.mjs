@@ -186,7 +186,6 @@ function assertPayload(payload) {
   if (!payload.evidence_sources) failures.push("missing evidence_sources");
   if (!payload.skill_hygiene) failures.push("missing skill_hygiene");
   if (!payload.config_policy) failures.push("missing config_policy");
-  if (!payload.ops_evals) failures.push("missing ops_evals");
   const serialized = JSON.stringify(payload);
   for (const item of leakPatterns) {
     const match = serialized.match(item.pattern);

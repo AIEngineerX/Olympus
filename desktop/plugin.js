@@ -39,13 +39,6 @@ function money(value) {
   return n > 0 ? '$' + n.toFixed(2) : 'unpriced'
 }
 
-function trendLabel(history) {
-  const change = history && history.score_change_7d
-  if (typeof change !== 'number') return history && history.recorded_days ? 'trend after 1 more day' : 'trend starts today'
-  if (change === 0) return 'no change in 7 days'
-  return (change > 0 ? '+' : '−') + Math.abs(change) + ' in 7 days'
-}
-
 function Fact({ label, value }) {
   return jsxs('div', {
     style: { ...card, minWidth: 0 },
@@ -217,15 +210,7 @@ function OlympusPage({ ctx }) {
               jsx('div', { style: { ...text.tertiary, fontSize: 12 }, children: (data.health && data.health.summary) || '' })
             ]
           }),
-          jsxs('div', {
-            style: { display: 'flex', alignItems: 'baseline', gap: 10 },
-            children: [
-              jsx('span', { style: { ...text.tertiary, fontSize: 12 }, children: 'Readiness' }),
-              jsx('span', { style: { color: 'var(--ui-accent)', fontSize: 28, fontWeight: 700 }, children: typeof tuning.score === 'number' ? tuning.score : '–' }),
-              jsx('span', { style: { ...text.secondary, fontSize: 12 }, children: trendLabel(data.history) }),
-              jsx(Button, { variant: 'outline', size: 'xs', disabled: loading, onClick: load, children: loading ? 'Refreshing' : 'Refresh' })
-            ]
-          })
+          jsx(Button, { variant: 'outline', size: 'xs', disabled: loading, onClick: load, children: loading ? 'Refreshing' : 'Refresh' })
         ]
       }),
       jsxs('div', {

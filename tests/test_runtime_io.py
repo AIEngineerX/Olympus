@@ -61,7 +61,7 @@ class RuntimeIoTest(unittest.TestCase):
     def test_routes_are_sync_so_fastapi_runs_them_in_its_threadpool(self):
         # The collectors do blocking SQLite and file I/O; an async route would
         # run them on the event loop and stall every other dashboard request.
-        for route in (plugin_api.health, plugin_api.overview, plugin_api.tuning):
+        for route in (plugin_api.health, plugin_api.overview):
             self.assertFalse(inspect.iscoroutinefunction(route), route.__name__)
 
 

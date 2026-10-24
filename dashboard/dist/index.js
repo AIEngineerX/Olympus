@@ -222,30 +222,6 @@
   // Charts
   // ---------------------------------------------------------------------
 
-  // Readiness trend: a bare polyline; the change is stated in words beside it.
-  function Sparkline({ points }) {
-    const values = points.filter((value) => typeof value === "number");
-    if (values.length < 2) return null;
-    const width = 56;
-    const height = 16;
-    const min = Math.max(0, Math.min(...values) - 5);
-    const max = Math.min(100, Math.max(...values) + 5);
-    const step = width / (values.length - 1);
-    const coords = values.map((value, idx) => (idx * step).toFixed(1) + "," + (height - ((value - min) / (max - min || 1)) * height).toFixed(1));
-    return el("svg", { className: "olympus-sparkline", viewBox: "0 0 " + width + " " + height, width, height, "aria-hidden": "true", focusable: "false" },
-      el("polyline", { points: coords.join(" "), fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinejoin: "round", strokeLinecap: "round" })
-    );
-  }
-
-  function trendLabel(history) {
-    const change = history && history.score_change_7d;
-    if (typeof change !== "number") {
-      return Number((history && history.recorded_days) || 0) ? "trend after 1 more day" : "trend starts today";
-    }
-    if (change === 0) return "no change in 7 days";
-    return (change > 0 ? "+" : "−") + Math.abs(change) + " in 7 days";
-  }
-
   // Seven days of sessions as tiny bars; today is the last bar.
   function percent(rate) {
     return rate == null ? null : Math.round(rate * 100) + "%";
@@ -540,9 +516,6 @@
 
   function Header({ data, view, onView, loading, now }) {
     const summary = (data && data.agents && data.agents.summary) || {};
-    const tuning = (data && data.tuning) || {};
-    const history = data && data.history;
-    const days = asList(history && history.days);
     const updated = data && data.generated_at ? ago(data.generated_at, now) : null;
     return el("header", { className: "olympus-header" },
       el("div", { className: "olympus-brand" },
@@ -553,17 +526,6 @@
         data && data.agents ? census(summary, data.agents.agents) : data && data.static ? "Agents only: the Olympus backend is off" : "Reading your agents…"),
       el("div", { className: "olympus-header-meta" },
         el("span", { className: "olympus-updated" }, loading && !data ? "Loading" : updated ? "Updated " + updated : ""),
-        typeof tuning.score === "number" ? el("button", {
-          type: "button",
-          className: "olympus-readiness",
-          onClick: () => onView("checks", "olympus-check-readiness"),
-          title: (tuning.score_breakdown && tuning.score_breakdown.explanation) || "Readiness from local Hermes evidence"
-        },
-          el("span", null, "Readiness"),
-          el("strong", null, String(tuning.score)),
-          el(Sparkline, { points: days.map((day) => day.score) }),
-          el("small", null, trendLabel(history))
-        ) : null,
         data && !data.static ? el("nav", { className: "olympus-views", "aria-label": "Olympus views" },
           VIEWS.map((item) => el("button", {
             key: item.id,
@@ -1432,21 +1394,8 @@
     );
   }
 
-  function ReadinessCheck({ tuning }) {
-    const breakdown = (tuning && tuning.score_breakdown) || {};
-    if (typeof (tuning && tuning.score) !== "number") return null;
-    const deductions = asList(breakdown.deductions);
-    return el(CheckSection, { id: "olympus-check-readiness", title: "Readiness " + tuning.score + " (" + (breakdown.label || "") + ")", lead: breakdown.explanation },
-      deductions.length ? el("ul", { className: "olympus-plain-list" }, deductions.map((item, idx) => el("li", { key: idx },
-        el("span", null, item.label),
-        el("small", null, "−" + item.points + " · " + [item.evidence, item.reason].filter(Boolean).join(" · "))
-      ))) : el("p", { className: "olympus-muted" }, "Nothing deducted.")
-    );
-  }
-
   function DebugCheck({ data, client }) {
     const diag = (data && data.diagnostics) || {};
-    const evals = asList(data && data.ops_evals && data.ops_evals.items);
     const sources = asList(data && data.evidence_sources && data.evidence_sources.items);
     return el("details", { className: "olympus-debug" },
       el("summary", null, "Debug details"),
@@ -1459,13 +1408,6 @@
           ["Hermes", diag.hermes && diag.hermes.version || "unknown"]
         ].map((pair) => el("div", { key: pair[0] }, el("dt", null, pair[0]), el("dd", null, pair[1])))
       ),
-      evals.length ? el(React.Fragment, null,
-        el("h3", null, "Operational checks"),
-        el("ul", { className: "olympus-plain-list" }, evals.map((item) => el("li", { key: item.id || item.label },
-          el("span", null, item.label),
-          el("small", null, [item.state, item.evidence].filter(Boolean).join(" · "))
-        )))
-      ) : null,
       sources.length ? el(React.Fragment, null,
         el("h3", null, "Evidence sources"),
         el("ul", { className: "olympus-plain-list" }, sources.map((item) => el("li", { key: item.id || item.label },
@@ -1483,7 +1425,6 @@
       el(SkillsCheck, { hygiene: data.skill_hygiene }),
       el(PolicyCheck, { policy: data.config_policy }),
       el(SpendCheck, { attribution: data.cost_attribution }),
-      el(ReadinessCheck, { tuning: data.tuning }),
       el(DebugCheck, { data, client })
     );
   }

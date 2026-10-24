@@ -285,7 +285,6 @@ test.describe("Olympus behaviour", () => {
     await openPage(page, { state: "noisy", view: "checks" });
     const fixes = page.locator(".olympus-fix-list li");
     await expect(fixes).toHaveCount(1);
-    await expect(page.locator(".olympus-readiness")).toContainText("+9 in 7 days");
 
     await page.locator(".olympus-finding").filter({ hasText: "Create a repeatable browser QA skill" }).getByRole("button", { name: "I fixed this" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();

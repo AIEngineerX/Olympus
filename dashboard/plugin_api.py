@@ -2217,34 +2217,6 @@ def collect_health(profiles: List[Dict[str, Any]], cron: List[Dict[str, Any]]) -
     }
 
 
-def build_attention(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]], cron: List[Dict[str, Any]], sessions: List[Dict[str, Any]], health: Dict[str, Any], kanban: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    items: List[Dict[str, Any]] = []
-    if health.get("status") == "error":
-        items.append({"severity": "critical", "label": "Health check reports errors", "detail": ", ".join(health.get("recent_error_terms") or []) or "Cron/log error detected"})
-    elif health.get("status") == "warning":
-        if not health.get("gateway_running"):
-            items.append({"severity": "warning", "label": "No running gateway process detected", "detail": "Gateway may be intentionally stopped or not visible to Olympus."})
-        else:
-            terms = ", ".join(health.get("recent_error_terms") or [])
-            items.append({"severity": "warning", "label": "Log-tail warnings detected", "detail": f"Hermes log tail contains failure terms: {terms}." if terms else (health.get("summary") or "Log tail contains failure terms.")})
-    for job in cron:
-        if job.get("state") == "error":
-            items.append({"severity": "critical", "label": f"Cron failed: {job.get('label')}", "detail": str(job.get("last_error") or "last_status=error")[:240]})
-    for sess in sessions:
-        if sess.get("state") == "error":
-            items.append({"severity": "warning", "label": f"Session handoff error: {sess.get('label')}", "detail": str(sess.get("handoff_error"))[:240]})
-    for item in as_list((kanban or {}).get("attention")):
-        if isinstance(item, dict):
-            items.append({
-                "severity": item.get("severity") or "warning",
-                "label": item.get("label") or "Kanban attention item",
-                "detail": item.get("detail") or "",
-                "recommended_view": item.get("recommended_view") or "/kanban",
-            })
-    items.sort(key=lambda item: _severity_rank(str(item.get("severity"))))
-    return items[:12]
-
-
 def _severity_rank(value: str) -> int:
     return {"critical": 0, "error": 1, "warning": 2, "info": 3, "ok": 4}.get(value, 3)
 
@@ -2260,19 +2232,6 @@ def _action_label_for_view(view: str) -> str:
         "/sessions": "Open Sessions",
         "/skills": "Open Skills",
     }.get(view, "Open Route")
-
-
-def _recommendation(severity: str, title: str, detail: str, evidence: str, view: str, owner: str, action: str, basis: str = "") -> Dict[str, Any]:
-    return {
-        "severity": severity,
-        "title": title,
-        "detail": detail,
-        "evidence": evidence,
-        "recommended_view": view,
-        "action_label": action,
-        "owner": owner,
-        "basis": basis,
-    }
 
 
 def session_targets(sessions: List[Dict[str, Any]], limit: int = 3) -> List[Dict[str, Any]]:
@@ -2342,13 +2301,6 @@ def group_cron_by_profile(cron: List[Dict[str, Any]]) -> Dict[str, List[Dict[str
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for job in cron:
         grouped.setdefault(cron_profile(job), []).append(job)
-    return grouped
-
-
-def group_gateways_by_profile(gateways: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    grouped: Dict[str, List[Dict[str, Any]]] = {}
-    for gateway in gateways:
-        grouped.setdefault(str(gateway.get("profile") or ""), []).append(gateway)
     return grouped
 
 
@@ -2461,13 +2413,6 @@ def backlog_findings(triage: Dict[str, Any]) -> List[Dict[str, Any]]:
     return findings
 
 
-def kanban_store_state(kanban: Optional[Dict[str, Any]]) -> str:
-    boards = [board for board in as_list((kanban or {}).get("boards")) if isinstance(board, dict)]
-    if any(board.get("error") for board in boards):
-        return "warning"
-    return "ok" if any(board.get("db_exists") for board in boards) else "missing"
-
-
 def kanban_items(kanban: Optional[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
     return [x for x in as_list((kanban or {}).get(key)) if isinstance(x, dict)]
 
@@ -2504,16 +2449,6 @@ def task_stale_reason(task: Dict[str, Any], now: Optional[float] = None) -> Opti
     except Exception:
         pass
     return None
-
-
-def score_state(score: int) -> str:
-    if score < 55:
-        return "critical"
-    if score < 75:
-        return "warning"
-    if score < 90:
-        return "info"
-    return "ok"
 
 
 CRON_AUDIT_TAIL_BYTES = 2_000_000
@@ -3217,179 +3152,6 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
     }
 
 
-def build_fleet(
-    profiles: List[Dict[str, Any]],
-    sessions: List[Dict[str, Any]],
-    cron: List[Dict[str, Any]],
-    profile_fitness: Dict[str, Any],
-) -> Dict[str, Any]:
-    """One row per profile: what it is for, how it runs, what it is doing."""
-    fitness_by_id = {row.get("id"): row for row in as_list(profile_fitness.get("profiles"))}
-    cron_by_profile = group_cron_by_profile(cron)
-    rows: List[Dict[str, Any]] = []
-    for profile in profiles:
-        raw_name = str(profile.get("name"))
-        own_sessions = [s for s in sessions if session_matches_profile(s, raw_name)]
-        last_ts = max((safe_float(s.get("_last_ts")) for s in own_sessions), default=0.0)
-        fitness = fitness_by_id.get(profile.get("id"), {})
-        metrics = fitness.get("metrics") or {}
-        rows.append({
-            "id": profile.get("id"),
-            "label": profile.get("label"),
-            "role_state": profile.get("role_state"),
-            "role": profile.get("role"),
-            "route": "configured" if profile.get("model") or profile.get("provider") else "inherited",
-            "gateway_state": profile.get("gateway_state"),
-            "gateway_mode": profile.get("gateway_mode"),
-            "skills": int(profile.get("skill_count") or 0),
-            "cron_jobs": len(cron_by_profile.get(raw_name, [])),
-            "running": int(metrics.get("running") or 0),
-            "open": int(metrics.get("open") or 0),
-            "blocked": int(metrics.get("blocked") or 0),
-            "sessions_7d": len(own_sessions),
-            "spend_7d_usd": round(sum(_session_cost(s) for s in own_sessions), 4),
-            "last_active_at": ts_to_iso(last_ts) if last_ts else None,
-            "state": fitness.get("state") or "unknown",
-            "top_issue": fitness.get("top_issue"),
-            "reasons": fitness.get("reasons") or [],
-            "recommended_view": fitness.get("recommended_view") or "/profiles",
-        })
-    rows.sort(key=lambda row: (_severity_rank(str(row["state"])), -row["sessions_7d"], str(row["label"])))
-    return {
-        "summary": {
-            "profiles": len(rows),
-            "needs_review": sum(1 for row in rows if row["state"] in ("warning", "critical", "error")),
-            "roles_missing": sum(1 for row in rows if row["role_state"] == "missing"),
-            "roles_unreviewed": sum(1 for row in rows if row["role_state"] == "auto"),
-        },
-        "profiles": rows,
-    }
-
-
-def fleet_findings(fleet: Dict[str, Any], kanban: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Roles matter once work is routed between several profiles."""
-    rows = as_list(fleet.get("profiles"))
-    missing = [row for row in rows if row.get("role_state") == "missing"]
-    if len(rows) < 2 or not missing or not int(kanban.get("open") or 0):
-        return []
-    return [_tuning_item(
-        "route",
-        "info",
-        "Describe each profile's role",
-        "Hermes' Kanban decomposer routes work by each profile's role description. Profiles without one are routed by name alone.",
-        ", ".join(str(row.get("label")) for row in missing[:4]),
-        "/profiles",
-        "Open Profiles",
-        "Olympus",
-        "Role descriptions live in each profile's profile.yaml (`hermes profile describe`).",
-        "two or more profiles, open Kanban work, and a profile without a role description",
-        count=len(missing),
-    )]
-
-
-def build_profile_fitness(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]], cron: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    kanban = kanban or {}
-    assignee_load = {
-        str(a.get("_assignee") or a.get("assignee")): a
-        for a in as_list(kanban.get("assignee_load"))
-        if isinstance(a, dict) and (a.get("_assignee") or a.get("assignee"))
-    }
-    tasks = kanban_items(kanban, "_tasks")
-    runs = kanban_items(kanban, "_runs")
-    cron_by_profile = group_cron_by_profile(cron)
-    gateways_by_profile = group_gateways_by_profile(gateways)
-
-    rows: List[Dict[str, Any]] = []
-    now = time.time()
-    for profile in profiles:
-        raw_name = str(profile.get("name") or "default")
-        public_name = str(profile.get("_public_name") or raw_name)
-        load = assignee_load.get(raw_name, {})
-        profile_tasks = [t for t in tasks if str(t.get("_assignee") or t.get("assignee")) == raw_name]
-        profile_runs = [r for r in runs if str(r.get("profile") or "") == public_name]
-        failed_runs = [r for r in profile_runs if is_failed_run(r)]
-        stale_tasks = [t for t in profile_tasks if task_stale_reason(t, now)]
-        profile_cron = cron_by_profile.get(raw_name, [])
-        profile_gateways = gateways_by_profile.get(public_name, [])
-        open_work = int(load.get("open") or 0)
-        running_work = int(load.get("running") or 0)
-        ready_work = int(load.get("ready") or 0)
-        blocked_work = int(load.get("blocked") or 0)
-        skill_count = int(profile.get("skill_count") or 0)
-        score = 100
-        reasons: List[Dict[str, Any]] = []
-
-        def deduct(points: int, label: str, detail: str, view: str) -> None:
-            nonlocal score
-            score -= points
-            reasons.append({
-                "label": label,
-                "points": points,
-                "detail": detail,
-                "recommended_view": view,
-            })
-
-        if not profile.get("model"):
-            deduct(12, "Route metadata unset", "Explicit profile routes make behavior changes auditable.", "/profiles")
-        if skill_count == 0:
-            deduct(18, "No local skills", "A bare profile has no reusable operating procedure to tune.", "/skills")
-        if profile.get("gateway_state") != "running" and (ready_work or running_work or profile_gateways):
-            deduct(16, "Gateway not running", "Assigned or gateway-backed work may not dispatch reliably.", "/profiles")
-        if open_work >= OVERLOADED_OPEN_THRESHOLD:
-            deduct(14, "Open work concentrated", f"{open_work} open Kanban task(s) are assigned here.", "/kanban")
-        if running_work >= OVERLOADED_RUNNING_THRESHOLD:
-            deduct(16, "Concurrent worker pressure", f"{running_work} running task(s) are assigned here.", "/kanban")
-        if blocked_work:
-            deduct(min(18, blocked_work * 6), "Blocked work", f"{blocked_work} blocked task(s) need review.", "/kanban")
-        if failed_runs:
-            deduct(min(24, len(failed_runs) * 12), "Worker failures", f"{len(failed_runs)} recent failed run(s) for this profile.", "/kanban")
-        if stale_tasks:
-            deduct(min(20, len(stale_tasks) * 10), "Possible stale worker", "Running work has heartbeat or claim data that needs review.", "/kanban")
-        if profile_cron and skill_count < 3:
-            deduct(8, "Scheduled work has thin skill coverage", "Cron-backed agents benefit from explicit runbooks.", "/skills")
-
-        score = max(0, score)
-        state = score_state(score)
-        if reasons:
-            top = reasons[0]
-            top_issue = top.get("label")
-            recommended_view = top.get("recommended_view")
-        else:
-            top_issue = "No profile fitness issue found."
-            recommended_view = "/profiles"
-        rows.append({
-            "id": profile.get("id") or f"profile:{public_name}",
-            "label": profile.get("label") or public_name,
-            "state": state,
-            "score": score,
-            "top_issue": top_issue,
-            "recommended_view": recommended_view,
-            "reasons": reasons[:4],
-            "metrics": {
-                "skills": skill_count,
-                "cron": len(profile_cron),
-                "gateways": len(profile_gateways),
-                "open": open_work,
-                "ready": ready_work,
-                "running": running_work,
-                "blocked": blocked_work,
-                "failed_runs": len(failed_runs),
-            },
-        })
-
-    rows.sort(key=lambda row: (int(row.get("score") or 0), str(row.get("label") or "")))
-    needs_review = [row for row in rows if row.get("state") in ("critical", "warning")]
-    return {
-        "summary": {
-            "profiles": len(rows),
-            "needs_review": len(needs_review),
-            "average_score": int(sum(int(r.get("score") or 0) for r in rows) / len(rows)) if rows else 0,
-            "lowest_score": int(rows[0].get("score") or 0) if rows else 0,
-        },
-        "profiles": rows,
-    }
-
-
 def build_orchestration(kanban: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     kanban = kanban or {}
     totals = kanban.get("totals") if isinstance(kanban.get("totals"), dict) else {}
@@ -3431,464 +3193,6 @@ def build_orchestration(kanban: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "failed_runs": failed_runs[:8],
         "stale_workers": stale_workers[:8],
         "attention": as_list(kanban.get("attention"))[:12],
-    }
-
-
-def build_ops_evals(
-    sessions: List[Dict[str, Any]],
-    kanban: Optional[Dict[str, Any]],
-    skill_coverage: Dict[str, Any],
-    skill_hygiene: Dict[str, Any],
-    config_policy: Dict[str, Any],
-) -> Dict[str, Any]:
-    kanban = kanban or {}
-    kanban_totals = kanban.get("totals") if isinstance(kanban.get("totals"), dict) else {}
-    coverage_summary = skill_coverage.get("summary") if isinstance(skill_coverage.get("summary"), dict) else {}
-    hygiene_summary = skill_hygiene.get("summary") if isinstance(skill_hygiene.get("summary"), dict) else {}
-    policy_summary = config_policy.get("summary") if isinstance(config_policy.get("summary"), dict) else {}
-    # Each check is scored only from evidence Olympus actually observed. An
-    # empty store produces zero counts, and zero counts must not read as a pass.
-    kanban_observed = kanban_store_state(kanban) != "missing"
-    observed = {
-        "reliability": bool(sessions) or bool(kanban_items(kanban, "_runs")),
-        "routing": kanban_observed,
-        "skill_use": int(coverage_summary.get("profiles") or 0) > 0 or int(hygiene_summary.get("total_skills") or 0) > 0,
-        "efficiency": bool(sessions),
-    }
-    if not any(observed.values()):
-        return {
-            "summary": {"state": "unknown", "score": None, "checks": 0, "passed": 0, "warnings": 0, "failures": 0, "unobserved": len(observed)},
-            "items": [],
-        }
-
-    failed_runs = [item for item in kanban_items(kanban, "_runs") if is_failed_run(item)]
-    stale_sessions = [item for item in sessions if item.get("state") == "stale"]
-    errored_sessions = [item for item in sessions if item.get("state") == "error"]
-    blocked_tasks = int(kanban_totals.get("blocked") or 0)
-    ready_unassigned = [
-        item for item in kanban_items(kanban, "_tasks")
-        if item.get("status") == "ready" and (not item.get("assignee") or item.get("assignee") == "unassigned")
-    ]
-    overloaded_assignees = [
-        item for item in as_list(kanban.get("assignee_load"))
-        if isinstance(item, dict) and (
-            int(item.get("open") or 0) >= OVERLOADED_OPEN_THRESHOLD or
-            int(item.get("running") or 0) >= OVERLOADED_RUNNING_THRESHOLD or
-            int(item.get("blocked") or 0) >= 2
-        )
-    ]
-    looping_sessions = [item for item in sessions if int(item.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD]
-    tool_heavy = [
-        item for item in sessions
-        if TOOL_HEAVY_THRESHOLD <= int(item.get("tool_call_count") or 0) < RUNAWAY_TOOLS_THRESHOLD
-    ]
-    context_pressure = [item for item in sessions if int(item.get("avg_input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS]
-    long_threads = [item for item in sessions if int(item.get("message_count") or 0) >= LONG_THREAD_THRESHOLD]
-    high_turn_limit = int(policy_summary.get("max_turns") or 0) >= MAX_TURNS_REVIEW_THRESHOLD and not policy_summary.get("hard_loop_stop")
-
-    def item_state(critical: int, warning: int) -> str:
-        if critical:
-            return "critical"
-        if warning:
-            return "warning"
-        return "ok"
-
-    reliability_state = item_state(len(failed_runs), len(stale_sessions) + len(errored_sessions))
-    routing_state = item_state(0, len(overloaded_assignees) + len(ready_unassigned) + blocked_tasks)
-    skill_state = item_state(
-        int(hygiene_summary.get("hub_audit_fail") or 0),
-        int(coverage_summary.get("zero_skill_profiles") or 0) +
-        int(coverage_summary.get("forced_skill_tasks") or 0) +
-        int(hygiene_summary.get("forced_skill_metadata_gaps") or 0) +
-        int(hygiene_summary.get("hub_audit_warn") or 0),
-    )
-    efficiency_state = item_state(len(looping_sessions), len(tool_heavy) + len(context_pressure) + len(long_threads) + int(high_turn_limit))
-
-    reliability_view = "/kanban" if failed_runs else "/sessions"
-    items = [
-        {
-            "id": "reliability",
-            "label": "Reliability",
-            "state": reliability_state,
-            "score": 100 - min(60, len(failed_runs) * 30 + len(stale_sessions) * 10 + len(errored_sessions) * 12),
-            "detail": "Worker and session health from recent Hermes evidence.",
-            "evidence": f"{len(failed_runs)} failed run(s), {len(stale_sessions)} stale session(s), {len(errored_sessions)} errored session(s)",
-            "basis": "Kanban worker runs and session state",
-            "signals": [
-                f"failed runs: {len(failed_runs)}",
-                f"stale sessions: {len(stale_sessions)}",
-                f"errored sessions: {len(errored_sessions)}",
-            ],
-            "recommended_view": reliability_view,
-            "action_label": _action_label_for_view(reliability_view),
-        },
-        {
-            "id": "routing",
-            "label": "Routing",
-            "state": routing_state,
-            "score": 100 - min(55, len(overloaded_assignees) * 20 + len(ready_unassigned) * 15 + blocked_tasks * 5),
-            "detail": "Kanban ownership, blocked work, and unassigned ready work.",
-            "evidence": f"{len(overloaded_assignees)} loaded assignee(s), {len(ready_unassigned)} unassigned ready task(s), {blocked_tasks} blocked task(s)",
-            "basis": "Hermes Kanban assignee load and task status",
-            "signals": [
-                f"loaded assignees: {len(overloaded_assignees)}",
-                f"unassigned ready: {len(ready_unassigned)}",
-                f"blocked tasks: {blocked_tasks}",
-            ],
-            "recommended_view": "/kanban",
-            "action_label": _action_label_for_view("/kanban"),
-        },
-        {
-            "id": "skill_use",
-            "label": "Skill Use",
-            "state": skill_state,
-            "score": 100 - min(
-                55,
-                int(coverage_summary.get("zero_skill_profiles") or 0) * 18 +
-                int(hygiene_summary.get("forced_skill_metadata_gaps") or 0) * 16 +
-                int(hygiene_summary.get("hub_audit_fail") or 0) * 25 +
-                int(hygiene_summary.get("hub_audit_warn") or 0) * 12 +
-                int(coverage_summary.get("forced_skill_tasks") or 0) * 3,
-            ),
-            "detail": "Skills per profile, skills tasks require, and stored audit results.",
-            "evidence": (
-                f"{int(coverage_summary.get('zero_skill_profiles') or 0)} profile(s) without skills, "
-                f"{int(hygiene_summary.get('forced_skill_metadata_gaps') or 0)} required skill(s) missing, "
-                f"{int(hygiene_summary.get('hub_audit_warn') or 0)} audit warning(s), "
-                f"{int(hygiene_summary.get('hub_audit_fail') or 0)} audit fail(s)"
-            ),
-            "basis": "Hermes skill coverage, skill usage metadata, and hub lock metadata",
-            "signals": [
-                f"profiles without skills: {int(coverage_summary.get('zero_skill_profiles') or 0)}",
-                f"tasks requiring skills: {int(coverage_summary.get('forced_skill_tasks') or 0)}",
-                f"required skills missing: {int(hygiene_summary.get('forced_skill_metadata_gaps') or 0)}",
-            ],
-            "recommended_view": "/skills",
-            "action_label": _action_label_for_view("/skills"),
-        },
-        {
-            "id": "efficiency",
-            "label": "Efficiency",
-            "state": efficiency_state,
-            "score": 100 - min(60, len(looping_sessions) * 25 + len(tool_heavy) * 10 + len(context_pressure) * 14 + len(long_threads) * 6 + int(high_turn_limit) * 10),
-            "detail": "Tool pressure, context pressure, long threads, and visible loop guardrails.",
-            "evidence": (
-                f"{len(looping_sessions)} looping session(s), {len(tool_heavy)} tool-heavy session(s), "
-                f"{len(context_pressure)} context-pressure session(s), {len(long_threads)} long thread(s)"
-            ),
-            "basis": "Hermes session counters plus safe config policy",
-            "signals": [
-                f"looping: {len(looping_sessions)}",
-                f"tool-heavy: {len(tool_heavy)}",
-                f"context pressure: {len(context_pressure)}",
-                f"unattended loop hard stop: {'off' if high_turn_limit else 'on'}",
-            ],
-            "recommended_view": "/sessions",
-            "action_label": _action_label_for_view("/sessions"),
-        },
-    ]
-
-    for item in items:
-        if not observed[item["id"]]:
-            item.update({
-                "state": "unknown",
-                "score": None,
-                "evidence": "No Hermes evidence for this check yet.",
-                "signals": [],
-            })
-    scored = [item for item in items if observed[item["id"]]]
-    warnings = sum(1 for item in scored if item["state"] == "warning")
-    failures = sum(1 for item in scored if item["state"] == "critical")
-    score = max(0, int(sum(int(item["score"]) for item in scored) / len(scored)))
-    state = "critical" if failures else ("warning" if warnings else "ok")
-    return {
-        "summary": {
-            "state": state,
-            "score": score,
-            "checks": len(scored),
-            "passed": sum(1 for item in scored if item["state"] == "ok"),
-            "warnings": warnings,
-            "failures": failures,
-            "unobserved": len(items) - len(scored),
-        },
-        "items": items,
-    }
-
-
-def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]], cron: List[Dict[str, Any]], sessions: List[Dict[str, Any]], health: Dict[str, Any], attention: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    failed_cron = [j for j in cron if j.get("state") == "error"]
-    paused_cron = [j for j in cron if j.get("state") == "paused"]
-    stale_sessions = [s for s in sessions if s.get("state") == "stale"]
-    errored_sessions = [s for s in sessions if s.get("state") == "error"]
-    active_sessions = [s for s in sessions if s.get("state") in ("active", "recent")]
-    looping_sessions = [s for s in sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD]
-    tool_heavy = [
-        s for s in sessions
-        if TOOL_HEAVY_THRESHOLD <= int(s.get("tool_call_count") or 0) < RUNAWAY_TOOLS_THRESHOLD
-    ]
-    message_heavy = [s for s in sessions if int(s.get("message_count") or 0) >= LONG_THREAD_THRESHOLD]
-    context_pressure = [s for s in sessions if int(s.get("avg_input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS]
-    missing_models = [p for p in profiles if not p.get("model")]
-    idle_profiles = [p for p in profiles if p.get("state") == "idle"]
-    running_gateways = [g for g in gateways if g.get("state") == "running"]
-    kanban = kanban or {}
-    kanban_totals = kanban.get("totals") if isinstance(kanban.get("totals"), dict) else {}
-    kanban_attention = [x for x in as_list(kanban.get("attention")) if isinstance(x, dict)]
-    kanban_open = int(kanban.get("open") or 0)
-    kanban_blocked = int(kanban_totals.get("blocked") or 0)
-    active_workers = as_list(kanban.get("active_workers"))
-    overloaded_assignees = [
-        a for a in as_list(kanban.get("assignee_load"))
-        if isinstance(a, dict) and (int(a.get("open") or 0) >= 5 or int(a.get("blocked") or 0) >= 2 or int(a.get("running") or 0) >= 2)
-    ]
-
-    metrics = build_metrics(sessions, kanban)
-    recommendations: List[Dict[str, Any]] = []
-    if failed_cron:
-        recommendations.append(_recommendation(
-            "critical",
-            "Tune failing scheduled work",
-            f"{len(failed_cron)} cron job(s) report errors. Review cadence, prompt, profile, approvals, and delivery target.",
-            ", ".join(str(j.get("label") or j.get("job_id")) for j in failed_cron[:3]),
-            "/cron",
-            "Apollo",
-            "Open Cron",
-            "Cron failures are direct runtime evidence. Fix scheduled work first.",
-        ))
-    if errored_sessions:
-        recommendations.append(_recommendation(
-            "warning",
-            "Review handoff failures",
-            f"{len(errored_sessions)} recent session(s) contain handoff errors. Check delivery and cancellation behavior.",
-            ", ".join(str(s.get("label") or s.get("session_ref")) for s in errored_sessions[:3]),
-            "/sessions",
-            "Hermes",
-            "Open Sessions",
-            "Session handoff_error comes from Hermes session metadata and indicates delivery or cancellation trouble.",
-        ))
-    if stale_sessions:
-        recommendations.append(_recommendation(
-            "warning",
-            "Inspect stale work",
-            f"{len(stale_sessions)} recent session(s) are stale. Close, resume, or annotate them.",
-            ", ".join(str(s.get("label") or s.get("session_ref")) for s in stale_sessions[:3]),
-            "/sessions",
-            "Chronos",
-            "Open Sessions",
-            "Stale sessions are open-ended records with no recent activity; they make agent performance review noisy.",
-        ))
-    if looping_sessions:
-        recommendations.append(_recommendation(
-            "warning",
-            "Stop looping or tool-thrashing runs",
-            f"{len(looping_sessions)} session(s) crossed {RUNAWAY_TOOLS_THRESHOLD} tool calls. Add a checklist skill, reduce max turns, or split the task.",
-            ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in looping_sessions[:3]),
-            "/sessions",
-            "Olympus",
-            "Open Sessions",
-            "Runaway tool_call_count is a trace-level signal for loops, unclear plans, or missing procedures.",
-        ))
-    if tool_heavy:
-        recommendations.append(_recommendation(
-            "info",
-            "Tune tool-heavy routes",
-            f"{len(tool_heavy)} session(s) used 20 or more tool calls. Add skills, narrower prompts, or decomposition.",
-            ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in tool_heavy[:3]),
-            "/analytics",
-            "Olympus",
-            "Open Analytics",
-            "High tool_call_count is a trace-level signal for workflow friction, missing skills, or poor decomposition.",
-        ))
-    if context_pressure:
-        recommendations.append(_recommendation(
-            "info",
-            "Reduce per-call context pressure",
-            f"{len(context_pressure)} session(s) averaged {CONTEXT_PRESSURE_TOKENS:,}+ input tokens per API call. Add recap, memory pruning, or task splits.",
-            ", ".join(f"{s.get('label')}: {int(s.get('avg_input_tokens') or 0):,} avg in-tokens/call" for s in context_pressure[:3]),
-            "/sessions",
-            "Mnemosyne",
-            "Open Sessions",
-            "Large repeated prompts increase latency, cost, and drift risk.",
-        ))
-    if message_heavy:
-        recommendations.append(_recommendation(
-            "info",
-            "Watch long conversations",
-            f"{len(message_heavy)} session(s) crossed 40 messages. Add recap, memory, or task splits.",
-            ", ".join(f"{s.get('label')}: {s.get('message_count')} messages" for s in message_heavy[:3]),
-            "/sessions",
-            "Mnemosyne",
-            "Open Sessions",
-            "High message_count is a context-pressure signal; summaries, memory, or task splitting can improve follow-up quality.",
-        ))
-    if missing_models:
-        recommendations.append(_recommendation(
-            "warning",
-            "Set explicit profile routes",
-            f"{len(missing_models)} profile(s) do not expose a default route in config.",
-            ", ".join(str(p.get("label") or p.get("name")) for p in missing_models[:4]),
-            "/profiles",
-            "Olympus",
-            "Open Profiles",
-            "Explicit route metadata makes changes auditable and keeps profile behavior intentional.",
-        ))
-    if not running_gateways and gateways:
-        recommendations.append(_recommendation(
-            "warning",
-            "Check gateway process state",
-            "Gateway markers exist, but no running gateway was detected.",
-            ", ".join(str(g.get("label")) for g in gateways[:4]),
-            "/logs",
-            "Olympus",
-            "Open Logs",
-            "Gateway process state determines whether platform-delivered work can be routed.",
-        ))
-    if health.get("recent_error_terms"):
-        recommendations.append(_recommendation(
-            "critical",
-            "Investigate log-tail errors",
-            "Gateway or error log tails contain failure terms.",
-            ", ".join(str(x) for x in health.get("recent_error_terms", [])[:5]),
-            "/logs",
-            "Olympus",
-            "Open Logs",
-            "Olympus scans the last 8KB of each Hermes log file; timestamp recency is not inferred.",
-        ))
-    if kanban_attention:
-        recommendations.append(_recommendation(
-            str(kanban_attention[0].get("severity") or "warning"),
-            "Review Kanban attention",
-            f"{len(kanban_attention)} Kanban issue(s) need review.",
-            ", ".join(str(x.get("label") or "Kanban issue") for x in kanban_attention[:3]),
-            "/kanban",
-            "Olympus",
-            "Open Kanban",
-            "Kanban attention is derived from task status, heartbeats, retries, assignees, and task_runs.",
-        ))
-    if overloaded_assignees:
-        recommendations.append(_recommendation(
-            "warning",
-            "Balance agent workload",
-            f"{len(overloaded_assignees)} assignee(s) show Kanban pressure. Split work, clarify blockers, or reroute specialist tasks.",
-            ", ".join(f"{a.get('assignee')}: {a.get('open')} open" for a in overloaded_assignees[:4]),
-            "/kanban",
-            "Hermes",
-            "Open Kanban",
-            "Assignee load comes from Kanban task ownership and is the right signal for route balancing.",
-        ))
-    if not recommendations:
-        recommendations.append(_recommendation(
-            "ok",
-            "No urgent tuning pressure",
-            "Olympus did not detect failing cron jobs, stale sessions, handoff errors, or missing profile routes.",
-            "Current metadata scan is clean.",
-            "/analytics",
-            "Olympus",
-            "Open Analytics",
-            "No current heuristic crossed its threshold.",
-        ))
-
-    score = 100
-    deductions: List[Dict[str, Any]] = []
-
-    def deduct(label: str, amount: int, reason: str, evidence: str, source: str) -> None:
-        nonlocal score
-        if amount <= 0:
-            return
-        score -= amount
-        deductions.append({
-            "label": label,
-            "points": amount,
-            "reason": reason,
-            "evidence": evidence,
-            "source": source,
-        })
-
-    deduct(
-        "Runtime health",
-        25 if health.get("status") == "error" else 10 if health.get("status") == "warning" else 0,
-        "Gateway, cron, or log evidence needs operator review.",
-        health.get("summary") or "",
-        "Hermes logs, cron metadata, and gateway process state",
-    )
-    deduct("Cron failures", min(25, len(failed_cron) * 8), "Scheduled agent work is failing.", f"{len(failed_cron)} failed job(s)", "Hermes cron jobs")
-    deduct("Handoff failures", min(20, len(errored_sessions) * 6), "Recent sessions contain handoff errors.", f"{len(errored_sessions)} session(s)", "Hermes sessions")
-    deduct("Stale sessions", min(15, len(stale_sessions) * 3), "Open-ended stale sessions make performance review noisy.", f"{len(stale_sessions)} stale session(s)", "Hermes sessions")
-    deduct("Looping/tool thrash", min(20, len(looping_sessions) * 3), "Runaway tool use wastes time and tokens.", f"{len(looping_sessions)} session(s)", "Session tool-call counts")
-    deduct("Context pressure", min(12, len(context_pressure) * 6), "Large repeated context increases latency, cost, and drift risk.", f"{len(context_pressure)} session(s)", "Prompt tokens per model call")
-    deduct("Tool-heavy work", min(10, len(tool_heavy) * 2), "Repeated tool work may need a skill, narrower prompt, or task split.", f"{len(tool_heavy)} session(s)", "Session tool-call counts")
-    deduct("Long threads", min(8, len(message_heavy)), "Long conversations need recap, memory, or task split discipline.", f"{len(message_heavy)} session(s)", "Session message counts")
-    deduct("Unset profile routes", min(15, len(missing_models) * 4), "Implicit routing makes tuning harder to audit.", f"{len(missing_models)} profile(s)", "Hermes profile config")
-    deduct("Kanban attention", min(20, len(kanban_attention) * 4), "Kanban has blocked, stale, failed, or unassigned work.", f"{len(kanban_attention)} attention item(s)", "Kanban tasks and worker runs")
-    deduct("Blocked Kanban work", min(12, kanban_blocked * 3), "Blocked work usually needs a human decision, dependency, or clearer acceptance criteria.", f"{kanban_blocked} blocked task(s)", "Hermes Kanban tasks")
-    deduct("Worker failures", min(20, int(metrics.get("failed_kanban_runs") or 0) * 6), "Kanban worker failures show reliability risk.", f"{metrics.get('failed_kanban_runs') or 0} failed run(s)", "Kanban worker runs")
-    if health.get("status") == "error":
-        score = min(score, 54)
-    elif health.get("status") == "warning":
-        score = min(score, 84)
-    score = max(0, score)
-
-    if score >= 85:
-        score_label = "Stable"
-    elif score >= 70:
-        score_label = "Watch"
-    elif score >= 55:
-        score_label = "Needs review"
-    else:
-        score_label = "Needs action"
-
-    signals = [
-        {"id": "attention", "label": "Attention Items", "value": len(attention), "state": "warning" if attention else "ok", "hint": "Cross-system findings ranked before inventory."},
-        {"id": "kanban_open", "label": "Open Kanban Work", "value": kanban_open, "state": "active" if kanban_open else "idle", "hint": "Open task load across Kanban boards."},
-        {"id": "kanban_blocked", "label": "Blocked Tasks", "value": kanban_blocked, "state": "warning" if kanban_blocked else "ok", "hint": "Kanban cards needing decisions or clearer specs."},
-        {"id": "kanban_workers", "label": "Active Workers", "value": len(active_workers), "state": "running" if active_workers else "idle", "hint": "Kanban task runs currently in flight."},
-        {"id": "active_sessions", "label": "Active/Recent Work", "value": len(active_sessions), "state": "active" if active_sessions else "idle", "hint": "Sessions that still look fresh."},
-        {"id": "failed_cron", "label": "Cron Failures", "value": len(failed_cron), "state": "error" if failed_cron else "ok", "hint": "Scheduled work that needs review."},
-        {"id": "tool_heavy", "label": "Tool-Heavy Runs", "value": len(tool_heavy), "state": "warning" if tool_heavy else "ok", "hint": "Sessions with 20+ tool calls."},
-        {"id": "looping", "label": "Looping Runs", "value": len(looping_sessions), "state": "warning" if looping_sessions else "ok", "hint": "Sessions with 40+ tool calls."},
-        {"id": "context_pressure", "label": "Context Pressure", "value": len(context_pressure), "state": "warning" if context_pressure else "ok", "hint": "Sessions averaging 50k+ input tokens per API call."},
-        {"id": "message_heavy", "label": "Long Threads", "value": len(message_heavy), "state": "warning" if message_heavy else "ok", "hint": "Sessions with 40+ messages."},
-        {"id": "missing_routes", "label": "Unset Routes", "value": len(missing_models), "state": "warning" if missing_models else "ok", "hint": "Profiles without explicit route metadata."},
-        {"id": "paused_cron", "label": "Paused Cron", "value": len(paused_cron), "state": "idle" if paused_cron else "ok", "hint": "Paused scheduled jobs."},
-        {"id": "idle_profiles", "label": "Idle Profiles", "value": len(idle_profiles), "state": "idle" if idle_profiles else "active", "hint": "Profiles without visible gateway activity."},
-    ]
-
-    agent_hq = build_agent_hq(profiles, gateways, cron, sessions, kanban)
-    recommendations.sort(key=lambda x: _severity_rank(str(x.get("severity"))))
-    return {
-        "score": score,
-        "score_breakdown": {
-            "base": 100,
-            "score": score,
-            "label": score_label,
-            "deductions": deductions,
-            "window": session_window_label(len(sessions)),
-            "explanation": (
-                f"Starts at 100 and loses points for current risks: session signals from the "
-                f"{session_window_label(len(sessions))}, plus live Kanban, cron and gateway state."
-            ),
-        },
-        "methodology": {
-            "thresholds": [
-                {"signal": "Looping session", "threshold": f">= {RUNAWAY_TOOLS_THRESHOLD} tool calls", "why": "Runaway tool use is a direct signal for loops, unclear plans, or missing procedures."},
-                {"signal": "Tool-heavy session", "threshold": f"{TOOL_HEAVY_THRESHOLD}-{RUNAWAY_TOOLS_THRESHOLD - 1} tool calls", "why": "Repeated tool use can indicate missing skills, unclear prompts, or poor decomposition."},
-                {"signal": "Context pressure", "threshold": f">= {CONTEXT_PRESSURE_TOKENS:,} average input tokens per API call", "why": "Large repeated prompts increase latency, cost, and drift risk."},
-                {"signal": "Long thread", "threshold": f">= {LONG_THREAD_THRESHOLD} messages", "why": "Long conversations can create context pressure and benefit from summaries, memory rules, or task splits."},
-                {"signal": "Overloaded assignee", "threshold": f">= {OVERLOADED_OPEN_THRESHOLD} open or >= {OVERLOADED_RUNNING_THRESHOLD} running Kanban tasks", "why": "Load concentration suggests route balancing or a specialist profile may help."},
-                {"signal": "Stale session", "threshold": "open session older than the freshness window", "why": "Unresolved stale work makes performance evidence unreliable."},
-            ],
-            "sources": [
-                {"label": "Hermes session store", "detail": "Uses local runtime metadata, message_count, tool_call_count, handoff_error, and timestamps from the Hermes state store."},
-                {"label": "Hermes Kanban", "detail": "Uses first-party task status, assignee load, worker heartbeats, retries, and task_runs."},
-                {"label": "Hermes profiles and skills", "detail": "Uses profile runtime-route metadata, gateway state, and local SKILL.md counts."},
-                {"label": "Provider-neutral agent evaluation", "detail": "Uses traces, tool calls, outcomes, and repeatable signals before changing agents or routes."},
-            ],
-        },
-        "summary": "Read-only tuning scan generated from Hermes profile, gateway, cron, session, and log metadata.",
-        "recommendations": recommendations[:8],
-        "signals": signals,
-        "agent_hq": agent_hq,
-        "metrics": agent_hq.get("metrics", {}),
     }
 
 
@@ -3963,16 +3267,12 @@ def scan_hermes() -> Dict[str, Any]:
     skill_coverage = build_skill_coverage(profiles, sessions, kanban)
     skill_metadata = collect_skill_metadata(profiles)
     skill_hygiene = build_skill_hygiene(skill_metadata, skill_coverage, kanban)
-    profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
     config_policy = collect_config_policy(profiles, sessions, kanban)
-    ops_evals = build_ops_evals(sessions, kanban, skill_coverage, skill_hygiene, config_policy)
     health = collect_health(profiles, cron)
-    attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
     cost_attribution = collect_cost_attribution(profiles, cron, sessions, time.time() - SESSION_WINDOW_DAYS * 86400)
-    fleet = build_fleet(profiles, sessions, cron, profile_fitness)
     backlog = build_backlog_triage(kanban)
-    tuning = build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)
-    add_findings(tuning, cost_findings(cost_attribution) + fleet_findings(fleet, kanban) + backlog_findings(backlog))
+    tuning = {"agent_hq": build_agent_hq(profiles, gateways, cron, sessions, kanban)}
+    add_findings(tuning, cost_findings(cost_attribution) + backlog_findings(backlog))
     agent_activity = collect_agent_activity(profiles)
     needs_you = build_needs_you(profiles, cron, kanban, tuning, sessions)
     return {
@@ -3980,22 +3280,16 @@ def scan_hermes() -> Dict[str, Any]:
         "needs_you": needs_you,
         "agent_activity": agent_activity,
         "backlog": backlog,
-        "fleet": fleet,
         "cost_attribution": cost_attribution,
         "profiles": profiles,
         "cron": cron,
         "sessions": sessions,
-        "gateways": gateways,
         "kanban": kanban,
         "orchestration": orchestration,
-        "skill_coverage": skill_coverage,
-        "skill_metadata": skill_metadata,
         "skill_hygiene": skill_hygiene,
         "evidence_sources": build_evidence_sources(profiles, sessions, cron, gateways, kanban),
         "config_policy": config_policy,
-        "ops_evals": ops_evals,
         "health": health,
-        "attention": attention,
         "tuning": tuning,
     }
 
@@ -5163,7 +4457,7 @@ HISTORY_RETENTION_DAYS = 90
 HISTORY_TREND_DAYS = 14
 SNAPSHOT_MIN_INTERVAL_SECONDS = 300
 SNAPSHOT_FIELDS = (
-    "score", "needs_you", "looping", "context_pressure", "failed_runs", "blocked",
+    "needs_you", "looping", "context_pressure", "failed_runs", "blocked",
     "stale_workers", "spend_24h", "sessions", "tool_calls", "median_run",
 )
 
@@ -5192,7 +4486,7 @@ def history_db() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS snapshots (
             day TEXT PRIMARY KEY,
             taken_at REAL NOT NULL,
-            score INTEGER, needs_you INTEGER, looping INTEGER, context_pressure INTEGER,
+            needs_you INTEGER, looping INTEGER, context_pressure INTEGER,
             failed_runs INTEGER, blocked INTEGER, stale_workers INTEGER, spend_24h REAL,
             sessions INTEGER, tool_calls INTEGER, median_run REAL
         );
@@ -5254,7 +4548,6 @@ def snapshot_values(scan: Dict[str, Any]) -> Dict[str, Any]:
     orch_summary = (scan["orchestration"].get("summary") or {}) if isinstance(scan["orchestration"], dict) else {}
     totals = scan["kanban"].get("totals") if isinstance(scan["kanban"].get("totals"), dict) else {}
     return {
-        "score": int(tuning.get("score") or 0),
         "needs_you": sum(1 for item in as_list(hq.get("recommendations")) if item.get("severity") in ("critical", "warning")),
         "looping": int(metrics.get("looping_sessions") or 0),
         "context_pressure": int(metrics.get("context_pressure_sessions") or 0),
@@ -5293,17 +4586,9 @@ def read_history(con: sqlite3.Connection, now: Optional[float] = None) -> Dict[s
         {key: row[key] for key in ("day",) + SNAPSHOT_FIELDS}
         for row in con.execute("SELECT * FROM snapshots WHERE day >= ? ORDER BY day", (since,))
     ]
-    week_ago = datetime.fromtimestamp(now - 7 * 86400, tz=timezone.utc).date().isoformat()
-    baseline = next((day for day in days if day["day"] >= week_ago), None)
-    latest = days[-1] if days else None
-    score_change = (
-        int(latest["score"]) - int(baseline["score"])
-        if latest and baseline and latest["day"] != baseline["day"] else None
-    )
     return {
         "days": days,
         "recorded_days": len(days),
-        "score_change_7d": score_change,
         "storage": "Olympus plugin data (never Hermes state)",
     }
 
@@ -5353,7 +4638,6 @@ def overview_payload(scan: Dict[str, Any]) -> Dict[str, Any]:
     con = history_db()
     try:
         record_snapshot(con, snapshot_values(scan))
-        history = read_history(con)
         fixes = build_fix_tracking(con, scan["tuning"])
     finally:
         con.close()
@@ -5366,10 +4650,8 @@ def overview_payload(scan: Dict[str, Any]) -> Dict[str, Any]:
         "tuning": strip_internal(scan["tuning"]),
         "cost_attribution": scan["cost_attribution"],
         "backlog": strip_internal(scan["backlog"]),
-        "history": history,
         "fixes": fixes,
         "skill_hygiene": strip_internal(scan["skill_hygiene"]),
-        "ops_evals": strip_internal(scan["ops_evals"]),
         "evidence_sources": strip_internal(scan["evidence_sources"]),
         "config_policy": strip_internal(scan["config_policy"]),
     }
@@ -5483,18 +4765,6 @@ def overview() -> Dict[str, Any]:
     scan = scan_hermes()
     payload = overview_payload(scan)
     payload["diagnostics"] = runtime_diagnostics("/overview", started_at, payload, scan["profiles"], scan["sessions"], scan["kanban"])
-    return payload
-
-
-@router.get("/tuning")
-def tuning() -> Dict[str, Any]:
-    refresh_expose_local_labels()
-    started_at = time.perf_counter()
-    scan = scan_hermes()
-    payload = overview_payload(scan)
-    for key in ("profiles", "gateways", "cron", "sessions"):
-        payload.pop(key)
-    payload["diagnostics"] = runtime_diagnostics("/tuning", started_at, payload, scan["profiles"], scan["sessions"], scan["kanban"])
     return payload
 
 

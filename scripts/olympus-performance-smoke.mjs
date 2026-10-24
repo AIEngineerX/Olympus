@@ -22,7 +22,7 @@ const manifestPath = path.join(dashboardSourceDir, "manifest.json");
 const runs = Math.max(1, Number.parseInt(process.env.OLYMPUS_PERF_RUNS || "5", 10) || 5);
 const maxResponseMs = Number(process.env.OLYMPUS_PERF_MAX_RESPONSE_MS || "2000");
 const maxAverageResponseMs = Number(process.env.OLYMPUS_PERF_MAX_AVG_RESPONSE_MS || "1000");
-const routes = ["overview", "tuning"];
+const routes = ["overview", "performance?days=30"];
 
 function requestText(url, options = {}, timeoutMs = 10000) {
   return new Promise((resolve) => {

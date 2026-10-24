@@ -173,7 +173,7 @@ for (const size of [DESKTOP, MOBILE]) {
     for (const title of ["Findings", "Backlog", "Skills", "Policy", "Where spend goes"]) {
       await expect(page.getByRole("heading", { level: 2, name: title, exact: true })).toBeVisible();
     }
-    await expect(page.getByRole("heading", { level: 2, name: /^Readiness \d+/ })).toBeVisible();
+    await expect(page.getByText(/Readiness/)).toHaveCount(0);
     await page.locator(".olympus-debug > summary").click();
     await expect(page.locator(".olympus-debug")).toContainText("Scan built in");
     expectClean(await collectVisualMetrics(page, size === MOBILE ? 32 : 24), messages, { name: "checks" });

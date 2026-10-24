@@ -1,4 +1,3 @@
-import json
 import os
 import sqlite3
 import tempfile
@@ -9,7 +8,7 @@ from pathlib import Path
 from dashboard import plugin_api
 
 
-class FleetTest(unittest.TestCase):
+class ProfileRoleTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = Path(self.tmp.name)
@@ -43,17 +42,6 @@ class FleetTest(unittest.TestCase):
         plugin_api.EXPOSE_LOCAL_LABELS = False
         self.tmp.cleanup()
 
-    def test_fleet_rows_join_role_route_work_and_spend(self):
-        scan = plugin_api.scan_hermes()
-
-        rows = {row["id"]: row for row in scan["fleet"]["profiles"]}
-        default = rows["profile:default"]
-        self.assertEqual((default["role_state"], default["role"]), ("described", None))
-        self.assertEqual((default["sessions_7d"], default["spend_7d_usd"]), (2, 0.75))
-        coder = next(row for row in rows.values() if row["sessions_7d"] == 1)
-        self.assertEqual((coder["role_state"], coder["open"], coder["spend_7d_usd"]), ("auto", 1, 1.0))
-        self.assertEqual(scan["fleet"]["summary"], {"profiles": 3, "needs_review": scan["fleet"]["summary"]["needs_review"], "roles_missing": 1, "roles_unreviewed": 1})
-        self.assertNotIn("release notes", json.dumps(scan["fleet"]))
 
     def test_role_text_appears_only_when_labels_are_exposed(self):
         plugin_api.EXPOSE_LOCAL_LABELS = True
@@ -62,11 +50,6 @@ class FleetTest(unittest.TestCase):
 
         self.assertEqual(role, {"role_state": "described", "role": "Coordinates the team and writes release notes"})
 
-    def test_missing_roles_become_a_finding_once_work_is_routed(self):
-        scan = plugin_api.scan_hermes()
-
-        titles = [item["title"] for item in scan["tuning"]["agent_hq"]["recommendations"]]
-        self.assertIn("Describe each profile's role", titles)
 
 
 if __name__ == "__main__":
