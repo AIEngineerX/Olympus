@@ -9,7 +9,7 @@ from pathlib import Path
 from dashboard import plugin_api
 
 
-class MetricsSpineTest(unittest.TestCase):
+class StoreReadersTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = Path(self.tmp.name)
@@ -72,33 +72,6 @@ class MetricsSpineTest(unittest.TestCase):
         self.assertIn("profile_1", public)
         self.assertGreaterEqual(len(profiles), 2)
 
-    def test_usage_rollup_is_profile_scoped_and_cost_confidence_is_partial(self):
-        now = time.time()
-        profile_home = self.home / "profiles" / "alpha"
-        self._write_state_db(self.home, [
-            ("raw-session-1", "cli", now - 60, now - 10, "completed", 4, 3, 2, 1000, 200, 0, 0, 0, 0.05, None, "private title"),
-            ("raw-session-2", "cli", now - 60, None, None, 3, 2, 1, 900, 100, 0, 0, 0, 0.0, None, "open title"),
-        ])
-        self._write_state_db(profile_home, [
-            ("raw-session-3", "telegram", now - 60, now - 5, "completed", 5, 4, 2, 0, 0, 0, 0, 0, 0.0, None, "zero usage"),
-        ])
-        profiles = [
-            {"label": "Default", "_public_name": "default", "_path": str(self.home), "state": "active", "skill_count": 1},
-            {"label": "Profile 1", "_public_name": "profile_1", "_path": str(profile_home), "state": "idle", "skill_count": 1},
-        ]
-
-        rollup = plugin_api.collect_usage_rollup(profiles, days=30)
-        serialized = json.dumps(rollup)
-
-        self.assertEqual(rollup["sessions"], 3)
-        self.assertEqual(rollup["api_calls"], 5)
-        self.assertEqual(rollup["total_tokens"], 2200)
-        self.assertEqual(rollup["zero_usage_suspect_sessions"], 1)
-        self.assertEqual(rollup["zero_cost_token_sessions"], 1)
-        self.assertEqual(rollup["cost_confidence"], "partial")
-        self.assertNotIn("raw-session", serialized)
-        self.assertNotIn("private title", serialized)
-
     def test_skill_metadata_reads_profile_usage_without_raw_skill_names(self):
         now = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
         profile_home = self.home / "profiles" / "alpha"
@@ -123,124 +96,6 @@ class MetricsSpineTest(unittest.TestCase):
         self.assertIn("profile_1", serialized)
         self.assertNotIn("private-default-skill", serialized)
         self.assertNotIn("private-alpha-skill", serialized)
-
-    def test_metrics_spine_exposes_operational_metrics_not_raw_ledgers(self):
-        now = time.time()
-        self._write_state_db(self.home, [
-            ("raw-session-1", "cli", now - 60, now - 10, "completed", 4, 25, 2, 1000, 200, 0, 0, 0, 0.0, None, "private title"),
-        ])
-        self._write_usage(self.home, {
-            "private-skill": {"created_by": "agent", "created_at": now, "use_count": 0, "view_count": 1, "patch_count": 0},
-        })
-        profiles = [{"label": "Default", "_public_name": "default", "_path": str(self.home), "state": "active", "skill_count": 1}]
-        sessions = [{"state": "completed", "tool_call_count": 25, "message_count": 4, "avg_input_tokens": 500, "duration_seconds": 10}]
-        kanban = {"boards": [], "totals": {"blocked": 1, "ready": 0, "running": 0}, "open": 1}
-        skill_metadata = plugin_api.collect_skill_metadata(profiles)
-        skill_coverage = {"summary": {"forced_skill_tasks": 0}}
-        skill_hygiene = plugin_api.build_skill_hygiene(skill_metadata, skill_coverage, kanban)
-        profile_fitness = {"summary": {"needs_review": 0, "average_score": 100}}
-        performance = plugin_api.build_performance_tracking(sessions, kanban)
-        ops_evals = {"summary": {"state": "ok", "score": 100}, "items": []}
-        config_policy = {"summary": {"toolsets": 4, "max_turns": 90, "auxiliary_routes": 1}}
-        rollup = plugin_api.collect_usage_rollup(profiles)
-
-        spine = plugin_api.build_metrics_spine(
-            profiles, sessions, kanban, skill_metadata, skill_coverage,
-            skill_hygiene, profile_fitness, performance, ops_evals,
-            config_policy, rollup,
-        )
-        serialized = json.dumps(plugin_api.strip_internal(spine))
-
-        self.assertEqual(spine["schema_version"], "olympus.metrics_spine.v1")
-        self.assertEqual(spine["window"]["ledger_owner"], "/analytics")
-        self.assertEqual(spine["coverage"]["config_grounding"]["toolsets"], 4)
-        self.assertEqual(spine["coverage"]["config_grounding"]["auxiliary_routes"], 1)
-        self.assertNotIn("enabled_toolsets", spine["coverage"]["config_grounding"])
-        self.assertEqual(spine["usage"]["cost_confidence"], "missing")
-        self.assertEqual(spine["skills"]["agent_created"], 1)
-        self.assertIn("Hermes Analytics owns raw usage and cost ledgers", spine["usage"]["note"])
-        self.assertNotIn("raw-session-1", serialized)
-        self.assertNotIn("private title", serialized)
-        self.assertNotIn("private-skill", serialized)
-        self.assertNotIn(str(self.home), serialized)
-        self.assertNotIn("daily_bars", serialized)
-        self.assertNotIn("leaderboard", serialized.lower())
-
-    def test_metrics_spine_sources_stale_workers_from_orchestration(self):
-        # Regression: stale_workers is produced by build_orchestration().summary,
-        # never by the collect_kanban dict, so build_metrics_spine must read it
-        # from the orchestration it is handed. With the bug it was always 0.
-        profiles = [{"label": "Default", "_public_name": "default", "_path": str(self.home), "state": "active", "skill_count": 1}]
-        sessions = [{"state": "completed", "tool_call_count": 1, "message_count": 1, "avg_input_tokens": 10, "duration_seconds": 5}]
-        kanban = {"boards": [], "totals": {"blocked": 0, "ready": 1, "running": 1}, "open": 2}  # no stale_workers key
-        orchestration = {"summary": {"stale_workers": 2, "blocked": 0}}
-
-        spine = plugin_api.build_metrics_spine(
-            profiles, sessions, kanban,
-            plugin_api.collect_skill_metadata(profiles),
-            {"summary": {"forced_skill_tasks": 0}},
-            {"summary": {}},
-            {"summary": {"needs_review": 0, "average_score": 100}},
-            plugin_api.build_performance_tracking(sessions, kanban),
-            {"summary": {"state": "ok", "score": 100}, "items": []},
-            {"summary": {"toolsets": 0, "max_turns": 0, "auxiliary_routes": 0}},
-            plugin_api.collect_usage_rollup(profiles),
-            orchestration=orchestration,
-        )
-
-        self.assertEqual(spine["work"]["stale_workers"], 2)
-
-
-    def test_usage_rollup_counts_cached_prompt_tokens_like_hermes(self):
-        # Hermes CanonicalUsage: prompt = input + cache_read + cache_write,
-        # total = prompt + output; reasoning is part of output, not added.
-        now = time.time()
-        self._write_state_db(self.home, [
-            ("s1", "cli", now - 60, now - 10, "completed", 4, 3, 2, 1000, 1000, 500, 99000, 0, 0.5, None, "t"),
-        ])
-        profiles = [{"label": "Default", "_public_name": "default", "_path": str(self.home)}]
-
-        rollup = plugin_api.collect_usage_rollup(profiles, days=30)
-
-        self.assertEqual(rollup["total_tokens"], 101000)
-
-    def test_usage_rollup_counts_each_costed_session_once(self):
-        now = time.time()
-        self._write_state_db(self.home, [
-            ("s1", "cli", now - 60, now - 10, "completed", 4, 3, 2, 1000, 200, 0, 0, 0, 0.04, 0.05, "both costs"),
-            ("s2", "cli", now - 60, now - 10, "completed", 4, 3, 2, 1000, 200, 0, 0, 0, 0.03, None, "estimate only"),
-        ])
-        profiles = [{"label": "Default", "_public_name": "default", "_path": str(self.home)}]
-
-        rollup = plugin_api.collect_usage_rollup(profiles, days=30)
-
-        self.assertEqual(rollup["costed_sessions"], 2)
-        self.assertEqual(rollup["actual_costed_sessions"], 1)
-        self.assertEqual(rollup["estimated_costed_sessions"], 1)
-        self.assertEqual(rollup["cost_confidence"], "estimated")
-
-    def test_one_actual_cost_session_does_not_hide_uncosted_token_sessions(self):
-        now = time.time()
-        self._write_state_db(self.home, [
-            ("s1", "cli", now - 60, now - 10, "completed", 4, 3, 2, 1000, 200, 0, 0, 0, None, 0.05, "actual"),
-            ("s2", "cli", now - 60, now - 10, "completed", 4, 3, 2, 1000, 200, 0, 0, 0, None, None, "no cost"),
-        ])
-        profiles = [{"label": "Default", "_public_name": "default", "_path": str(self.home)}]
-
-        rollup = plugin_api.collect_usage_rollup(profiles, days=30)
-
-        self.assertEqual(rollup["costed_sessions"], 1)
-        self.assertEqual(rollup["cost_confidence"], "partial")
-        self.assertEqual(rollup["state"], "warning")
-
-    def test_all_actual_cost_coverage_reports_actual(self):
-        now = time.time()
-        self._write_state_db(self.home, [
-            ("s1", "cli", now - 60, now - 10, "completed", 4, 3, 2, 1000, 200, 0, 0, 0, None, 0.05, "actual"),
-        ])
-        profiles = [{"label": "Default", "_public_name": "default", "_path": str(self.home)}]
-
-        self.assertEqual(plugin_api.collect_usage_rollup(profiles, days=30)["cost_confidence"], "actual")
 
     def _write_live_sessions(self, rows):
         con = sqlite3.connect(self.home / "state.db")
