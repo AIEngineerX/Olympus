@@ -51,14 +51,45 @@ restart `hermes dashboard` once.
 
 To work on Olympus itself, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-## What Olympus Reads
+## Alerts (opt-in)
 
-Olympus is read-only. Every Hermes store is opened read-only, it makes no
-network calls, runs no shell commands or background processes, and stores no
-credentials. Per request it reads, for each profile:
+Olympus can tell you when something breaks: a cron job fails or stops running
+on time, a Kanban worker stalls or fails, a session starts looping, or spend
+jumps to twice its daily average.
+
+```bash
+hermes olympus install-alerts --deliver telegram   # any `hermes cron --deliver` target
+```
+
+This copies one script, `olympus_alerts.py`, into `$HERMES_HOME/scripts/` and
+prints the `hermes cron create --no-agent ...` command to run. Hermes cron then
+runs the script on your schedule and delivers what it prints through your own
+delivery target. No model is called, and a run with nothing new is silent. An
+alert repeats at most every six hours while it is still active. Check on demand
+with `hermes olympus alerts --preview`; stop with `hermes cron remove <job id>`.
+
+With `plugins.isolation: host`, Hermes does not wire plugin CLI commands. Copy
+`alerts/olympus_alerts.py` from the installed plugin into `$HERMES_HOME/scripts/`
+yourself and run the same `hermes cron create` command.
+
+## What Olympus Reads and Writes
+
+Olympus never writes Hermes state. Every Hermes store is opened read-only, it
+makes no network calls, runs no background processes, and stores no
+credentials. It writes only:
+
+- `$HERMES_HOME/plugin-data/olympus/history.db`: daily snapshots and the
+  findings you marked fixed;
+- `$HERMES_HOME/plugin-data/olympus/alerts.json`: which alerts were sent, when
+  alerts are enabled;
+- `$HERMES_HOME/scripts/olympus_alerts.py`, only when you run
+  `hermes olympus install-alerts`.
+
+Per request it reads, for each profile:
 
 - `state.db` session counters (tokens, cost, tool calls, timestamps, handoff errors)
-- `cron/jobs.json` job status
+  and per-task background usage (`session_model_usage`)
+- `cron/jobs.json` job status and `cron/usage_audit.jsonl` per-run token counts
 - `config.yaml` structure and flags (never values such as keys or base URLs)
 - `.env` variable **names** only, to detect configured gateways
 - `gateway.pid` / `gateway_state.json` for gateway liveness
@@ -113,6 +144,7 @@ Hermes mounts the Olympus API at `/api/plugins/olympus/` once the plugin is enab
 | `GET /health` | Liveness and a coarse runtime status summary |
 | `GET /overview` | Full dashboard read model: health, tuning, profiles, gateways, cron, sessions, Kanban, performance, Trace Spine, Operational Evals, Metrics Spine, skill hygiene, config policy, and evidence sources |
 | `GET /tuning` | Tuning-focused read model with score breakdown, Kanban intelligence, Trace Spine, Operational Evals, Metrics Spine, skill hygiene, config policy, performance, and evidence sources |
+| `POST /fixes?key=` / `DELETE /fixes?key=` | Start or stop tracking a current finding you fixed (Olympus' own storage). |
 | `GET /open/session?ref=` | Resolves a hashed session ref to its Hermes chat URL (`/chat?resume=…&profile=…`), or `{"href": null}` when the session is gone. Raw session IDs leave the backend only through this click-time lookup. |
 
 Routes sit behind the Hermes dashboard session-token middleware. The frontend

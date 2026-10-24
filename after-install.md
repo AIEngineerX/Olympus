@@ -19,8 +19,16 @@
    Hermes page that owns each fix. Agents, Skills, Kanban, Policy and
    Diagnostics hold the detail.
 
+4. Optional alerts for failed or stalled cron jobs, stalled workers, looping
+   sessions and spend spikes, delivered by a Hermes no-agent cron job:
+
+   ```bash
+   hermes olympus install-alerts --deliver telegram
+   ```
+
 Olympus only reads local Hermes state (sessions, Kanban, cron, config, log
-tails). It never changes Hermes and makes no network calls. Session titles,
+tails). It never changes Hermes and makes no network calls; its own history
+lives in `$HERMES_HOME/plugin-data/olympus/`. Session titles,
 task titles, cron names, model labels and paths are hidden by default; to show
 them on a private machine, set this in `config.yaml`:
 
