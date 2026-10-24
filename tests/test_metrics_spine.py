@@ -284,5 +284,64 @@ class MetricsSpineTest(unittest.TestCase):
         self.assertEqual(sessions[1]["state"], "completed")
 
 
+    def _named_profile_layout(self):
+        # Hermes layout: the root is the default profile; named profiles live
+        # in <root>/profiles/<name>, each with its own cron and state stores.
+        (self.home / "config.yaml").write_bytes(b"model: {}\n")
+        coder = self.home / "profiles" / "coder"
+        li = self.home / "profiles" / "li"
+        for home in (coder, li):
+            home.mkdir(parents=True)
+        (self.home / "profiles" / ".deleted").mkdir()
+        return coder, li
+
+    def test_launching_from_a_named_profile_keeps_its_identity_and_the_root(self):
+        coder, _li = self._named_profile_layout()
+        os.environ["HERMES_HOME"] = str(coder)
+
+        profiles = plugin_api.collect_profiles()
+
+        by_name = {p["name"]: p for p in profiles}
+        self.assertEqual(sorted(by_name), ["coder", "default", "li"])
+        self.assertEqual(Path(by_name["default"]["_path"]), self.home)
+        self.assertTrue(by_name["coder"]["dashboard_home"])
+        self.assertFalse(by_name["default"]["dashboard_home"])
+
+    def test_cron_and_sessions_are_read_from_every_profile_store(self):
+        coder, li = self._named_profile_layout()
+        now = time.time()
+        for home, job_id in ((self.home, "root-job"), (coder, "coder-job")):
+            (home / "cron").mkdir(parents=True)
+            (home / "cron" / "jobs.json").write_bytes(json.dumps({"jobs": [
+                {"id": job_id, "name": job_id, "enabled": True, "last_status": "error", "last_error": "Request timed out"},
+            ]}).encode("utf-8"))
+        self._write_state_db(self.home, [
+            ("root-cli", "cli", now - 60, now - 10, "completed", 4, 45, 2, 10, 10, 0, 0, 0, 0.0, None, "t"),
+        ])
+        self._write_state_db(coder, [
+            ("coder-tg", "telegram", now - 30, now - 5, "completed", 4, 3, 2, 10, 10, 0, 0, 0, 0.0, None, "t"),
+        ])
+        profiles = plugin_api.collect_profiles()
+
+        cron = plugin_api.collect_cron(profiles)
+        sessions = plugin_api.collect_sessions(10, profiles)
+
+        self.assertEqual(sorted(job["_profile"] for job in cron), ["coder", "default"])
+        self.assertEqual([s["_profile"] for s in sessions], ["coder", "default"])
+        coverage = plugin_api.build_skill_coverage(profiles, sessions, {})
+        issues = {row["id"]: row["top_issue"] for row in coverage["profiles"]}
+        li_id = next(p["id"] for p in profiles if p["name"] == "li")
+        # The looping "cli" session belongs to default; a profile named "li"
+        # must not claim it through a substring match.
+        self.assertIn("tool pressure", issues["profile:default"])
+        self.assertNotIn("tool pressure", issues[li_id])
+
+    def test_session_profile_matching_is_exact(self):
+        session = {"_profile": "default", "source": "cli", "label": "cli"}
+
+        self.assertTrue(plugin_api.session_matches_profile(session, "default"))
+        self.assertFalse(plugin_api.session_matches_profile(session, "li"))
+
+
 if __name__ == "__main__":
     unittest.main()
