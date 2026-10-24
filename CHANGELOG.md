@@ -47,6 +47,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Operational evals score only checks with observed evidence; unobserved checks
   show as unknown (`n/a`) instead of passing, and an empty Hermes home no longer
   scores 100.
+- The dashboard polls one request at a time, so a backend slower than the
+  poll interval no longer discards every response.
+- Links keep the reverse-proxy base path (`__HERMES_BASE_PATH__`) and the
+  current `?profile=` scope.
+- Mode tabs support arrow keys, Home and End with a roving tab stop.
+- Pantheon switches to a grid beyond seven profiles so cards never overlap, and
+  its status badges fit their cells at desktop widths.
+- Profile Fitness reasons show labelled points ("−14 pts") instead of a bare
+  score delta.
 
 ## [1.0.3] - 2026-06-08
 
