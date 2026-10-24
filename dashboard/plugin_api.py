@@ -64,8 +64,13 @@ SKILLS_SH_AUDIT_FAIL = {"fail", "failed", "error", "critical", "block"}
 # the config cannot be read.
 EXPOSE_LOCAL_LABELS = False
 REDACTION_PATTERNS = [
-    re.compile(r"(?i)['\"]?(?:api[_-]?key|token|secret|password|passwd)['\"]?\s*[:=]\s*['\"]?[^'\"\s,}]+['\"]?"),
-    re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd)\s*[:=]\s*['\"]?[^'\"\s]+"),
+    # Secret assignments are removed whole: a quoted value (including one cut
+    # off by truncation) is consumed up to its closing quote, so
+    # `password='two word secret'` cannot leak its trailing words.
+    re.compile(
+        r"(?i)(?:['\"]?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd)['\"]?\s*[:=]\s*)"
+        r"(?:\"(?:[^\"\\]|\\.)*(?:\"|$)|'(?:[^'\\]|\\.)*(?:'|$)|[^\s,;}&]+)"
+    ),
     re.compile(r"(?i)(bearer\s+)[a-z0-9._~+/=-]+"),
     re.compile(r"sk-[A-Za-z0-9_-]{12,}"),
     re.compile(r"github_pat_[A-Za-z0-9_]+"),
@@ -204,6 +209,38 @@ def redact_text(value: Any, limit: int = 180) -> str:
     for pattern in PATH_PATTERNS:
         text = pattern.sub("[redacted-path]", text)
     return text[:limit]
+
+
+# Free-text failure messages can quote prompt text, task titles, or raw IDs that
+# no pattern can reliably scrub. By default only the failure class is returned;
+# the redacted text is shown only when local labels are enabled.
+ERROR_CATEGORIES = [
+    ("timeout", re.compile(r"(?i)timed?\s*out|timeout|deadline exceeded")),
+    ("rate limit", re.compile(r"(?i)rate[\s_-]?limit|\b429\b|too many requests")),
+    ("auth", re.compile(r"(?i)unauthori[sz]ed|forbidden|\b40[13]\b|invalid (?:api )?key|authenticat|permission denied|credential")),
+    ("quota", re.compile(r"(?i)quota|insufficient[_ ](?:funds|credit|balance)|billing|payment required|\b402\b")),
+    ("context limit", re.compile(r"(?i)context (?:length|window)|maximum context|too many tokens|prompt is too long")),
+    ("network", re.compile(r"(?i)connection (?:refused|reset|error|aborted)|unreachable|name resolution|dns|ssl|tls|network|econn")),
+    ("delivery", re.compile(r"(?i)deliver|webhook|send(?:ing)? (?:message|failed)|chat not found")),
+    ("not found", re.compile(r"(?i)not found|no such file|\b404\b|does not exist")),
+    ("crash", re.compile(r"(?i)traceback|exception|segmentation fault|killed|crash|exit(?:ed)? (?:code|status)")),
+]
+
+
+def error_category(value: Any) -> str:
+    text = "" if value is None else str(value)
+    for label, pattern in ERROR_CATEGORIES:
+        if pattern.search(text):
+            return label
+    return "error"
+
+
+def public_error(value: Any, limit: int = 180) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if EXPOSE_LOCAL_LABELS:
+        return redact_text(value, limit)
+    return f"{error_category(value)} (details hidden)"
 
 
 def safe_int(value: Any, default: int = 0) -> int:
@@ -1465,7 +1502,7 @@ def collect_cron(profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[s
             "next_run_at": ts_to_iso(job.get("next_run_at")),
             "last_run_at": ts_to_iso(job.get("last_run_at")),
             "last_status": last_status,
-            "last_error": redact_text(error) if error else None,
+            "last_error": public_error(error),
             "profile": public_name,
             "_profile": raw_profile,
             "no_agent": bool(job.get("no_agent")),
@@ -1569,7 +1606,7 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
             "cost_estimated": cost_estimated,
             "model": model if EXPOSE_LOCAL_LABELS else ("configured" if model else None),
             "handoff_platform": row_value(r, "handoff_platform"),
-            "handoff_error": redact_text(handoff_error) if handoff_error else None,
+            "handoff_error": public_error(handoff_error),
         })
     return out
 
@@ -1737,7 +1774,7 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                 if status == "blocked":
                     add_attention("warning", f"Blocked task: {title}", "Blocked Kanban work needs operator review or clearer acceptance criteria.", slug, public_task_id)
                 if failures > 0:
-                    add_attention("warning", f"Retry pressure: {title}", f"{failures} consecutive failure(s). {redact_text(row_value(t, 'last_failure_error'), 120)}", slug, public_task_id)
+                    add_attention("warning", f"Retry pressure: {title}", f"{failures} consecutive failure(s). {public_error(row_value(t, 'last_failure_error'), 120) or 'No failure text recorded.'}", slug, public_task_id)
                 if status in ("triage", "todo", "ready") and created_at:
                     try:
                         if now - int(created_at) > KANBAN_READY_STALE_SECONDS:
@@ -1807,7 +1844,7 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                             "last_heartbeat_at": ts_to_iso(heartbeat),
                         })
                     if is_failed_run({"status": run_status, "outcome": outcome}):
-                        add_attention("critical", f"Kanban worker {outcome or run_status}: {public_task_id}", redact_text(row_value(r, "error") or "Worker run failed", 200), slug, public_task_id)
+                        add_attention("critical", f"Kanban worker {outcome or run_status}: {public_task_id}", public_error(row_value(r, "error"), 200) or "Worker run failed", slug, public_task_id)
                     if len(recent_runs) < 16:
                         recent_runs.append({
                             "id": public_ref(row_value(r, "id"), "run"),
@@ -1818,7 +1855,7 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                             "outcome": outcome,
                             "started_at": ts_to_iso(row_value(r, "started_at")),
                             "ended_at": ts_to_iso(ended_at),
-                            "error": redact_text(row_value(r, "error"), 180),
+                            "error": public_error(row_value(r, "error"), 180),
                         })
 
             event_cols = table_columns(con, "task_events")
@@ -1854,8 +1891,8 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
             board["active_workers"] = sum(1 for w in active_workers if w.get("board") == slug)
         except Exception as exc:
             log_read_warning(f"kanban board scan failed for {slug}", exc)
-            board["error"] = redact_text(exc, 200)
-            add_attention("warning", f"Could not read Kanban board {slug}", redact_text(exc), slug)
+            board["error"] = public_error(exc, 200)
+            add_attention("warning", f"Could not read Kanban board {slug}", public_error(exc), slug)
         finally:
             con.close()
 
