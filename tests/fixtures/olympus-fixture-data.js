@@ -11,21 +11,22 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       base: 100,
       score: 68,
       label: "Needs review",
-      explanation: "Fixture score generated from local Hermes evidence.",
+      window: "last 7 days, 42 sessions",
+      explanation: "Starts at 100 and loses points for current risks: session signals from the last 7 days, 42 sessions, plus live Kanban, cron and gateway state.",
       deductions: [
         {
           label: "Looping/tool thrash",
           points: 12,
           reason: "Repeated tool calls detected.",
           evidence: "2 sessions",
-          source: "Hermes sessions tool_call_count"
+          source: "Session tool-call counts"
         },
         {
           label: "Worker failures",
           points: 10,
           reason: "Kanban worker failures show reliability risk.",
           evidence: "1 failed run",
-          source: "Hermes Kanban task_runs"
+          source: "Kanban worker runs"
         }
       ]
     },
@@ -63,6 +64,9 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         total_cost_usd: 7.42
       },
       metrics: {
+        window: { days: 7, sessions: 42, capped: false, label: "last 7 days, 42 sessions" },
+        spend_24h_usd: 2.36,
+        sessions_24h: 9,
         median_duration_seconds: 420,
         p90_duration_seconds: 2880,
         total_tokens: 1842200,
@@ -78,7 +82,11 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
           detail: "Two recent sessions repeated viewport checks and screenshot interpretation.",
           evidence: "2 tool-heavy sessions",
           threshold: ">= 20 tool calls",
-          basis: "Hermes session tool_call_count",
+          basis: "Tool-call counts come straight from Hermes' own session records.",
+          targets: [
+            { kind: "session", ref: "session:3f9a1c2b7d", label: "cli" },
+            { kind: "session", ref: "session:91be04d6aa", label: "telegram" }
+          ],
           recommended_view: "/skills",
           action_label: "Open Skills"
         },
@@ -291,7 +299,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         unit: "seconds",
         state: "warning",
         detail: "median 420s / p90 2880s",
-        source: "Hermes sessions duration_seconds",
+        source: "Session durations",
         recommended_view: "/sessions"
       },
       {
@@ -300,7 +308,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         value: 438,
         state: "warning",
         detail: "2 looping / 4 tool-heavy",
-        source: "Hermes sessions tool_call_count",
+        source: "Session tool-call counts",
         recommended_view: "/sessions"
       },
       {
@@ -309,7 +317,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         value: 8200,
         state: "warning",
         detail: "1 pressure session",
-        source: "Hermes sessions input_tokens/api_call_count",
+        source: "Prompt tokens per model call",
         recommended_view: "/sessions"
       },
       {
@@ -318,7 +326,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         value: 2,
         state: "warning",
         detail: "1 failed run / 1 stale / 0 errored",
-        source: "Hermes task_runs and sessions",
+        source: "Kanban worker runs and sessions",
         recommended_view: "/kanban"
       },
       {
@@ -327,7 +335,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         value: 1,
         state: "warning",
         detail: "1 session over $4.00",
-        source: "Hermes per-session cost fields; Usage/Analytics owns totals",
+        source: "Session costs; Hermes Analytics has the full ledger",
         recommended_view: "/analytics"
       }
     ],
@@ -630,7 +638,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         title: "Auxiliary route cost is not visible",
         detail: "Auxiliary or background provider routes are configured, but recent sessions do not expose cost.",
         evidence: "2 auxiliary route signals / 0 costed sessions",
-        basis: "Hermes auxiliary route presence plus per-session cost fields",
+        basis: "Auxiliary model routes and session costs",
         recommended_view: "/analytics",
         action_label: "Open Analytics"
       }

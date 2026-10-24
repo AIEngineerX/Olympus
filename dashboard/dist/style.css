@@ -15,8 +15,7 @@
   align-items: stretch;
   justify-content: space-between;
   gap: 18px;
-  min-height: 132px;
-  padding: 18px 20px;
+  padding: 16px 20px;
   border: 1px solid rgba(239, 196, 92, 0.32);
   border-radius: 8px;
   background:
@@ -33,20 +32,53 @@
   z-index: 1;
 }
 
-.olympus-kicker {
-  color: #efc45c;
-  font-size: 12px;
-  letter-spacing: 0;
-  text-transform: uppercase;
-  margin-bottom: 8px;
-}
-
 .olympus-hero h1 {
   margin: 0;
   font-family: Charter, "Iowan Old Style", "Palatino Linotype", Georgia, ui-serif, serif;
-  font-size: 48px;
-  line-height: 0.95;
+  font-size: 34px;
+  line-height: 1;
   letter-spacing: 0;
+}
+
+.olympus-hero-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.olympus-hero-title .olympus-refresh {
+  min-height: 40px;
+}
+
+.olympus-hero-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.olympus-hero-facts div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(246, 240, 223, 0.1);
+  border-radius: 6px;
+  background: rgba(6, 9, 14, 0.42);
+}
+
+.olympus-hero-facts dt {
+  color: rgba(246, 240, 223, 0.58);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.olympus-hero-facts dd {
+  margin: 4px 0 0;
+  color: #f6f0df;
+  font-size: 15px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .olympus-hero p,
@@ -65,13 +97,6 @@
   max-width: 760px;
   color: rgba(246, 240, 223, 0.72) !important;
   font-size: 13px !important;
-}
-
-.olympus-hero-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 14px;
 }
 
 .olympus-refresh,
@@ -187,30 +212,6 @@
   min-width: 0;
 }
 
-.olympus-mode-intro {
-  min-height: 46px;
-  margin-top: 12px;
-  padding: 10px 12px;
-  border: 1px solid rgba(67, 201, 191, 0.16);
-  border-radius: 6px;
-  background: rgba(67, 201, 191, 0.06);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.olympus-mode-intro span {
-  color: #43c9bf;
-  font-weight: 800;
-}
-
-.olympus-mode-intro p {
-  margin: 0;
-  color: rgba(246, 240, 223, 0.66);
-  font-size: 13px;
-}
-
 .olympus-oracle {
   min-width: 150px;
   display: grid;
@@ -263,82 +264,6 @@
   border-radius: 6px;
   background: linear-gradient(180deg, rgba(17, 24, 34, 0.96), rgba(9, 11, 17, 0.98));
   box-shadow: 4px 4px 0 rgba(8, 7, 11, 0.34);
-}
-
-.olympus-viewport-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  margin-bottom: 12px;
-}
-
-.olympus-viewport-head > div:first-child span,
-.olympus-trigger-card span,
-.olympus-viewport-stat span {
-  color: rgba(246, 240, 223, 0.58);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0;
-}
-
-.olympus-viewport-head h3 {
-  margin: 4px 0 0;
-  color: #f6f0df;
-  font-size: 24px;
-}
-
-.olympus-viewport-status {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.olympus-viewport-stat {
-  min-height: 72px;
-  padding: 10px;
-  border: 1px solid rgba(246, 240, 223, 0.1);
-  border-radius: 4px;
-  background: rgba(6, 9, 14, 0.42);
-  display: grid;
-  gap: 6px;
-}
-
-.olympus-viewport-stat strong {
-  color: #f6f0df;
-  font-size: 22px;
-  line-height: 1;
-}
-
-.olympus-trigger-lanes {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.olympus-trigger-card {
-  min-height: 112px;
-  padding: 12px;
-  border: 1px solid rgba(67, 201, 191, 0.18);
-  border-radius: 6px;
-  background:
-    linear-gradient(180deg, rgba(24, 32, 40, 0.84), rgba(8, 13, 18, 0.9)),
-    linear-gradient(90deg, rgba(67, 201, 191, 0.08), rgba(239, 196, 92, 0.05));
-  display: grid;
-  gap: 8px;
-}
-
-.olympus-trigger-card strong {
-  color: #43c9bf;
-  font-size: 32px;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-.olympus-trigger-card small {
-  color: rgba(246, 240, 223, 0.66);
-  font-size: 13px;
 }
 
 .olympus-agent-card {
@@ -406,37 +331,6 @@
   border-color: rgba(67, 201, 191, 0.16);
 }
 
-.olympus-pantheon-score {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  z-index: 1;
-  width: 118px;
-  min-height: 92px;
-  transform: translate(-50%, -50%);
-  border: 1px solid rgba(67, 201, 191, 0.34);
-  border-radius: 6px;
-  background: rgba(6, 9, 14, 0.72);
-  color: #43c9bf;
-  display: grid;
-  place-items: center;
-  align-content: center;
-  text-align: center;
-}
-
-.olympus-pantheon-score span {
-  color: rgba(246, 240, 223, 0.62);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0;
-}
-
-.olympus-pantheon-score strong {
-  font-size: 36px;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
 .olympus-pantheon-node {
   position: absolute;
   left: var(--x);
@@ -457,7 +351,7 @@
 .olympus-pantheon-map-grid {
   min-height: 0;
   display: grid;
-  grid-template-columns: 118px repeat(auto-fill, minmax(178px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 10px;
 }
 
@@ -466,7 +360,6 @@
   display: none;
 }
 
-.olympus-pantheon-map-grid .olympus-pantheon-score,
 .olympus-pantheon-map-grid .olympus-pantheon-node {
   position: static;
   width: auto;
@@ -478,13 +371,6 @@
   border-color: rgba(239, 196, 92, 0.64);
   background:
     linear-gradient(180deg, rgba(40, 35, 28, 0.94), rgba(11, 13, 18, 0.94));
-}
-
-.olympus-pantheon-node-kicker {
-  color: rgba(246, 240, 223, 0.58);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0;
 }
 
 .olympus-pantheon-node strong {
@@ -605,7 +491,6 @@
 
 .olympus-score-grid,
 .olympus-hq-tiles,
-.olympus-hq-grid,
 .olympus-trace-tiles,
 .olympus-trace-list,
 .olympus-ops-eval-tiles,
@@ -622,7 +507,6 @@
 
 .olympus-score-pane,
 .olympus-hq-tile,
-.olympus-hq-pane,
 .olympus-tuning-item,
 .olympus-trace-tile,
 .olympus-trace-item,
@@ -746,28 +630,6 @@
   margin-bottom: 10px;
 }
 
-.olympus-score-total {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px 12px;
-  align-items: center;
-  padding: 10px;
-  margin-bottom: 8px;
-  border-radius: 4px;
-  background: rgba(6, 9, 14, 0.42);
-}
-
-.olympus-score-total span {
-  color: rgba(246, 240, 223, 0.58);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0;
-}
-
-.olympus-score-total strong {
-  font-size: 24px;
-}
-
 .olympus-score-deduction,
 .olympus-method-row,
 .olympus-source-row {
@@ -778,7 +640,12 @@
 }
 
 .olympus-score-deduction {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: baseline;
+}
+
+.olympus-score-deductions {
+  margin-top: 10px;
 }
 
 .olympus-score-deduction:first-of-type,
@@ -824,12 +691,6 @@
   color: #bdf5ef;
 }
 
-.olympus-source-list {
-  margin-top: 10px;
-  padding-top: 4px;
-  border-top: 1px solid rgba(239, 196, 92, 0.18);
-}
-
 .olympus-details {
   margin-top: 8px;
 }
@@ -863,7 +724,7 @@
 }
 
 .olympus-hq-tiles {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-bottom: 10px;
 }
 
@@ -923,11 +784,6 @@
   color: #f6f0df;
   font-size: 14px;
   font-variant-numeric: tabular-nums;
-}
-
-.olympus-hq-grid {
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
 }
 
 .olympus-performance {
@@ -1244,7 +1100,7 @@
 }
 
 .olympus-ops-eval-tiles {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 12px;
 }
 
@@ -1255,8 +1111,7 @@
   gap: 8px;
 }
 
-.olympus-ops-eval-tile span,
-.olympus-ops-eval-score span {
+.olympus-ops-eval-tile span {
   color: rgba(246, 240, 223, 0.58);
   font-size: 12px;
   text-transform: uppercase;
@@ -1295,19 +1150,6 @@
 
 .olympus-ops-eval-item h3 {
   font-size: 16px;
-}
-
-.olympus-ops-eval-score {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.olympus-ops-eval-score strong {
-  color: #43c9bf;
-  font-size: 30px;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
 }
 
 .olympus-ops-eval-item p {
@@ -1528,13 +1370,55 @@
   overflow-wrap: anywhere;
 }
 
-.olympus-hq-pane {
-  padding: 10px;
+.olympus-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 10px;
 }
 
-.olympus-hq-pane h3 {
-  font-size: 16px;
-  margin-bottom: 8px;
+.olympus-session-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.olympus-session-link {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid rgba(67, 201, 191, 0.42);
+  border-radius: 6px;
+  background: rgba(67, 201, 191, 0.08);
+  color: #f6f0df;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.olympus-session-link:hover:not(:disabled),
+.olympus-session-link:focus-visible {
+  border-color: rgba(67, 201, 191, 0.8);
+  outline: 2px solid rgba(67, 201, 191, 0.5);
+  outline-offset: 2px;
+}
+
+.olympus-session-link:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.olympus-debug {
+  margin-top: 16px;
+}
+
+.olympus-debug > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .olympus-tuning-item {
@@ -2036,15 +1920,10 @@
 
 @media (max-width: 1180px) {
   .olympus-score-grid,
-  .olympus-hq-grid,
   .olympus-skill-grid,
   .olympus-skill-hygiene-grid,
   .olympus-command-viewport,
   .olympus-kanban-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .olympus-viewport-head {
     grid-template-columns: 1fr;
   }
 
@@ -2087,24 +1966,24 @@
     display: none;
   }
 
-  .olympus-mode-intro {
-    display: grid;
-  }
-
   .olympus-hero {
     flex-direction: column;
   }
 
   .olympus-hero h1 {
-    font-size: 42px;
+    font-size: 30px;
+  }
+
+  .olympus-hero-facts {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .olympus-oracle {
     min-width: 0;
+    order: -1;
   }
 
   .olympus-score-grid,
-  .olympus-hq-grid,
   .olympus-trace-list,
   .olympus-ops-eval-grid,
   .olympus-metrics-grid,
@@ -2124,11 +2003,6 @@
     padding: 12px;
   }
 
-  .olympus-viewport-head,
-  .olympus-trigger-lanes {
-    grid-template-columns: 1fr;
-  }
-
   .olympus-pantheon-map {
     min-height: 0;
     display: grid;
@@ -2141,19 +2015,10 @@
     display: none;
   }
 
-  .olympus-pantheon-score,
   .olympus-pantheon-node {
     position: static;
     width: auto;
     transform: none;
-  }
-
-  .olympus-pantheon-score {
-    min-height: 98px;
-  }
-
-  .olympus-viewport-status {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .olympus-hq-tiles {

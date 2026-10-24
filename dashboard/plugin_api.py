@@ -1286,7 +1286,7 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
             "Auxiliary or background provider routes are configured, but recent sessions do not expose cost. Background work can hide spend without a usage signal.",
             f"{auxiliary_routes} auxiliary route signal(s) / 0 costed sessions",
             "/analytics",
-            "Hermes auxiliary route presence plus per-session cost fields",
+            "Auxiliary model routes and session costs",
         )
     if fallback_count and not route_audit_profiles:
         add(
@@ -2635,7 +2635,7 @@ def build_performance_tracking(sessions: List[Dict[str, Any]], kanban: Optional[
             "value": expensive_sessions,
             "state": cost_state,
             "detail": f"{expensive_sessions} session(s) over ${EXPENSIVE_RUN_USD:.2f}" if sessions else "no session cost evidence",
-            "source": "Hermes per-session cost fields; Usage/Analytics owns totals",
+            "source": "Session costs; Hermes Analytics has the full ledger",
             "recommended_view": "/analytics",
         },
     ]

@@ -18,14 +18,14 @@ const deepSections = [
   { selector: ".olympus-skill-coverage", text: "Skill Coverage", minHeight: 180 },
   { selector: ".olympus-skill-hygiene", text: "Skill Hygiene", minHeight: 180 },
   { selector: ".olympus-profile-fitness", text: "Profile Fitness", minHeight: 180 },
-  { selector: ".olympus-pantheon", text: "Pantheon", minHeight: 240 },
+  { selector: ".olympus-pantheon", text: "Live Work", minHeight: 240 },
   { selector: ".olympus-kanban", text: "Kanban Intelligence", minHeight: 180 }
 ];
 const stagedModeSections = {
   Agents: [
     { selector: ".olympus-performance", text: "Performance Tracking", minHeight: 180 },
     { selector: ".olympus-profile-fitness", text: "Profile Fitness", minHeight: 180 },
-    { selector: ".olympus-pantheon", text: "Pantheon", minHeight: 240 }
+    { selector: ".olympus-pantheon", text: "Live Work", minHeight: 240 }
   ],
   Skills: [
     { selector: ".olympus-skill-coverage", text: "Skill Coverage", minHeight: 180 },
@@ -138,6 +138,8 @@ async function selectMode(page, label) {
   await expect(tab).toHaveCount(1);
   await tab.click();
   await expect(tab).toHaveAttribute("aria-selected", "true");
+  // Diagnostics keeps its debug panels behind one disclosure.
+  if (label === "Diagnostics") await page.locator(".olympus-debug > summary").click();
 }
 
 async function collectVisualMetrics(page) {
@@ -207,7 +209,7 @@ async function collectVisualMetrics(page) {
     return {
       agentCards: agentCards.length,
       agentMonitorTiles: Array.from(pageEl.querySelectorAll(".olympus-agent-hq .olympus-hq-tile")).filter(visible).length,
-      visibleTuningItems: Array.from(pageEl.querySelectorAll(".olympus-agent-hq .olympus-tuning-item")).filter(visible).length,
+      visibleTuningItems: Array.from(pageEl.querySelectorAll(".olympus-needs-you .olympus-tuning-item")).filter(visible).length,
       collapsedBacklog: Boolean(pageEl.querySelector(".olympus-agent-hq .olympus-backlog-details")),
       badCopyPhrases,
       badLinks,
@@ -225,7 +227,7 @@ async function collectVisualMetrics(page) {
         selected: el.getAttribute("aria-selected"),
         text: (el.querySelector("span") && el.querySelector("span").textContent || "").trim()
       })),
-      pantheonVisible: Boolean(pantheon && visible(pantheon) && renderedText.includes("Pantheon")),
+      pantheonVisible: Boolean(pantheon && visible(pantheon) && renderedText.includes("Live Work")),
       pantheonButtons: Array.from(document.querySelectorAll(".olympus-pantheon .olympus-agent-card")).filter(visible).length,
       smallControls,
       svgTextCount: pageEl.querySelectorAll("svg text").length,
@@ -260,7 +262,7 @@ for (const scenario of scenarios) {
     expect(metrics.agentMonitorTiles).toBeLessThanOrEqual(6);
     expect(metrics.visibleTuningItems).toBeLessThanOrEqual(3);
     expect(metrics.horizontalOverflow).toBeLessThanOrEqual(2);
-    expect(metrics.sectionCount).toBeLessThanOrEqual(4);
+    expect(metrics.sectionCount).toBeLessThanOrEqual(5);
     expect(metrics.smallControls).toEqual([]);
     expect(metrics.svgTextCount).toBe(0);
     expect(metrics.tinyVisibleText).toEqual([]);
@@ -320,7 +322,7 @@ test("static user-plugin mode falls back to Hermes dashboard APIs", async ({ pag
   await expect(page.locator(".olympus-static-compatibility")).toContainText("Backend Unavailable");
   await expect(page.locator(".olympus-static-compatibility")).toContainText("/api/dashboard/plugins");
   await expect(page.locator(".olympus-static-compatibility")).toContainText("Readiness scoring and deductions");
-  await expect(page.locator(".olympus-agent-hq")).toContainText("Backend unavailable");
+  await expect(page.locator(".olympus-needs-you")).toContainText("Backend unavailable");
   await selectMode(page, "Diagnostics");
   await expect(page.locator(".olympus-diagnostics")).toContainText("Evidence Sources");
   await expect(page.locator(".olympus-diagnostics")).toContainText("/api/status");

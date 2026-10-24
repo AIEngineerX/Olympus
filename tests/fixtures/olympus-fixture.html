@@ -138,6 +138,10 @@
       }
 
       async function fixtureResponse(url) {
+        if (String(url).startsWith("/api/plugins/olympus/open/session")) {
+          const ref = new URLSearchParams(String(url).split("?")[1]).get("ref");
+          return { href: ref === "session:91be04d6aa" ? null : "/chat?resume=fixture-session&profile=default" };
+        }
         if (fixtureState !== "static-user-plugin") return window.__OLYMPUS_FIXTURE_DATA__;
         if (String(url).startsWith("/api/plugins/olympus/overview")) {
           throw new Error("404 /api/plugins/olympus/overview");

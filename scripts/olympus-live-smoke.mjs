@@ -36,7 +36,7 @@ const modeSections = {
   Agents: [
     [".olympus-performance", "Performance Tracking"],
     [".olympus-profile-fitness", "Profile Fitness"],
-    [".olympus-pantheon", "Pantheon"],
+    [".olympus-pantheon", "Live Work"],
   ],
   Skills: [
     [".olympus-skill-coverage", "Skill Coverage"],
@@ -266,7 +266,7 @@ async function collectMetrics(page, sections) {
       opsEvalsVisible: Boolean(document.querySelector(".olympus-ops-evals") && bodyText.includes("Operational Evals")),
       policyVisible: Boolean(document.querySelector(".olympus-policy") && bodyText.includes("Tool Policy & Aux Cost")),
       skillHygieneVisible: Boolean(document.querySelector(".olympus-skill-hygiene") && bodyText.includes("Skill Hygiene")),
-      pantheonVisible: Boolean(document.querySelector(".olympus-pantheon") && bodyText.includes("Pantheon")),
+      pantheonVisible: Boolean(document.querySelector(".olympus-pantheon") && bodyText.includes("Live Work")),
       pantheonButtons: Array.from(pageEl.querySelectorAll(".olympus-pantheon .olympus-agent-card")).filter(visible).length,
     };
   }, {
@@ -285,6 +285,8 @@ async function selectMode(page, label, sections) {
     const active = document.querySelector(`.olympus-mode-tab[aria-label="${mode}"]`);
     return active && active.getAttribute("aria-selected") === "true";
   }, label, { timeout: 5000 });
+  // Diagnostics keeps its debug panels behind one disclosure.
+  if (label === "Diagnostics") await page.locator(".olympus-debug > summary").click();
   await page.waitForFunction((expected) => {
     const visible = (el) => {
       const rect = el.getBoundingClientRect();
