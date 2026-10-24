@@ -30,6 +30,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   active sessions are no longer flagged stale.
 - Cost coverage counts each session once and reports `partial` whenever
   token-bearing sessions carry no cost.
+- Launching the dashboard from a named profile (`profiles/<name>`) keeps that
+  profile's identity and still discovers the root `default` profile.
+- Cron jobs and sessions are read from every profile's own stores and
+  attributed to the profile they came from (no more substring matching that
+  let a profile named `li` claim `cli` sessions).
 
 ## [1.0.3] - 2026-06-08
 

@@ -262,6 +262,15 @@ def safe_int(value: Any, default: int = 0) -> int:
             return default
 
 
+def safe_float(value: Any, default: float = 0.0) -> float:
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def safe_id(value: Any, prefix: str = "item") -> str:
     raw = str(value or "")
     if not raw:
@@ -1410,20 +1419,56 @@ def gateway_process_state(profile_home: Path) -> str:
     return "running" if kind == "hermes-gateway" else "unknown"
 
 
+# Mirrors hermes_constants.PROFILE_ID_RE: named profiles live in
+# <root>/profiles/<id>; anything else in that folder (the .deleted tombstone,
+# stray files) is not a profile.
+PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+def hermes_root(home: Path) -> Path:
+    """Hermes root for a home, like Hermes' ``profile_root_for_env_home``.
+
+    The root is the ``default`` profile's home; a profile-shaped home
+    (``<root>/profiles/<name>``) belongs to the root two levels up.
+    """
+    return home.parent.parent if home.parent.name == "profiles" else home
+
+
+def profile_homes() -> List[tuple[str, Path]]:
+    """Every profile as (name, home), default first, named profiles sorted."""
+    root = hermes_root(get_hermes_home())
+    homes: List[tuple[str, Path]] = [("default", root)]
+    profiles_dir = root / "profiles"
+    if profiles_dir.is_dir():
+        for entry in sorted(profiles_dir.iterdir()):
+            if entry.is_dir() and entry.name != "default" and PROFILE_ID_RE.match(entry.name):
+                homes.append((entry.name, entry))
+    return homes
+
+
+def active_profile_name() -> str:
+    base = get_hermes_home().resolve()
+    for name, home in profile_homes():
+        if home.resolve() == base:
+            return name
+    return "default"
+
+
+def profile_stores(profiles: Optional[List[Dict[str, Any]]]) -> List[tuple[str, Path]]:
+    """(raw profile name, home) for each scanned profile, or the active home alone."""
+    stores = [
+        (str(profile["name"]), Path(str(profile["_path"])))
+        for profile in as_list(profiles)
+        if isinstance(profile, dict) and profile.get("name") and profile.get("_path")
+    ]
+    return stores or [(active_profile_name(), get_hermes_home())]
+
+
 def collect_profiles() -> List[Dict[str, Any]]:
-    base = get_hermes_home()
+    base = get_hermes_home().resolve()
     profiles: List[Dict[str, Any]] = []
 
-    candidates = [("default", base)]
-    prof_dir = base / "profiles"
-    if not prof_dir.exists() and base.parent.name == "profiles":
-        prof_dir = base.parent
-    if prof_dir.exists():
-        for p in sorted(prof_dir.iterdir()):
-            if p.is_dir() and p.resolve() != base.resolve():
-                candidates.append((p.name, p))
-
-    for name, home in candidates:
+    for name, home in profile_homes():
         cfg = profile_config(home)
         model = summarize_model(cfg)
         model_name = model.get("model")
@@ -1457,6 +1502,7 @@ def collect_profiles() -> List[Dict[str, Any]]:
             "has_soul": soul_exists,
             "skill_count": skill_count,
             "gateway_state": gstate,
+            "dashboard_home": home.resolve() == base,
         })
     return profiles
 
@@ -1481,13 +1527,21 @@ def cron_schedule_display(job: Dict[str, Any]) -> Optional[str]:
 
 
 def collect_cron(profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
-    base = get_hermes_home()
-    data = read_json(base / "cron" / "jobs.json") or {}
-    jobs = data.get("jobs") if isinstance(data, dict) else []
-    if not isinstance(jobs, list):
-        return []
+    # Cron is per-profile in Hermes: each profile home owns cron/jobs.json and
+    # runs those jobs under its own config, so the store a job came from is
+    # its profile.
     profile_public_names = profile_public_map(as_list(profiles))
     out: List[Dict[str, Any]] = []
+    for raw_profile, home in profile_stores(profiles):
+        data = read_json(home / "cron" / "jobs.json") or {}
+        jobs = data.get("jobs") if isinstance(data, dict) else []
+        out.extend(_cron_rows(as_list(jobs), raw_profile, profile_public_names))
+    return out
+
+
+def _cron_rows(jobs: List[Any], raw_profile: str, profile_public_names: Dict[str, str]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    public_name = public_profile_label(raw_profile, profile_public_names) or "default"
     for job in jobs:
         if not isinstance(job, dict):
             continue
@@ -1495,8 +1549,6 @@ def collect_cron(profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[s
         enabled = bool(job.get("enabled", True))
         error = job.get("last_error") or job.get("last_delivery_error")
         state = "error" if error or last_status == "error" else ("scheduled" if enabled else "paused")
-        raw_profile = str(job.get("profile") or "default")
-        public_name = public_profile_label(raw_profile, profile_public_names) or "default"
         job_ref = public_ref(job.get("id"), "cron") or "cron"
         out.append({
             "id": job_ref,
@@ -1517,8 +1569,21 @@ def collect_cron(profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[s
     return out
 
 
-def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
-    db = get_hermes_home() / "state.db"
+def collect_sessions(limit: int = 12, profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """Most recently active sessions across every profile's state store."""
+    profile_public_names = profile_public_map(as_list(profiles))
+    rows: List[Dict[str, Any]] = []
+    for raw_profile, home in profile_stores(profiles):
+        public_name = public_profile_label(raw_profile, profile_public_names) or "default"
+        for session in _store_sessions(home / "state.db", limit):
+            session["profile"] = public_name
+            session["_profile"] = raw_profile
+            rows.append(session)
+    rows.sort(key=lambda s: float(s.get("_last_ts") or 0), reverse=True)
+    return rows[:limit]
+
+
+def _store_sessions(db: Path, limit: int) -> List[Dict[str, Any]]:
     if not db.exists():
         return []
     con: Optional[sqlite3.Connection] = None
@@ -1615,6 +1680,7 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
             "tool_call_count": tool_call_count,
             "duration_seconds": duration_seconds,
             "last_activity_at": ts_to_iso(last_ts),
+            "_last_ts": safe_float(last_ts),
             "input_tokens": input_tokens,
             "cache_read_tokens": cache_read_tokens,
             "cache_write_tokens": cache_write_tokens,
@@ -2098,16 +2164,11 @@ def kanban_items(kanban: Optional[Dict[str, Any]], key: str) -> List[Dict[str, A
     return [x for x in as_list((kanban or {}).get(key)) if isinstance(x, dict)]
 
 
-def session_matches_profile(session: Dict[str, Any], raw_name: str, public_name: Any) -> bool:
-    labels = {str(raw_name).lower(), str(public_name or "").lower()}
-    labels.discard("")
-    if not labels:
-        return False
-    for key in ("profile", "source", "label"):
-        value = str(session.get(key) or "").lower()
-        if value in labels or any(label and label in value for label in labels):
-            return True
-    return False
+def session_matches_profile(session: Dict[str, Any], raw_name: str) -> bool:
+    # Sessions carry the profile whose state store they were read from;
+    # matching on source/title substrings mislabelled "cli" sessions as a
+    # profile named "li" and missed ordinary default-profile sessions.
+    return str(session.get("_profile") or "") == str(raw_name)
 
 
 def is_failed_run(run: Dict[str, Any]) -> bool:
@@ -2775,7 +2836,7 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
         raw_name = str(profile.get("name") or "default")
         profile_tasks = [t for t in tasks if str(t.get("_assignee") or t.get("assignee")) == raw_name]
         profile_forced = [t for t in profile_tasks if int(t.get("forced_skill_count") or 0) > 0]
-        profile_sessions = [s for s in sessions if session_matches_profile(s, raw_name, profile.get("label"))]
+        profile_sessions = [s for s in sessions if session_matches_profile(s, raw_name)]
         profile_looping = [s for s in profile_sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD]
         profile_tool_heavy = [
             s for s in profile_sessions
@@ -4041,7 +4102,7 @@ def overview() -> Dict[str, Any]:
     started_at = time.perf_counter()
     profiles = collect_profiles()
     cron = collect_cron(profiles)
-    sessions = collect_sessions(60)
+    sessions = collect_sessions(60, profiles)
     gateways = collect_gateways(profiles)
     kanban = collect_kanban(profiles)
     orchestration = build_orchestration(kanban)
@@ -4082,7 +4143,7 @@ def overview() -> Dict[str, Any]:
         "profiles": [public_profile(p) for p in profiles],
         "gateways": gateways,
         "cron": strip_internal(cron),
-        "sessions": sessions,
+        "sessions": strip_internal(sessions),
         "kanban": strip_internal(kanban),
         "orchestration": strip_internal(orchestration),
         "party": strip_internal(party),
@@ -4107,7 +4168,7 @@ def tuning() -> Dict[str, Any]:
     started_at = time.perf_counter()
     profiles = collect_profiles()
     cron = collect_cron(profiles)
-    sessions = collect_sessions(60)
+    sessions = collect_sessions(60, profiles)
     gateways = collect_gateways(profiles)
     kanban = collect_kanban(profiles)
     orchestration = build_orchestration(kanban)
