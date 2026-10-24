@@ -6,7 +6,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Brief answers "what needs me?" first: a Needs-you list with evidence, owning
+  Hermes page, and "Open session" buttons that open the sessions behind a
+  finding in Hermes chat; hero facts for spend in the last 24h and the session
+  window; the readiness score's top deductions inline.
+- `GET /api/plugins/olympus/open/session?ref=` resolves a hashed session ref to
+  its Hermes chat URL at click time.
+- Session signals cover a stated window: the last 7 days, capped at the 200 most
+  recent sessions.
+- `plugin.yaml` and a no-op `__init__.py`, so Olympus installs with
+  `hermes plugins install` and passes `hermes plugins validate`.
+
 ### Changed
+
+- One headline score: Operational Evals and Profile Fitness no longer show
+  competing score numbers.
+- Metric chips appear only for values that need attention.
+- Pantheon is now Live Work (profile cards, current task, activity); Metrics
+  Spine, payload budgets and evidence sources sit under Diagnostics' "Debug
+  details".
+- Evidence copy names what was measured in plain language instead of database
+  column names.
 
 - The local-label opt-in moved from the `OLYMPUS_EXPOSE_LOCAL_LABELS` environment
   variable to `dashboard.olympus.expose_local_labels` in `config.yaml`. It is
