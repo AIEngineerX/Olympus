@@ -4809,6 +4809,107 @@ def overview_payload(scan: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Alerts for a Hermes no-agent cron job.
+#
+# `hermes olympus install-alerts` puts a small script in $HERMES_HOME/scripts/
+# that calls alert_report(). Hermes cron runs it on the user's schedule and
+# delivers its stdout through the user's own delivery target; empty output is
+# a silent run. No model is called and Olympus never sends anything itself.
+# ---------------------------------------------------------------------------
+
+ALERTS_STATE_FILE = "alerts.json"
+ALERT_REPEAT_SECONDS = 6 * 60 * 60
+ALERT_RECENT_SECONDS = 24 * 60 * 60
+CRON_OVERDUE_SECONDS = 30 * 60
+ALERT_SPEND_FLOOR_USD = 1.0
+ALERT_SPEND_SPIKE_RATIO = 2.0
+
+
+def build_alerts(scan: Dict[str, Any], history: Dict[str, Any], now: Optional[float] = None) -> List[Dict[str, str]]:
+    """Conditions worth interrupting someone for, each with a stable key."""
+    now = time.time() if now is None else now
+    alerts: List[Dict[str, str]] = []
+
+    def add(key: str, severity: str, text: str) -> None:
+        alerts.append({"key": key, "severity": severity, "text": text})
+
+    for job in scan["cron"]:
+        where = " / ".join(str(part) for part in (job.get("profile"), job.get("schedule")) if part)
+        name = f"{job.get('label')} ({where})" if where else str(job.get("label"))
+        if job.get("state") == "error":
+            add(f"cron-failed:{job.get('id')}", "critical", f"Cron job {name} failed: {job.get('last_error') or 'last run reported an error'}.")
+            continue
+        due = parse_iso_ts(job.get("next_run_at"))
+        if job.get("enabled") and due is not None and now - due > CRON_OVERDUE_SECONDS:
+            late = int((now - due) // 60)
+            add(f"cron-overdue:{job.get('id')}", "critical", f"Cron job {name} is {late} min overdue; the cron ticker may have stopped.")
+
+    for task in kanban_items(scan["kanban"], "_tasks"):
+        if task_stale_reason(task, now):
+            add(f"worker-stalled:{task.get('id')}", "critical", f"Kanban worker stalled on {task.get('title')} ({task.get('assignee')}): {task_stale_reason(task, now)}.")
+
+    for run in kanban_items(scan["kanban"], "_runs"):
+        if is_failed_run(run) and now - safe_float(run.get("_sort_ts")) <= ALERT_RECENT_SECONDS:
+            add(f"worker-failed:{run.get('id')}", "warning", f"Kanban worker run {run.get('outcome') or run.get('status')} on task {run.get('task_id')}: {run.get('error') or 'no error text recorded'}.")
+
+    for session in scan["sessions"]:
+        if int(session.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD and now - safe_float(session.get("_last_ts")) <= ALERT_RECENT_SECONDS:
+            add(f"looping:{session.get('session_ref')}", "warning", f"A {session.get('label')} session made {session.get('tool_call_count')} tool calls; it may be looping.")
+
+    metrics = (scan["tuning"].get("agent_hq") or {}).get("metrics") or {}
+    spend = float(metrics.get("spend_24h_usd") or 0.0)
+    today = datetime.fromtimestamp(now, tz=timezone.utc).date().isoformat()
+    previous = [float(day.get("spend_24h") or 0.0) for day in as_list(history.get("days")) if day.get("day") != today][-6:]
+    if previous and spend >= ALERT_SPEND_FLOOR_USD:
+        average = sum(previous) / len(previous)
+        if spend >= ALERT_SPEND_SPIKE_RATIO * max(average, 0.01):
+            add(f"spend-spike:{today}", "warning", f"Spend spike: ${spend:.2f} in the last 24h against a ${average:.2f}/day average.")
+    return alerts
+
+
+def select_new_alerts(alerts: List[Dict[str, str]], state: Dict[str, float], now: float) -> List[Dict[str, str]]:
+    """Alerts not sent within ALERT_REPEAT_SECONDS. Mutates ``state`` to match."""
+    active = {alert["key"] for alert in alerts}
+    for key in list(state):
+        if key not in active:
+            del state[key]  # cleared: it can alert again if it comes back
+    fresh = [alert for alert in alerts if alert["key"] not in state or now - state[alert["key"]] >= ALERT_REPEAT_SECONDS]
+    for alert in fresh:
+        state[alert["key"]] = now
+    return fresh
+
+
+def format_alerts(alerts: List[Dict[str, str]]) -> str:
+    if not alerts:
+        return ""
+    ordered = sorted(alerts, key=lambda alert: _severity_rank(alert["severity"]))
+    lines = [f"Olympus: {len(ordered)} new alert{'s' if len(ordered) != 1 else ''}"]
+    lines += [f"- {alert['text']}" for alert in ordered]
+    return "\n".join(lines)
+
+
+def alert_report(now: Optional[float] = None, *, preview: bool = False) -> str:
+    """Text for the cron job to deliver; empty when nothing new needs attention."""
+    now = time.time() if now is None else now
+    refresh_expose_local_labels()
+    scan = scan_hermes()
+    con = history_db()
+    try:
+        history = read_history(con, now)
+    finally:
+        con.close()
+    alerts = build_alerts(scan, history, now)
+    if preview:
+        return format_alerts(alerts)
+    state_path = olympus_data_dir() / ALERTS_STATE_FILE
+    loaded = read_json(state_path)
+    state = {str(k): float(v) for k, v in loaded.items()} if isinstance(loaded, dict) else {}
+    fresh = select_new_alerts(alerts, state, now)
+    state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+    return format_alerts(fresh)
+
+
 @router.get("/overview")
 def overview() -> Dict[str, Any]:
     refresh_expose_local_labels()
