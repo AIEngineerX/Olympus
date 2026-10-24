@@ -62,7 +62,7 @@ Confirm:
 - Empty evidence hides instead of filling the UI with fake state.
 - No panel uses mock data in the live dashboard.
 - All action links go to Hermes-owned pages.
-- Local labels, session IDs, and paths stay hidden unless `OLYMPUS_EXPOSE_LOCAL_LABELS=1`.
+- Local labels, session IDs, and paths stay hidden unless `dashboard.olympus.expose_local_labels` is enabled.
 - Pantheon is legible at desktop and mobile widths.
 - Pantheon controls remain accessible buttons, not an interactive subtree hidden
   behind an image role.

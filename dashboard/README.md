@@ -50,8 +50,11 @@ exact route labels, paths, and session IDs.
 
 Private-machine opt-in:
 
-```bash
-OLYMPUS_EXPOSE_LOCAL_LABELS=1 hermes dashboard --no-open --skip-build
+```yaml
+# $HERMES_HOME/config.yaml
+dashboard:
+  olympus:
+    expose_local_labels: true
 ```
 
 ## Frontend Rules

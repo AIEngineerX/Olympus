@@ -24,7 +24,7 @@
 - [ ] No mutation routes (no writes to Hermes state)
 - [ ] No secrets in responses (untrusted text runs through `redact_text`)
 - [ ] No local paths in public responses; no shell execution from request paths
-- [ ] Local labels stay hidden unless `OLYMPUS_EXPOSE_LOCAL_LABELS=1`
+- [ ] Local labels stay hidden unless `dashboard.olympus.expose_local_labels: true`
 - [ ] HermesOS assumptions (schemas/env vars/paths) validated against the real source
 
 ## Notes

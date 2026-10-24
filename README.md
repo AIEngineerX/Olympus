@@ -124,10 +124,14 @@ to identify the active mode.
 ## Privacy
 
 Olympus hides session titles, Kanban task titles, cron names, exact route labels,
-and local paths by default. To show richer local labels on a private machine:
+and local paths by default. To show richer local labels on a private machine, set this in
+`config.yaml` (it is re-read on every request, so no restart is needed):
 
-```bash
-OLYMPUS_EXPOSE_LOCAL_LABELS=1 hermes dashboard --no-open --skip-build
+```yaml
+# $HERMES_HOME/config.yaml
+dashboard:
+  olympus:
+    expose_local_labels: true
 ```
 
 See [`SECURITY.md`](SECURITY.md) for the full security and privacy posture.
@@ -209,7 +213,7 @@ set `OLYMPUS_SMOKE_RELINK=1` before running the smoke command.
 ## Quality Gates
 
 - API responses redact session IDs, private labels, paths, and secrets unless
-  `OLYMPUS_EXPOSE_LOCAL_LABELS=1` is explicitly set.
+  `dashboard.olympus.expose_local_labels` is explicitly enabled in `config.yaml`.
 - Brief mode hides deep panels by default; visual and live smoke tests click the
   tabs that own Agents, Skills, Kanban, Policy, and Diagnostics.
 - Pantheon uses HTML text and accessible profile buttons rather than SVG text or an
