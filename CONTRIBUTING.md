@@ -4,12 +4,12 @@ Thanks for helping improve Olympus. This guide covers the local development loop
 the rules that keep Olympus safe and read-only, and how to get a change merged.
 
 Before starting, please skim [`OLYMPUS_GOAL.md`](OLYMPUS_GOAL.md) — it defines what
-Olympus owns (recommend, explain, link) versus what HermesOS owns (the actual
+Olympus owns (recommend, explain, link) versus what Hermes owns (the actual
 controls). Changes that blur that boundary will be sent back.
 
 ## Prerequisites
 
-- A working [HermesOS / Hermes Agent](https://github.com/NousResearch/hermes-agent) install (`$HERMES_HOME`, default `~/.hermes`).
+- A working [Hermes Agent](https://github.com/NousResearch/hermes-agent) install (v0.21.6+) (`$HERMES_HOME`, default `~/.hermes`).
 - Python 3.10+ and Node.js.
 - For visual QA: run `npm install` once, then `npx playwright install chromium`
   if Chromium is not already installed for Playwright.
@@ -29,9 +29,11 @@ controls). Changes that blur that boundary will be sent back.
 
 ## Local development loop
 
-1. **Link the plugin into Hermes** (once):
+1. **Link the plugin into Hermes and enable it** (once). Hermes mounts user
+   plugin APIs only for names in `plugins.enabled`:
    ```bash
    scripts/install-dashboard-link.sh
+   hermes plugins enable olympus
    ```
 2. **Run the dashboard:**
    ```bash
@@ -39,9 +41,9 @@ controls). Changes that blur that boundary will be sent back.
    ```
    Open `http://127.0.0.1:9119/olympus`.
 3. **Iterate.** Important reload rules:
-   - **Backend (`plugin_api.py`):** routes are mounted **once at startup**. After
-     editing the backend you must **fully restart `hermes dashboard`** — the
-     plugin rescan only refreshes the UI manifest, not the Python routes.
+   - **Backend (`plugin_api.py`):** the module is imported when its routes are
+     first mounted. After editing the backend, **fully restart
+     `hermes dashboard`** so the new code is imported.
    - **Frontend (`dist/*`):** reload the browser; the script is re-injected.
    - There is **no build step** — `dist/index.js` and `dist/style.css` are edited
      by hand. Do not add a bundler or a `src/` tree without discussion.
@@ -60,7 +62,7 @@ Olympus is a diagnostic surface. Every change must keep these invariants:
   routes are only shown when `dashboard.olympus.expose_local_labels` is true. Anything stripped
   internally is keyed with a leading `_` and removed by `strip_internal`.
 
-If you change anything that reads HermesOS internals (schemas, env vars, paths,
+If you change anything that reads Hermes internals (schemas, env vars, paths,
 the plugin SDK), validate it against the actual `hermes-agent` source rather than
 assuming — Hermes details are version-dependent.
 
