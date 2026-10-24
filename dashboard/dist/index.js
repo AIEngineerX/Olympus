@@ -410,14 +410,14 @@
         .then(() => {
           setPhase("done");
           setOpen(false);
-          logAction(action, name, agentId, true, null);
+          logAction(action, name, agentId || choice, true, null);
           onDone(DONE_TEXT[action.id] + ": " + name);
         })
         .catch((error) => {
           const reason = toErrorMessage(error);
           setPhase("failed");
           setMessage(reason);
-          logAction(action, name, agentId, false, reason);
+          logAction(action, name, agentId || choice, false, reason);
         });
     }
 

@@ -1,3 +1,4 @@
+const fs = require("fs");
 const path = require("path");
 const { pathToFileURL } = require("url");
 const { expect, test } = require("@playwright/test");
@@ -173,6 +174,32 @@ for (const size of [DESKTOP, MOBILE]) {
     expectClean(await collectVisualMetrics(page, size === MOBILE ? 32 : 24), messages, { name: "checks" });
   });
 }
+
+test("every custom property the stylesheet uses resolves under Hermes' token set", async ({ page }, testInfo) => {
+  const messages = await openFixture(page, testInfo, DESKTOP, { state: "noisy", agent: "profile:default" });
+  await expect(page.locator(".olympus-token-chart")).toBeVisible();
+  // var(--x) without a fallback; the fixture defines exactly the tokens the
+  // live dashboard does, so anything unresolved here is unresolved in Hermes.
+  const css = fs.readFileSync(path.join(__dirname, "../../dashboard/dist/style.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const used = Array.from(new Set(Array.from(css.matchAll(/var\((--[\w-]+)\)/g), (match) => match[1])));
+  const report = await page.evaluate((names) => {
+    const pageStyle = window.getComputedStyle(document.querySelector(".olympus-page"));
+    const avatar = window.getComputedStyle(document.querySelector(".olympus-avatar"));
+    const missing = names.filter((name) => !pageStyle.getPropertyValue(name).trim() && !avatar.getPropertyValue(name).trim());
+    const paint = (selector) => window.getComputedStyle(document.querySelector(selector)).backgroundColor;
+    return {
+      used: names.length,
+      missing,
+      today: paint(".olympus-activity-today"),
+      output: paint(".olympus-token-stack .olympus-series-output"),
+      input: paint(".olympus-token-stack .olympus-series-input")
+    };
+  }, used);
+  expect(report.used).toBeGreaterThan(10);
+  expect(report.missing).toEqual([]);
+  for (const color of [report.today, report.output, report.input]) expect(color).not.toBe("rgba(0, 0, 0, 0)");
+  expect(messages).toEqual([]);
+});
 
 test("the page follows a light Hermes theme", async ({ page }, testInfo) => {
   const messages = await openFixture(page, testInfo, DESKTOP, { state: "noisy", theme: "light" });
