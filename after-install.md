@@ -15,9 +15,10 @@
    Default address: `http://127.0.0.1:9119/olympus`. If the tab or its data
    does not appear, restart `hermes dashboard` once.
 
-3. Read the Brief tab first: the readiness score, what needs review, and the
-   Hermes page that owns each fix. Agents, Skills, Kanban, Policy and
-   Diagnostics hold the detail.
+3. Start with **Agents**: your agents, what each is doing, and Needs you,
+   everything waiting on a person. **Performance** shows how reliably each
+   agent's runs succeed; **Checks** holds findings, backlog, skills, policy and
+   spend.
 
 4. Optional alerts for failed or stalled cron jobs, stalled workers, looping
    sessions and spend spikes, delivered by a Hermes no-agent cron job:
@@ -26,16 +27,19 @@
    hermes olympus install-alerts --deliver telegram
    ```
 
-Olympus only reads local Hermes state (sessions, Kanban, cron, config, log
-tails). It never changes Hermes and makes no network calls; its own history
-lives in `$HERMES_HOME/plugin-data/olympus/`. Session titles,
-task titles, cron names, model labels and paths are hidden by default; to show
-them on a private machine, set this in `config.yaml`:
+Olympus reads local Hermes state (sessions, Kanban, cron, config, log tails)
+and never writes Hermes files or databases. Its controls (pause, resume or run
+a cron job; answer, retry, reclaim or reassign a Kanban task) each ask you to
+confirm, then call Hermes' own API. To turn them off, or to show session titles,
+task titles, cron names, model labels and paths on a private machine (hidden by
+default), set this in `config.yaml`:
 
 ```yaml
 dashboard:
   olympus:
-    expose_local_labels: true
+    controls: false            # no controls
+    expose_local_labels: true  # show local labels
 ```
 
-Keep the Hermes dashboard on localhost; do not expose it to the internet.
+Olympus' own data lives in `$HERMES_HOME/plugin-data/olympus/`. Keep the Hermes
+dashboard on localhost; do not expose it to the internet.

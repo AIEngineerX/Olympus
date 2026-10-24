@@ -2,10 +2,9 @@
 name: Olympus
 description: Manage your Hermes agents.
 colors:
-  surface: "var(--color-background)"
+  surface: "inherited from the Hermes page"
   panel: "var(--color-card)"
-  panel-text: "var(--color-card-foreground)"
-  text: "var(--color-foreground)"
+  text: "var(--color-card-foreground)"
   muted-text: "var(--color-muted-foreground)"
   hairline: "var(--color-border)"
   accent: "var(--color-primary)"
@@ -57,6 +56,12 @@ Olympus has no palette of its own. It reads the active Hermes theme through
 `--color-*` tokens, so it is native in Hermes Teal, Midnight, Ember, Mono, Rosé
 and Nous Blue.
 
+Hermes builds its CSS with Tailwind v4, which emits only the theme variables
+Hermes itself uses. `--color-foreground` and `--color-background` do not exist
+at runtime: text is `--color-card-foreground` (as `--olympus-fg`) and the page
+background is inherited. Use only tokens the Hermes page defines; the visual
+tests run against exactly that set.
+
 - **Accent** (`--color-primary`): the live dot, selection, primary buttons.
 - **Waiting** (`--color-warning`): "Waiting on you" and the Needs-you banner.
 - **Failure** (`--color-destructive`): Failed, Stalled, errors.
@@ -80,16 +85,20 @@ the inspector sitting beside the roster.
 ## 5. Components
 
 - **Roster row:** avatar (initial on a soft tint derived from the profile name),
-  name and role, status pill, current task with elapsed time, helper count chips,
-  last active, 7-day activity sparkline, issue count, one contextual action and
-  an overflow menu. The row opens the inspector.
+  name and role, status pill, what it is doing now (task, live tool, elapsed
+  time), helper counts, last active, runs per day for 7 days with the
+  unsuccessful part marked plus the success rate, and issue count. The row
+  opens the inspector.
 - **Status pill:** a word plus a dot. Working (accent dot, pulsing), Idle (no
   colour), Waiting on you (warning), Failed (destructive), Stalled
   (destructive), Offline (muted, outlined).
 - **Needs-you banner:** warning-tinted panel, top three items with avatar,
   reason and one action, "+N more" to expand.
-- **Inspector:** side panel with title row and controls, Now timeline, Needs
-  you, Scheduled, Kanban, and a footer of tokens per day, cost and success rate.
+- **Inspector:** side panel with title row, setup line and controls; Needs
+  you, Now (timeline), Scheduled, Kanban, How it's working; a footer of tokens
+  per day, Kanban worker success and your fixes.
+- **Performance:** a fleet line, runs per day by outcome, one row per agent
+  (worst success first), and a run view that lists every step.
 - **Confirmation popover:** anchored to the button, states the exact effect,
   Confirm and Cancel. Never a modal.
 - **Charts:** hairline axes, tabular labels, one accent plus two muted tints.

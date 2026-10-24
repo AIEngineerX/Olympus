@@ -1,8 +1,8 @@
-// Olympus for Hermes Desktop: the Brief as a native page.
+// Olympus for Hermes Desktop: findings, fixes, spend and backlog as a native page.
 //
 // Loaded uncompiled by Hermes Desktop, so it uses jsx()/jsxs() instead of JSX
 // and imports only @hermes/plugin-sdk, react and react/jsx-runtime. All data
-// comes from Olympus' own read-only backend through ctx.rest (the same
+// comes from Olympus' own backend through ctx.rest (the same
 // plugin_api.py the web dashboard tab uses).
 import { Badge, Button, ROUTES_AREA, SIDEBAR_NAV_AREA, host } from '@hermes/plugin-sdk'
 import { useEffect, useRef, useState } from 'react'

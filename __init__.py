@@ -1,6 +1,6 @@
 """Olympus Hermes plugin entry point.
 
-Olympus is a dashboard plugin: its UI lives in ``dashboard/`` and its read-only
+Olympus is a dashboard plugin: its UI lives in ``dashboard/`` and its
 API in ``dashboard/plugin_api.py``, which the Hermes dashboard mounts under
 ``/api/plugins/olympus/``. ``register`` adds one CLI command, ``hermes olympus``,
 for alerts. Olympus registers no agent tools, hooks, or middleware.
