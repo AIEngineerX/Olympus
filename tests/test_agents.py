@@ -48,6 +48,9 @@ class AgentsTest(unittest.TestCase):
             ("live-main", "cli", "Refactor the billing module", now - 300, now - 30, None),
             ("live-sub", "subagent", "Read the billing tests", now - 120, now - 20, "live-main"),
         ])
+        # Finished two days ago (outside today's activity), 10 minutes long.
+        con.execute("INSERT INTO sessions (id, source, title, started_at, ended_at, end_reason, last_activity_at) VALUES (?, 'cli', ?, ?, ?, 'completed', ?)",
+                    ("done-1", "Write the summary", now - 2 * 86400, now - 2 * 86400 + 600, now - 2 * 86400 + 600))
         con.executemany("INSERT INTO messages (session_id, role, tool_name, timestamp) VALUES (?, 'tool', ?, ?)", [
             ("live-main", "terminal", now - 200),
             ("live-main", "terminal", now - 190),
@@ -160,7 +163,7 @@ class AgentsTest(unittest.TestCase):
         )
         answer, stalled, cron_failed, offline, orphan = queue
         self.assertEqual([a["id"] for a in answer["actions"]], ["answer"])
-        self.assertEqual(answer["actions"][0]["target"], {"kind": "task", "ref": "t-answer", "board": "default"})
+        self.assertEqual(answer["actions"][0]["target"], {"kind": "task", "ref": "t-answer", "board": "default", "status": "blocked", "name": "Pick a database"})
         self.assertEqual(answer["since"], iso(int(self.now) - 7200))  # when it blocked, not when it was created
         self.assertEqual([a["id"] for a in stalled["actions"]], ["reclaim", "reassign"])
         self.assertIn("heartbeat stale", stalled["detail"])
@@ -168,7 +171,7 @@ class AgentsTest(unittest.TestCase):
         self.assertEqual(cron_failed["detail"], "provider timeout")
         self.assertEqual(cron_failed["actions"][1]["effect"], "Pause Weekly post for Writer. It will not run until you resume it.")
         self.assertEqual(offline["actions"], [])
-        self.assertIn("1 scheduled job wait on it. Start it with: hermes -p ops gateway start", offline["detail"])
+        self.assertIn("1 scheduled job waits on it. Start it with: hermes -p ops gateway start", offline["detail"])
         self.assertEqual([a["id"] for a in orphan["actions"]], ["assign"])
         # The blocked-work summary is covered by the per-task items; Checks keeps it.
         titles = [item["title"] for item in queue]
@@ -205,6 +208,8 @@ class AgentsTest(unittest.TestCase):
         self.assertIn("Used terminal ×3", texts)
         self.assertIn("Used web_search", texts)
         self.assertIn("Started a subagent: Read the billing tests", texts)
+        self.assertIn("Ran Write the summary (10 min)", texts)  # one line per finished session
+        self.assertNotIn("Started Write the summary", texts)
         self.assertEqual(texts.index("Used web_search") < texts.index("Used terminal ×3"), True)
         today = default["usage"]["days"][-1]
         self.assertEqual((today["sessions"], today["input_tokens"], today["cache_tokens"], today["output_tokens"]), (2, 2000, 6000, 400))

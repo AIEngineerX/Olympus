@@ -14,6 +14,14 @@ async function openPage(page, params, size = { width: 1440, height: 900 }) {
   await page.locator(".olympus-page").waitFor();
 }
 
+function writes(page) {
+  return page.evaluate(() => window.__OLYMPUS_FETCH_LOG__.writes);
+}
+
+function bannerItem(page, text) {
+  return page.locator(".olympus-banner .olympus-queue-item").filter({ hasText: text });
+}
+
 test.describe("Olympus behaviour", () => {
   test("polling waits for a slow response instead of discarding it", async ({ page }) => {
     await page.clock.install();
@@ -23,10 +31,11 @@ test.describe("Olympus behaviour", () => {
     await page.clock.runFor(10_500);
     let log = await page.evaluate(() => window.__OLYMPUS_FETCH_LOG__);
     expect(log.started).toBe(1);
+    await expect(page.locator(".olympus-skeleton")).toBeVisible();
 
-    // It settles at 11s and its data renders even though it outlived the old 10s interval.
+    // It settles at 11s and its data renders even though it outlived the 10s interval.
     await page.clock.runFor(1_000);
-    await expect(page.locator(".olympus-score-card")).toBeVisible();
+    await expect(page.locator(".olympus-roster tbody tr")).toHaveCount(7);
 
     // The next poll starts 10s after that, still one at a time.
     await page.clock.runFor(10_500);
@@ -36,118 +45,190 @@ test.describe("Olympus behaviour", () => {
   });
 
   test("links keep the reverse-proxy prefix and the profile scope", async ({ page }) => {
-    await openPage(page, { state: "noisy", base: "/hermes/", profile: "coder" });
-
-    const hrefs = await page.locator(".olympus-page a[href]").evaluateAll((links) => links.map((link) => link.getAttribute("href")));
-    const routed = hrefs.filter((href) => href !== "#");
-    expect(routed.length).toBeGreaterThan(0);
-    for (const href of routed) {
-      expect(href).toMatch(/^\/hermes\/(analytics|config|cron|kanban|logs|profiles|sessions|skills)\?profile=coder$/);
+    await openPage(page, { state: "noisy", base: "/hermes/", profile: "coder", agent: "profile:ops" });
+    for (const view of ["agents", "checks"]) {
+      if (view === "checks") await page.getByRole("button", { name: "Checks" }).click();
+      const links = await page.locator(".olympus-page a[href]").evaluateAll((items) => items.map((link) => ({ href: link.getAttribute("href"), text: link.textContent })));
+      expect(links.length).toBeGreaterThan(0);
+      for (const link of links) {
+        expect(link.href).toMatch(/^\/hermes\/(analytics|config|cron|kanban|logs|profiles|sessions|skills)\?profile=coder$/);
+        expect(link.text).not.toBe("Open Route");
+      }
     }
-    // Labels come from the route, not the prefixed link.
-    await page.getByRole("tab", { name: "Agents" }).click();
-    const labels = await page.locator(".olympus-page a[href]").allTextContents();
-    expect(labels.length).toBeGreaterThan(3);
-    expect(labels.filter((label) => label === "Open Route")).toEqual([]);
+  });
+
+  test("the roster is keyboard operable and the open agent survives a reload", async ({ page }) => {
+    await openPage(page, { state: "noisy" });
+    const rows = page.locator(".olympus-roster tbody tr");
+    await rows.first().focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(rows.nth(1)).toBeFocused();
+    const second = await rows.nth(1).getAttribute("data-agent");
+
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".olympus-inspector")).toBeVisible();
+    await expect(rows.nth(1)).toHaveAttribute("aria-selected", "true");
+    expect(new URL(page.url()).searchParams.get("agent")).toBe(second);
+
+    await page.reload();
+    await expect(page.locator(".olympus-inspector h2")).toBeVisible();
+    await expect(page.locator(`tr[data-agent="${second}"]`)).toHaveAttribute("aria-selected", "true");
+
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".olympus-inspector")).toHaveCount(0);
+    expect(new URL(page.url()).searchParams.get("agent")).toBeNull();
+  });
+
+  test("Escape closes the inspector and returns focus to its row", async ({ page }) => {
+    await openPage(page, { state: "noisy" });
+    const row = page.locator('tr[data-agent="profile:writer"]');
+    await row.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".olympus-inspector")).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(row).toBeFocused();
+  });
+
+  test("the roster sorts by status, name and last activity", async ({ page }) => {
+    await openPage(page, { state: "noisy" });
+    const names = () => page.locator(".olympus-agent-name strong").allTextContents();
+    expect((await names()).slice(0, 2)).toEqual(["Coder", "Researcher"]);
+
+    await page.getByRole("button", { name: "Agent", exact: true }).click();
+    expect(await names()).toEqual(["Analyst", "Coder", "Default", "Ops", "Researcher", "Reviewer", "Writer"]);
+    await expect(page.getByRole("columnheader", { name: "Agent" })).toHaveAttribute("aria-sort", "ascending");
+
+    await page.getByRole("button", { name: "Last active" }).click();
+    expect((await names())[0]).toBe("Default");
+  });
+
+  test("answering a waiting agent posts the answer, unblocks the task and logs it", async ({ page }) => {
+    await openPage(page, { state: "noisy" });
+    const item = bannerItem(page, "waiting on your answer");
+    await item.getByRole("button", { name: "Answer" }).click();
+
+    const popover = page.getByRole("dialog", { name: /^Answer:/ });
+    await expect(popover).toContainText("Post your answer on Which market should the pricing study cover? as a comment and move it back to ready for Researcher.");
+    const confirm = popover.getByRole("button", { name: "Confirm" });
+    await expect(confirm).toBeDisabled();
+    await popover.getByRole("textbox", { name: "Your answer" }).fill("Cover the EU market first.");
+    await confirm.click();
+
+    await expect(page.locator(".olympus-notice")).toHaveText("Answer posted; back to ready: Which market should the pricing study cover?");
+    await expect(page.locator(".olympus-banner .olympus-count")).toHaveText("5");
+    const sent = await writes(page);
+    expect(sent.slice(0, 2)).toEqual([
+      { method: "POST", path: "/api/plugins/kanban/tasks/t-pricing/comments", query: "board=default", body: { body: "Cover the EU market first." } },
+      { method: "PATCH", path: "/api/plugins/kanban/tasks/t-pricing", query: "board=default", body: { status: "ready" } }
+    ]);
+    const logged = new URLSearchParams(sent[2].query);
+    expect([sent[2].path, logged.get("action"), logged.get("ok"), logged.get("label"), logged.get("agent")])
+      .toEqual(["/api/plugins/olympus/actions", "answer", "true", "Which market should the pricing study cover?", "profile:researcher"]);
+  });
+
+  test("reassigning a stalled worker picks an agent and reclaims it first", async ({ page }) => {
+    await openPage(page, { state: "noisy", agent: "profile:reviewer" });
+    const inspector = page.locator(".olympus-inspector");
+    await inspector.locator(".olympus-queue-item").getByRole("button", { name: "Reassign" }).click();
+
+    const popover = page.getByRole("dialog", { name: /^Reassign:/ });
+    const options = await popover.locator("option").allTextContents();
+    expect(options).not.toContain("Reviewer");
+    await popover.getByRole("combobox").selectOption({ label: "Coder" });
+    await popover.getByRole("button", { name: "Confirm" }).click();
+
+    await expect(page.locator(".olympus-notice")).toContainText("Reassigned: Review PR 412: payment retries");
+    const sent = await writes(page);
+    expect(sent[0]).toEqual({
+      method: "POST",
+      path: "/api/plugins/kanban/tasks/t-pr412/reassign",
+      query: "board=default",
+      body: { profile: "coder", reclaim_first: true, reason: "Reassigned from Olympus" }
+    });
+  });
+
+  test("when Hermes refuses, the popover shows why and offers a retry", async ({ page }) => {
+    await openPage(page, { state: "noisy", fail: "reclaim" });
+    await bannerItem(page, "Worker stalled").getByRole("button", { name: "Reclaim" }).click();
+    const popover = page.getByRole("dialog", { name: /^Reclaim:/ });
+    await popover.getByRole("button", { name: "Confirm" }).click();
+
+    await expect(popover.getByRole("alert")).toHaveText("Hermes said: 409: cannot reclaim (fixture refusal)");
+    await expect(popover.getByRole("button", { name: "Try again" })).toBeEnabled();
+    await expect(page.locator(".olympus-banner .olympus-count")).toHaveText("6");
+    const logged = new URLSearchParams((await writes(page))[1].query);
+    expect([logged.get("action"), logged.get("ok"), logged.get("detail")]).toEqual(["reclaim", "false", "409: cannot reclaim (fixture refusal)"]);
+
+    await popover.getByRole("button", { name: "Cancel" }).click();
+    await expect(popover).toHaveCount(0);
+  });
+
+  test("Escape closes an open popover before the inspector", async ({ page }) => {
+    await openPage(page, { state: "noisy", agent: "profile:writer" });
+    await page.locator(".olympus-inspector .olympus-work-row").getByRole("button", { name: "Run now" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.locator(".olympus-inspector")).toBeVisible();
+  });
+
+  test("pausing an agent's schedule pauses each of its enabled jobs", async ({ page }) => {
+    await openPage(page, { state: "noisy", agent: "profile:researcher" });
+    await page.getByRole("button", { name: "Pause all scheduled" }).click();
+    const popover = page.getByRole("dialog");
+    await expect(popover).toContainText("Pause 1 scheduled job for Researcher until you resume it.");
+    await popover.getByRole("button", { name: "Confirm" }).click();
+    await expect(page.locator(".olympus-notice")).toContainText("Paused");
+    const sent = await writes(page);
+    expect(sent.filter((call) => call.path.startsWith("/api/cron/")).map((call) => call.path)).toEqual(["/api/cron/jobs/job-digest/pause"]);
+  });
+
+  test("with controls off, nothing can act and items link to their Hermes page", async ({ page }) => {
+    await openPage(page, { state: "noisy", controls: "off" });
+    await expect(page.locator(".olympus-banner .olympus-button")).toHaveCount(0);
+    await expect(page.locator(".olympus-roster .olympus-button")).toHaveCount(0);
+    await expect(bannerItem(page, "waiting on your answer").getByRole("link", { name: "Open Kanban" })).toBeVisible();
+    await expect(page.locator(".olympus-controls-off")).toContainText("dashboard.olympus.controls: false");
+    expect(await writes(page)).toEqual([]);
   });
 
   test("session links resolve on click and report sessions that are gone", async ({ page }) => {
-    await openPage(page, { state: "noisy", base: "/hermes" });
+    await openPage(page, { state: "noisy", base: "/hermes", view: "checks" });
     const gone = page.getByRole("button", { name: "Open telegram session" });
     await gone.click();
     await expect(page.getByRole("button", { name: "Session no longer available" })).toBeDisabled();
 
     await Promise.all([
       page.waitForRequest((request) => request.url().endsWith("/hermes/chat?resume=fixture-session&profile=default") && request.isNavigationRequest()),
-      page.getByRole("button", { name: "Open cli session" }).click(),
+      page.getByRole("button", { name: "Open cli session" }).click()
     ]);
   });
 
   test("marking a finding fixed tracks it until the operator stops", async ({ page }) => {
-    await openPage(page, { state: "noisy" });
-    const tracking = page.locator(".olympus-fix-tracking");
-    await expect(tracking.locator(".olympus-fix-row")).toHaveCount(1);
-    await expect(page.locator(".olympus-oracle")).toContainText("+9 in 7 days");
+    await openPage(page, { state: "noisy", view: "checks" });
+    const fixes = page.locator(".olympus-fix-list li");
+    await expect(fixes).toHaveCount(1);
+    await expect(page.locator(".olympus-readiness")).toContainText("+9 in 7 days");
 
-    await page.getByRole("button", { name: "I fixed this" }).first().click();
-    await expect(page.locator(".olympus-fix-tracked").first()).toHaveText("Tracking your fix");
-    const row = tracking.locator(".olympus-fix-row").filter({ hasText: "Create a repeatable browser QA skill" });
+    await page.locator(".olympus-finding").filter({ hasText: "Create a repeatable browser QA skill" }).getByRole("button", { name: "I fixed this" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();
+    await expect(fixes).toHaveCount(2);
+    const row = fixes.filter({ hasText: "Create a repeatable browser QA skill" });
     await expect(row).toContainText("2 → 2");
-    await expect(row).toContainText("unchanged");
+    await expect(row).toContainText("Unchanged");
 
     await row.getByRole("button", { name: "Stop tracking" }).click();
-    await expect(tracking.locator(".olympus-fix-row")).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "I fixed this" })).toHaveCount(2);
+    await expect(fixes).toHaveCount(1);
   });
 
-  test("mode tabs follow the WAI-ARIA keyboard pattern", async ({ page }) => {
-    await openPage(page, { state: "noisy" });
-    const brief = page.getByRole("tab", { name: "Brief" });
-
-    await expect(brief).toHaveAttribute("tabindex", "0");
-    await expect(page.getByRole("tab", { name: "Agents" })).toHaveAttribute("tabindex", "-1");
-
-    await brief.focus();
-    await page.keyboard.press("ArrowRight");
-    const agents = page.getByRole("tab", { name: "Agents" });
-    await expect(agents).toBeFocused();
-    await expect(agents).toHaveAttribute("aria-selected", "true");
-    await expect(page.locator(".olympus-pantheon")).toBeVisible();
-
-    await page.keyboard.press("End");
-    await expect(page.getByRole("tab", { name: "Diagnostics" })).toHaveAttribute("aria-selected", "true");
-    await page.keyboard.press("ArrowRight");
-    await expect(brief).toBeFocused();
-    await expect(brief).toHaveAttribute("aria-selected", "true");
-    await page.keyboard.press("ArrowLeft");
-    await expect(page.getByRole("tab", { name: "Diagnostics" })).toBeFocused();
-  });
-
-  for (const count of [5, 12]) {
-    test(`every one of ${count} Pantheon profiles keeps its own click target`, async ({ page }) => {
-      await openPage(page, { state: "noisy", profiles: String(count) });
-      await page.getByRole("tab", { name: "Agents" }).click();
-
-      const boxes = await page.locator(".olympus-pantheon-node").evaluateAll((nodes) => nodes.map((node) => {
-        const r = node.getBoundingClientRect();
-        return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
-      }));
-      expect(boxes).toHaveLength(count);
-      for (let i = 0; i < boxes.length; i += 1) {
-        for (let j = i + 1; j < boxes.length; j += 1) {
-          const a = boxes[i];
-          const b = boxes[j];
-          const overlap = Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 &&
-            Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1;
-          expect(overlap, `profiles ${i} and ${j} overlap`).toBe(false);
-        }
-      }
-      await page.getByRole("button", { name: `Select profile Profile ${count - 1}` }).click();
-      await expect(page.locator(".olympus-party-inspector h3")).toHaveText(`Profile ${count - 1}`);
+  for (const count of [12, 30]) {
+    test(`a roster of ${count + 7} agents keeps every row readable`, async ({ page }) => {
+      await openPage(page, { state: "noisy", agents: String(count) });
+      await expect(page.locator(".olympus-roster tbody tr")).toHaveCount(count + 7);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      expect(overflow).toBeLessThanOrEqual(2);
+      await page.locator(`tr[data-agent="profile:extra_${count - 1}"]`).click();
+      await expect(page.locator(".olympus-inspector h2")).toHaveText(`Profile ${count + 9}`);
     });
   }
-
-  for (const size of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 390, height: 844 }]) {
-    test(`Fleet and Live Work cells fit at ${size.width}px`, async ({ page }) => {
-      await openPage(page, { state: "noisy" }, size);
-      await page.getByRole("tab", { name: "Agents" }).click();
-
-      const overflowing = await page.locator(".olympus-fleet-row > span, .olympus-fleet-issue small, .olympus-pantheon-node").evaluateAll((cells) =>
-        cells.filter((cell) => cell.scrollWidth > cell.clientWidth + 1).map((cell) => cell.textContent)
-      );
-      expect(overflowing).toEqual([]);
-    });
-  }
-
-  test("fleet issue reasons show labelled points, not a bare score delta", async ({ page }) => {
-    await openPage(page, { state: "noisy" });
-    await page.getByRole("tab", { name: "Agents" }).click();
-
-    const reasons = await page.locator(".olympus-fleet-issue small").allTextContents();
-    expect(reasons.length).toBeGreaterThan(0);
-    for (const text of reasons) {
-      expect(text).not.toMatch(/\/\s*-\d+\s*$/);
-    }
-    await expect(page.locator(".olympus-reason-points").first()).toHaveText(/^−\d+ pts$/);
-  });
 });

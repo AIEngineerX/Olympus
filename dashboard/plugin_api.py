@@ -898,7 +898,7 @@ def build_skill_hygiene(skill_metadata: Dict[str, Any], skill_coverage: Dict[str
     if missing_forced:
         add_signal(
             "warning",
-            "Forced-skill Kanban work lacks local metadata",
+            "Kanban tasks require skills this machine does not have",
             "Kanban references skills that do not appear in local usage or hub metadata. Review the task or skill install.",
             ", ".join(_public_skill_label(name) for name in missing_forced[:4]),
             "/kanban",
@@ -4211,18 +4211,18 @@ def build_ops_evals(
                 int(hygiene_summary.get("hub_audit_warn") or 0) * 12 +
                 int(coverage_summary.get("forced_skill_tasks") or 0) * 3,
             ),
-            "detail": "Coverage, forced-skill metadata, and stored audit results.",
+            "detail": "Skills per profile, skills tasks require, and stored audit results.",
             "evidence": (
-                f"{int(coverage_summary.get('zero_skill_profiles') or 0)} bare profile(s), "
-                f"{int(hygiene_summary.get('forced_skill_metadata_gaps') or 0)} forced-skill gap(s), "
+                f"{int(coverage_summary.get('zero_skill_profiles') or 0)} profile(s) without skills, "
+                f"{int(hygiene_summary.get('forced_skill_metadata_gaps') or 0)} required skill(s) missing, "
                 f"{int(hygiene_summary.get('hub_audit_warn') or 0)} audit warning(s), "
                 f"{int(hygiene_summary.get('hub_audit_fail') or 0)} audit fail(s)"
             ),
             "basis": "Hermes skill coverage, skill usage metadata, and hub lock metadata",
             "signals": [
-                f"bare profiles: {int(coverage_summary.get('zero_skill_profiles') or 0)}",
-                f"forced-skill tasks: {int(coverage_summary.get('forced_skill_tasks') or 0)}",
-                f"metadata gaps: {int(hygiene_summary.get('forced_skill_metadata_gaps') or 0)}",
+                f"profiles without skills: {int(coverage_summary.get('zero_skill_profiles') or 0)}",
+                f"tasks requiring skills: {int(coverage_summary.get('forced_skill_tasks') or 0)}",
+                f"required skills missing: {int(hygiene_summary.get('forced_skill_metadata_gaps') or 0)}",
             ],
             "recommended_view": "/skills",
             "action_label": _action_label_for_view("/skills"),
@@ -4991,8 +4991,8 @@ def gateway_start_command(raw_profile: str) -> str:
 
 def task_actions(task: Dict[str, Any], who: str, now: float) -> List[Dict[str, Any]]:
     """The safe controls that fit a Kanban task in its current state."""
-    target = {"kind": "task", "ref": task["id"], "board": task["board"]}
     title = display_name(task["title"], task["id"], "Task")
+    target = {"kind": "task", "ref": task["id"], "board": task["board"], "status": task.get("status"), "name": title}
     status = task.get("status")
     if status == "blocked" and task.get("block_kind") == "needs_input":
         return [_action("answer", target, f"Post your answer on {title} as a comment and move it back to ready for {who}.")]
@@ -5015,8 +5015,8 @@ def task_actions(task: Dict[str, Any], who: str, now: float) -> List[Dict[str, A
 
 
 def cron_actions(job: Dict[str, Any], who: str) -> List[Dict[str, Any]]:
-    target = {"kind": "cron", "ref": job["id"]}
     label = display_name(job["label"], job["id"], "Job")
+    target = {"kind": "cron", "ref": job["id"], "name": label}
     toggle = (
         _action("pause", target, f"Pause {label} for {who}. It will not run until you resume it.")
         if job.get("enabled")
@@ -5135,8 +5135,8 @@ def build_needs_you(
         ) if part)
         queue.append(_queue_item(
             f"offline:{profile['id']}", "offline", "warning", agent_ref(profile),
-            f"{profile['label']}'s gateway is not running",
-            f"{waiting} wait on it. Start it with: {gateway_start_command(raw)}",
+            f"Gateway is not running for {profile['label']}",
+            f"{waiting} {'waits' if jobs + ready == 1 else 'wait'} on it. Start it with: {gateway_start_command(raw)}",
             None, [], "/profiles",
         ))
 
@@ -5149,7 +5149,7 @@ def build_needs_you(
         queue.append(_queue_item(
             str(finding["key"]), "finding", str(finding["severity"]), agent,
             str(finding["title"]), str(finding.get("detail") or ""), None,
-            [_action("fix", {"kind": "finding", "ref": finding["key"]}, "Olympus notes the current count and tells you on later scans whether it cleared.")],
+            [_action("fix", {"kind": "finding", "ref": finding["key"], "name": str(finding["title"])}, "Olympus notes the current count and tells you on later scans whether it cleared.")],
             str(finding.get("recommended_view") or "/analytics"),
             as_list(finding.get("targets")),
         ))
@@ -5267,13 +5267,13 @@ def build_agents(
         )
         working = [t for t in running if not task_stale_reason(t, now)]
         own_live = [s for s in live_sessions if s.get("source") != "subagent"]
-        answer = next((item for item in own_items if item["kind"] == "answer"), None)
+        waiting = next((t for t in tasks if t.get("_assignee") == raw and t.get("status") == "blocked" and t.get("block_kind") == "needs_input"), None)
         if running:
             current = {"kind": "task", "label": display_name(running[0]["title"], running[0]["id"], "Task"), "since": running[0].get("started_at"), "ref": running[0]["id"], "board": running[0]["board"]}
         elif own_live:
             current = {"kind": "session", "label": own_live[0]["label"], "since": own_live[0].get("started_at"), "ref": own_live[0].get("session_ref")}
-        elif answer:
-            current = {"kind": "waiting", "label": answer["title"], "since": answer["since"]}
+        elif waiting:
+            current = {"kind": "waiting", "label": display_name(waiting["title"], waiting["id"], "Task"), "since": waiting.get("blocked_at") or waiting.get("created_at")}
         else:
             current = None
         stamps = [
@@ -5345,20 +5345,25 @@ def _store_timeline(db: Path, now: float) -> List[Dict[str, Any]]:
             label = public_label(row_value(row, "title"), source, "session")
             labels[session_id] = label
             subagent = source == "subagent"
-            if row_value(row, "started_at"):
-                events.append({
-                    "at": ts_to_iso(row_value(row, "started_at")), "_ts": safe_float(row_value(row, "started_at")),
-                    "kind": "subagent" if subagent else "session",
-                    "text": f"Started a subagent: {label}" if subagent else f"Started {label}",
-                    "detail": None if subagent else source, "state": None, "session_ref": ref,
-                })
-            if row_value(row, "ended_at"):
+            kind = "subagent" if subagent else "session"
+            started = safe_float(row_value(row, "started_at"))
+            ended = safe_float(row_value(row, "ended_at"))
+            where = None if label == source else source
+            if ended:
+                # A finished session is one step: what ran, for how long.
                 reason = str(row_value(row, "end_reason") or "")
+                minutes = f"{max(1, round((ended - started) / 60))} min" if started else None
                 events.append({
-                    "at": ts_to_iso(row_value(row, "ended_at")), "_ts": safe_float(row_value(row, "ended_at")),
-                    "kind": "subagent" if subagent else "session",
-                    "text": f"Ended {label}", "detail": reason.replace("_", " ") or None,
+                    "at": ts_to_iso(ended), "_ts": ended, "kind": kind,
+                    "text": f"{'Subagent ran' if subagent else 'Ran'} {label}" + (f" ({minutes})" if minutes else ""),
+                    "detail": ", ".join(part for part in (where, reason.replace("_", " ") if reason not in ("", "completed") else None) if part) or None,
                     "state": "error" if reason in ("error", "failed", "crashed") else None, "session_ref": ref,
+                })
+            elif started:
+                events.append({
+                    "at": ts_to_iso(started), "_ts": started, "kind": kind,
+                    "text": f"Started a subagent: {label}" if subagent else f"Started {label}",
+                    "detail": None if subagent else where, "state": None, "session_ref": ref,
                 })
         message_cols = table_columns(con, "messages")
         if labels and {"session_id", "tool_name", "timestamp"}.issubset(message_cols):

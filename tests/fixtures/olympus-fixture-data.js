@@ -267,7 +267,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       {
         kind: "skill",
         severity: "warning",
-        title: "Forced-skill Kanban work lacks local metadata",
+        title: "Kanban tasks require skills this machine does not have",
         detail: "Kanban references skills that do not appear in local usage or hub metadata.",
         evidence: "skill:4c823a88b1",
         recommended_view: "/kanban",
@@ -507,10 +507,10 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         label: "Skill Use",
         state: "critical",
         score: 45,
-        detail: "Coverage, forced-skill metadata, and stored audit results.",
-        evidence: "1 bare profile, 1 forced-skill gap, 1 audit warning, 1 audit fail",
+        detail: "Skills per profile, skills tasks require, and stored audit results.",
+        evidence: "1 profile without skills, 1 required skill missing, 1 audit warning, 1 audit fail",
         basis: "Hermes skill coverage, skill usage metadata, and hub lock metadata",
-        signals: ["bare profiles: 1", "forced-skill tasks: 3", "metadata gaps: 1"],
+        signals: ["profiles without skills: 1", "tasks requiring skills: 3", "required skills missing: 1"],
         recommended_view: "/skills",
         action_label: "Open Skills"
       },
@@ -951,11 +951,11 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         score: 100,
         evidence: item.id === "reliability" ? "0 failed runs, 0 stale sessions, 0 errored sessions" :
           item.id === "routing" ? "0 loaded assignees, 0 unassigned ready tasks, 0 blocked tasks" :
-          item.id === "skill_use" ? "0 bare profiles, 0 forced-skill gaps, 0 audit warnings, 0 audit fails" :
+          item.id === "skill_use" ? "0 profiles without skills, 0 required skills missing, 0 audit warnings, 0 audit fails" :
           "0 looping sessions, 0 tool-heavy sessions, 0 context-pressure sessions, 0 long threads",
         signals: item.id === "reliability" ? ["failed runs: 0", "stale sessions: 0", "errored sessions: 0"] :
           item.id === "routing" ? ["loaded assignees: 0", "unassigned ready: 0", "blocked tasks: 0"] :
-          item.id === "skill_use" ? ["bare profiles: 0", "forced-skill tasks: 0", "metadata gaps: 0"] :
+          item.id === "skill_use" ? ["profiles without skills: 0", "tasks requiring skills: 0", "required skills missing: 0"] :
           ["looping: 0", "tool-heavy: 0", "context pressure: 0", "unattended loop hard stop: on"]
       }))
     };
