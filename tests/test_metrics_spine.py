@@ -343,5 +343,35 @@ class MetricsSpineTest(unittest.TestCase):
         self.assertFalse(plugin_api.session_matches_profile(session, "li"))
 
 
+    def test_profiles_served_by_the_default_multiplexer_read_as_running(self):
+        # A satellite profile has no gateway.pid of its own; the live default
+        # gateway lists it in gateway_state.json served_profiles.
+        import subprocess
+        import sys
+
+        (self.home / "config.yaml").write_bytes(b"model: {}\n")
+        for name in ("coder", "solo"):
+            (self.home / "profiles" / name).mkdir(parents=True)
+        gateway = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "gateway"])
+        try:
+            (self.home / "gateway.pid").write_bytes(json.dumps({"pid": gateway.pid, "kind": "hermes-gateway"}).encode("utf-8"))
+            (self.home / "gateway_state.json").write_bytes(json.dumps({"served_profiles": ["default", "coder"]}).encode("utf-8"))
+
+            by_name = {p["name"]: p for p in plugin_api.collect_profiles()}
+        finally:
+            gateway.kill()
+            gateway.wait()
+
+        self.assertEqual((by_name["default"]["gateway_state"], by_name["default"]["gateway_mode"]), ("running", "own"))
+        self.assertEqual((by_name["coder"]["gateway_state"], by_name["coder"]["gateway_mode"]), ("running", "multiplexed"))
+        self.assertEqual((by_name["solo"]["gateway_state"], by_name["solo"]["gateway_mode"]), ("stopped", None))
+
+    def test_served_profiles_are_ignored_when_the_default_gateway_is_down(self):
+        (self.home / "gateway_state.json").write_bytes(json.dumps({"served_profiles": ["coder"]}).encode("utf-8"))
+
+        self.assertEqual(plugin_api.multiplexed_profile_names(self.home, "stopped"), set())
+        self.assertEqual(plugin_api.multiplexed_profile_names(self.home, "running"), {"coder"})
+
+
 if __name__ == "__main__":
     unittest.main()
