@@ -4945,6 +4945,13 @@ def agent_avatar(label: str) -> str:
     return match.group(1) if match else (label[:1].upper() or "?")
 
 
+def display_name(label: Any, ref: str, noun: str) -> str:
+    """A hidden label reads as "Task 5408" instead of its hashed ref."""
+    if str(label) != ref or ":" not in ref:
+        return str(label)
+    return f"{noun} {ref.rsplit(':', 1)[1][:4]}"
+
+
 def _action(action_id: str, target: Dict[str, Any], effect: str) -> Dict[str, Any]:
     return {"id": action_id, "label": ACTION_LABELS[action_id], "target": target, "effect": effect}
 
@@ -4985,7 +4992,7 @@ def gateway_start_command(raw_profile: str) -> str:
 def task_actions(task: Dict[str, Any], who: str, now: float) -> List[Dict[str, Any]]:
     """The safe controls that fit a Kanban task in its current state."""
     target = {"kind": "task", "ref": task["id"], "board": task["board"]}
-    title = task["title"]
+    title = display_name(task["title"], task["id"], "Task")
     status = task.get("status")
     if status == "blocked" and task.get("block_kind") == "needs_input":
         return [_action("answer", target, f"Post your answer on {title} as a comment and move it back to ready for {who}.")]
@@ -5009,7 +5016,7 @@ def task_actions(task: Dict[str, Any], who: str, now: float) -> List[Dict[str, A
 
 def cron_actions(job: Dict[str, Any], who: str) -> List[Dict[str, Any]]:
     target = {"kind": "cron", "ref": job["id"]}
-    label = job["label"]
+    label = display_name(job["label"], job["id"], "Job")
     toggle = (
         _action("pause", target, f"Pause {label} for {who}. It will not run until you resume it.")
         if job.get("enabled")
@@ -5042,7 +5049,7 @@ def build_needs_you(
         raw = str(task.get("_assignee") or "unassigned")
         agent = agents.get(raw)
         who = agent["label"] if agent else "its agent"
-        title = str(task.get("title"))
+        title = display_name(task["title"], task["id"], "Task")
         actions = task_actions(task, who, now)
         kind = task.get("block_kind")
         failures = int(task.get("consecutive_failures") or 0)
@@ -5094,11 +5101,11 @@ def build_needs_you(
         agent = agents.get(raw)
         who = agent["label"] if agent else "this agent"
         for job in jobs:
-            label = str(job.get("label"))
+            label = display_name(job["label"], job["id"], "Job")
             if job.get("state") == "error":
                 queue.append(_queue_item(
                     f"cron_failed:{job['id']}", "cron_failed", "critical", agent,
-                    f"Scheduled job {label} failed",
+                    f"{label} failed on its last run",
                     job.get("last_error") or "Its last run reported an error.",
                     job.get("last_run_at"), cron_actions(job, who), "/cron",
                 ))
@@ -5262,7 +5269,7 @@ def build_agents(
         own_live = [s for s in live_sessions if s.get("source") != "subagent"]
         answer = next((item for item in own_items if item["kind"] == "answer"), None)
         if running:
-            current = {"kind": "task", "label": running[0]["title"], "since": running[0].get("started_at"), "ref": running[0]["id"], "board": running[0]["board"]}
+            current = {"kind": "task", "label": display_name(running[0]["title"], running[0]["id"], "Task"), "since": running[0].get("started_at"), "ref": running[0]["id"], "board": running[0]["board"]}
         elif own_live:
             current = {"kind": "session", "label": own_live[0]["label"], "since": own_live[0].get("started_at"), "ref": own_live[0].get("session_ref")}
         elif answer:
@@ -5403,7 +5410,7 @@ def _kanban_timeline(raw_profile: str) -> List[Dict[str, Any]]:
                 events.append({
                     "at": ts_to_iso(row["created_at"]), "_ts": safe_float(row["created_at"]),
                     "kind": "task",
-                    "text": f"{TASK_EVENT_TEXT.get(kind, kind.replace('_', ' ').capitalize())}: {public_label(row['title'], public_task, 'task')}",
+                    "text": f"{TASK_EVENT_TEXT.get(kind, kind.replace('_', ' ').capitalize())}: {display_name(public_label(row['title'], public_task, 'task'), public_task, 'Task')}",
                     "detail": board["name"] if board["slug"] != "default" else None,
                     "state": TASK_EVENT_STATE.get(kind),
                 })
@@ -5441,14 +5448,14 @@ def build_agent_detail(scan: Dict[str, Any], agent_id: str, actions: List[Dict[s
     who = str(profile["label"])
     row = next(a for a in scan["agents"]["agents"] if a["id"] == agent_id)
     jobs = [
-        {**strip_internal(job), "actions": cron_actions(job, who)}
+        {**strip_internal(job), "label": display_name(job["label"], job["id"], "Job"), "actions": cron_actions(job, who)}
         for job in scan["cron"] if cron_profile(job) == raw
     ]
     own_tasks = [t for t in kanban_items(scan["kanban"], "_tasks") if t.get("_assignee") == raw]
     own_tasks.sort(key=lambda t: (t.get("status") in CLOSED_KANBAN_STATUSES, -safe_float(t.get("_sort_ts"))))
     tasks = [
         {
-            "id": t["id"], "board": t["board"], "title": t["title"], "status": t["status"],
+            "id": t["id"], "board": t["board"], "title": display_name(t["title"], t["id"], "Task"), "status": t["status"],
             "block_kind": t.get("block_kind"), "started_at": t.get("started_at"),
             "blocked_at": t.get("blocked_at"), "completed_at": t.get("completed_at"),
             "stale": task_stale_reason(t, now), "consecutive_failures": t.get("consecutive_failures"),
@@ -5462,7 +5469,7 @@ def build_agent_detail(scan: Dict[str, Any], agent_id: str, actions: List[Dict[s
             failed = job.get("state") == "error"
             timeline.append({
                 "at": job["last_run_at"], "_ts": parse_iso_ts(job["last_run_at"]) or 0.0, "kind": "cron",
-                "text": f"Ran {job['label']}", "detail": job.get("last_error") if failed else job.get("last_status"),
+                "text": f"Ran {display_name(job['label'], job['id'], 'Job')}", "detail": job.get("last_error") if failed else job.get("last_status"),
                 "state": "error" if failed else "ok",
             })
     for action in actions:

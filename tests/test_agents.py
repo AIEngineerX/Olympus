@@ -184,6 +184,11 @@ class AgentsTest(unittest.TestCase):
         for private in ("Pick a database", "Refactor the billing module", "Weekly post", "job-w-1", "t-answer", "coder", "hermes -p ops"):
             self.assertNotIn(private, text)
         self.assertIn("hermes -p <profile> gateway start", text)
+        answer = next(item for item in payload["needs_you"] if item["kind"] == "answer")
+        hidden = plugin_api.safe_id("t-answer", "task")
+        self.assertEqual(answer["title"], f"Task {hidden[5:9]} is waiting on your answer")
+        failed = next(item for item in payload["needs_you"] if item["kind"] == "cron_failed")
+        self.assertRegex(failed["title"], r"^Job [0-9a-f]{4} failed on its last run$")
         labels = [row["label"] for row in payload["agents"]["agents"]]
         self.assertIn("Profile 1", labels)
         self.assertEqual({row["avatar"] for row in payload["agents"]["agents"] if row["label"].startswith("Profile")}, {"1", "2", "3", "4", "5"})
