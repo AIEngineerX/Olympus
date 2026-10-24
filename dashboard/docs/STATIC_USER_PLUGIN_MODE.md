@@ -1,6 +1,6 @@
 # Static User-Plugin Mode
 
-Current hardened Hermes serves static dashboard assets from non-bundled user and project plugins, but does not import their Python backend APIs. For Olympus this means `/olympus` can render while `/api/plugins/olympus/*` returns `404`.
+Hermes serves a user plugin's static dashboard assets before it imports the plugin's Python API: the API is mounted only once `olympus` is in `plugins.enabled` (`hermes plugins enable olympus`), and project plugins never get one. In those cases `/olympus` renders while `/api/plugins/olympus/*` returns `404`, and Olympus falls back to this mode.
 
 ## Frontend fallback
 
@@ -17,7 +17,7 @@ When `dashboard/dist/index.js` cannot load `/api/plugins/olympus/overview`, it s
 
 ## Hidden or labelled in static mode
 
-These panels require bundled/trusted Olympus backend synthesis and are hidden, empty, or explicitly labelled as unavailable in the fallback:
+These panels require the Olympus backend and are hidden, empty, or explicitly labelled as unavailable in the fallback:
 
 - Readiness scoring and score deductions.
 - Kanban board synthesis, Trace Spine, and worker attention items.
@@ -27,7 +27,7 @@ These panels require bundled/trusted Olympus backend synthesis and are hidden, e
 
 ## Why not synthesize everything in the browser?
 
-The first-party Hermes dashboard APIs are page APIs, not Olympus' redacted operations model. Rebuilding Olympus synthesis in browser JavaScript would either duplicate backend collectors, increase local-label/privacy risk, or start inspecting config/env/session details directly from the plugin frontend. Static mode therefore stays deliberately narrow: counts, compatibility status, links to Hermes-owned pages, and a clear recommendation to use bundled/trusted backend mode for full Olympus.
+The first-party Hermes dashboard APIs are page APIs, not Olympus' redacted operations model. Rebuilding Olympus synthesis in browser JavaScript would either duplicate backend collectors, increase local-label/privacy risk, or start inspecting config/env/session details directly from the plugin frontend. Static mode therefore stays deliberately narrow: counts, compatibility status, links to Hermes-owned pages, and a clear recommendation to enable the plugin for full Olympus.
 
 ## Verification
 

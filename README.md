@@ -1,6 +1,6 @@
 # Olympus
 
-Olympus is a read-only [HermesOS](https://github.com/NousResearch/hermes-agent) Agent Monitor for operational tuning.
+Olympus is a read-only operator console for [Hermes Agent](https://github.com/NousResearch/hermes-agent): what broke, what it cost, and what to fix next across every profile.
 
 It reads local Hermes runtime state and shows what to tune next across profiles,
 routes, skills, sessions, cron, gateways, Kanban work, and runtime health. It
@@ -32,52 +32,40 @@ owns vs. what Hermes owns).
 
 ## Requirements
 
-- A working [HermesOS / Hermes Agent](https://github.com/NousResearch/hermes-agent) install (`$HERMES_HOME`, default `~/.hermes`).
-- Python 3.10+ (the backend is a FastAPI router loaded by Hermes).
-- Node.js/npm for verification and Playwright-based visual smoke tests. There is
-  no frontend build step; `dashboard/dist/*` is hand-authored SDK React/CSS.
+- Hermes Agent v0.21.6 or newer (`requires_hermes: ">=0.21.6"` in
+  [`plugin.yaml`](plugin.yaml)). Verified against v0.22.5.
+- Nothing else: Olympus has no Python dependencies and no frontend build step.
 
-> **Current Hermes compatibility:** hardened Hermes builds load static user
-> dashboard plugins from `$HERMES_HOME/plugins`, but refuse non-bundled Python
-> backend imports. In that mode `/olympus` can load while
-> `/api/plugins/olympus/*` returns `404`. Full backend routes require Olympus to
-> be bundled into Hermes or a future trusted backend-plugin model. See
-> [`dashboard/docs/HERMES_BACKEND_PLUGIN_COMPATIBILITY.md`](dashboard/docs/HERMES_BACKEND_PLUGIN_COMPATIBILITY.md)
-> and [`dashboard/docs/STATIC_USER_PLUGIN_MODE.md`](dashboard/docs/STATIC_USER_PLUGIN_MODE.md).
-
-## Install In A Local Hermes Dashboard
-
-Install Olympus from source, link it into your local Hermes home, and start the
-Hermes dashboard:
+## Install
 
 ```bash
-git clone https://github.com/AIEngineerX/Olympus.git
-cd Olympus
-npm ci
-npm run dev
+hermes plugins install AIEngineerX/Olympus
+hermes plugins enable olympus
+hermes dashboard
 ```
 
-`npm run dev` links this repository's `dashboard/` folder into:
+Then open the **Olympus** tab (default `http://127.0.0.1:9119/olympus`).
+Hermes loads user plugin APIs only for plugins listed in `plugins.enabled`,
+which is what `hermes plugins enable` writes. If the tab appears without data,
+restart `hermes dashboard` once.
 
-```text
-$HERMES_HOME/plugins/olympus/dashboard/
-```
+To work on Olympus itself, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-Then it starts Hermes with:
+## What Olympus Reads
 
-```bash
-scripts/install-dashboard-link.sh
-hermes dashboard --no-open --skip-build
-```
+Olympus is read-only. Every Hermes store is opened read-only, it makes no
+network calls, runs no shell commands or background processes, and stores no
+credentials. Per request it reads, for each profile:
 
-Then open:
+- `state.db` session counters (tokens, cost, tool calls, timestamps, handoff errors)
+- `cron/jobs.json` job status
+- `config.yaml` structure and flags (never values such as keys or base URLs)
+- `.env` variable **names** only, to detect configured gateways
+- `gateway.pid` / `gateway_state.json` for gateway liveness
+- the last 8 KB of `logs/agent.log`, `logs/gateway.log` and `logs/errors.log`
+- `skills/` metadata and `skills/.hub/lock.json`
 
-```text
-http://127.0.0.1:9119/olympus
-```
-
-After the tab loads, follow [`after-install.md`](after-install.md) to confirm
-the first screen, privacy defaults, and local smoke checks.
+and the shared Kanban databases under the Hermes root.
 
 ## Dashboard Modes
 
@@ -108,7 +96,7 @@ status before preparing an upstream Desktop PR.
 
 ## API
 
-When Olympus is bundled or another trusted backend-plugin path is available, Hermes mounts Olympus at `/api/plugins/olympus/`:
+Hermes mounts the Olympus API at `/api/plugins/olympus/` once the plugin is enabled:
 
 | Route | Purpose |
 | --- | --- |
@@ -117,9 +105,9 @@ When Olympus is bundled or another trusted backend-plugin path is available, Her
 | `GET /tuning` | Tuning-focused read model with score breakdown, Kanban intelligence, Trace Spine, Operational Evals, Metrics Spine, skill hygiene, config policy, performance, and evidence sources |
 
 Routes sit behind the Hermes dashboard session-token middleware. The frontend
-calls them through the plugin SDK's `fetchJSON`, which injects the token. In
-static user-plugin mode these routes are not mounted; run `npm run test:compat`
-to identify the active mode.
+calls them through the plugin SDK's `fetchJSON`, which injects the token. If
+the plugin is installed but not enabled, the tab renders a reduced view from
+Hermes' own dashboard APIs; `npm run test:compat` reports which mode is active.
 
 ## Privacy
 
@@ -218,8 +206,8 @@ set `OLYMPUS_SMOKE_RELINK=1` before running the smoke command.
   tabs that own Agents, Skills, Kanban, Policy, and Diagnostics.
 - Pantheon uses HTML text and accessible profile buttons rather than SVG text or an
   image-role wrapper.
-- Frontend refreshes ignore stale `/overview` responses so an older request
-  cannot overwrite newer data.
+- The frontend polls `/overview` one request at a time; the next poll starts
+  only after the previous response settles.
 - Attention items are sorted by severity before truncation.
 - Gateway configuration detection parses `.env` variable names only; values are
   not scanned or returned.
@@ -241,8 +229,8 @@ posture and how to report.
 
 ## References
 
-- [HermesOS / Hermes Agent](https://github.com/NousResearch/hermes-agent)
-- [HermesOS documentation](https://hermes-agent.nousresearch.com/docs)
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent)
+- [Hermes Agent documentation](https://hermes-agent.nousresearch.com/docs)
 - [`dashboard/docs/PRODUCTION_READINESS.md`](dashboard/docs/PRODUCTION_READINESS.md)
 - [`dashboard/docs/VIEWPORT_STRATEGY.md`](dashboard/docs/VIEWPORT_STRATEGY.md)
 

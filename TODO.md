@@ -49,15 +49,13 @@ Complete each item in order and test before starting the next.
    - Keep Olympus read-only and avoid duplicating Desktop Command Center Usage.
    - Fallback: document browser-dashboard access if Desktop plugin parity is not accepted.
 
-5. Hermes Backend Compatibility (current priority)
-   - Current hardened Hermes refuses Python backend auto-import for user/project
-     dashboard plugins. Olympus' `/api/plugins/olympus/*` routes only work when
-     Olympus is bundled into Hermes or Hermes gains an explicit trusted backend
-     plugin model.
-   - Shipped: compatibility doc and `npm run test:compat` diagnostic.
-   - Remaining: choose one path before feature work: bundled Hermes PR,
-     frontend-only user plugin against existing Hermes APIs, or upstream trusted
-     backend-plugin RFC.
+5. Hermes Backend Compatibility (resolved)
+   - Hermes v0.21.6+ mounts user dashboard plugin APIs for plugins listed in
+     `plugins.enabled` (`hermes plugins enable olympus`), in-process or through
+     the per-profile plugin host. Verified live against v0.22.5.
+   - Distribution is the Hermes plugin catalog (`plugin-catalog/olympus.yaml`,
+     SHA-pinned); bundling into hermes-agent is closed by the June 2026
+     "no new third-party-product plugins" policy.
 
 6. Deterministic Eval Signals
    - Shipped: local reliability, efficiency, routing, and skill-use eval signals.
