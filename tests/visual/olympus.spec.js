@@ -4,328 +4,195 @@ const { expect, test } = require("@playwright/test");
 
 const fixtureBaseUrl = pathToFileURL(path.join(__dirname, "../fixtures/olympus-fixture.html")).href;
 
-const briefSections = [
-  { selector: ".olympus-hero", text: "Olympus", minHeight: 120 },
-  { selector: ".olympus-score-card", text: "Readiness Score", minHeight: 72 },
-  { selector: ".olympus-agent-hq", text: "Agent Monitor", minHeight: 180 }
-];
-const deepSections = [
-  { selector: ".olympus-performance", text: "Performance Tracking", minHeight: 180 },
-  { selector: ".olympus-trace-spine", text: "Trace Spine", minHeight: 160 },
-  { selector: ".olympus-ops-evals", text: "Operational Evals", minHeight: 180 },
-  { selector: ".olympus-diagnostics", text: "Production Diagnostics", minHeight: 180 },
-  { selector: ".olympus-policy", text: "Tool Policy & Aux Cost", minHeight: 180 },
-  { selector: ".olympus-skill-coverage", text: "Skill Coverage", minHeight: 180 },
-  { selector: ".olympus-skill-hygiene", text: "Skill Hygiene", minHeight: 180 },
-  { selector: ".olympus-fleet", text: "Fleet", minHeight: 180 },
-  { selector: ".olympus-pantheon", text: "Live Work", minHeight: 240 },
-  { selector: ".olympus-kanban", text: "Kanban Intelligence", minHeight: 180 }
-];
-const stagedModeSections = {
-  Agents: [
-    { selector: ".olympus-cost", text: "Where spend goes", minHeight: 180 },
-    { selector: ".olympus-performance", text: "Performance Tracking", minHeight: 180 },
-    { selector: ".olympus-fleet", text: "Fleet", minHeight: 180 },
-    { selector: ".olympus-pantheon", text: "Live Work", minHeight: 240 }
-  ],
-  Skills: [
-    { selector: ".olympus-skill-coverage", text: "Skill Coverage", minHeight: 180 },
-    { selector: ".olympus-skill-hygiene", text: "Skill Hygiene", minHeight: 180 }
-  ],
-  Kanban: [
-    { selector: ".olympus-backlog", text: "Backlog triage", minHeight: 160 },
-    { selector: ".olympus-trace-spine", text: "Trace Spine", minHeight: 160 },
-    { selector: ".olympus-kanban", text: "Kanban Intelligence", minHeight: 180 }
-  ],
-  Policy: [
-    { selector: ".olympus-policy", text: "Tool Policy & Aux Cost", minHeight: 180 }
-  ],
-  Diagnostics: [
-    { selector: ".olympus-ops-evals", text: "Operational Evals", minHeight: 180 },
-    { selector: ".olympus-metrics-spine", text: "Metrics Spine", minHeight: 180 },
-    { selector: ".olympus-diagnostics", text: "Production Diagnostics", minHeight: 180 }
-  ]
-};
+const DESKTOP = { width: 1280, height: 720 };
+const MOBILE = { width: 390, height: 844 };
 const bannedCopyPhrases = [
-  "no-fluff",
   "opportunity",
   "opportunities",
-  "Open owner",
-  "Open Hermes",
-  "Open Hermes view",
   "Agent HQ",
   "Party View",
-  "Selected Agent",
-  "AI",
-  "slop",
-  "cruft",
+  "Trace Spine",
+  "Metrics Spine",
+  "bare profiles",
+  "forced-skill",
   "seamless",
   "supercharge",
   "world-class",
   "next-generation",
   "cutting-edge"
 ];
+// Names, titles and refs the seeded team uses; none may show when labels are hidden.
 const privateLabelPhrases = [
-  "Visual QA",
-  "Backend",
-  "Curator",
-  "Ops",
-  "Browser smoke",
-  "Split overloaded visual work"
+  "Researcher",
+  "Reviewer",
+  "Writer",
+  "Analyst",
+  "pricing study",
+  "Publish changelog",
+  "Telegram delivery",
+  "investor update",
+  "Coordinates the team",
+  "job-changelog",
+  "t-pricing"
 ];
 const allowedHermesRoutes = ["/analytics", "/config", "/cron", "/kanban", "/logs", "/profiles", "/sessions", "/skills"];
 
 const scenarios = [
-  { name: "noisy", expectedSections: briefSections, minAgentCards: 0 },
-  { name: "healthy", expectedSections: briefSections, minAgentCards: 0 },
-  {
-    name: "empty",
-    expectedSections: briefSections,
-    absentSections: deepSections.map((section) => section.selector),
-    minAgentCards: 0
-  },
-  { name: "overloaded", expectedSections: briefSections, minAgentCards: 0 },
-  { name: "stale", expectedSections: briefSections, minAgentCards: 0 },
-  { name: "high-cost", expectedSections: briefSections, minAgentCards: 0 },
-  { name: "no-labels", expectedSections: briefSections, minAgentCards: 0, assertPrivateLabelsHidden: true }
+  { name: "noisy", agents: 7, queue: 6 },
+  { name: "no-labels", agents: 7, queue: 6, privateLabelsHidden: true },
+  { name: "empty", agents: 1, queue: 0 }
 ];
 
-function fixtureUrl(state) {
-  return `${fixtureBaseUrl}?state=${encodeURIComponent(state)}`;
+function fixtureUrl(params) {
+  return `${fixtureBaseUrl}?${new URLSearchParams(params).toString()}`;
 }
 
-async function openFixture(page, testInfo, size, state) {
+async function openFixture(page, testInfo, size, params) {
   const messages = [];
   page.on("console", (msg) => {
     if (msg.type() === "error") messages.push(msg.text());
   });
   page.on("pageerror", (error) => messages.push(error.message));
-
   await page.setViewportSize(size);
-  await page.goto(fixtureUrl(state));
+  await page.goto(fixtureUrl(params));
   await page.locator(".olympus-page").waitFor();
-  await page.locator(".olympus-mode-tabs").waitFor();
+  await page.locator(".olympus-census").filter({ hasText: /agent/i }).waitFor();
   await page.screenshot({
-    path: testInfo.outputPath(`olympus-${state}-${size.width}x${size.height}.png`),
+    path: testInfo.outputPath(`olympus-${Object.values(params).join("-")}-${size.width}x${size.height}.png`),
     fullPage: true
   });
   return messages;
 }
 
-async function assertExpectedSections(page, sections) {
-  for (const section of sections) {
-    const locator = page.locator(section.selector);
-    await expect(locator).toBeVisible();
-    await expect(locator).toContainText(section.text);
-    const box = await locator.boundingBox();
-    expect(box && box.width).toBeGreaterThan(100);
-    expect(box && box.height).toBeGreaterThan(section.minHeight);
-  }
-}
-
-async function assertAbsentSections(page, sections) {
-  for (const selector of sections || []) {
-    await expect(page.locator(selector)).toHaveCount(0);
-  }
-}
-
-async function assertBriefOnly(page) {
-  await expect(page.getByRole("tab", { name: "Brief" })).toHaveAttribute("aria-selected", "true");
-  await assertExpectedSections(page, briefSections);
-  await assertAbsentSections(page, deepSections.map((section) => section.selector));
-}
-
-async function selectMode(page, label) {
-  const tab = page.getByRole("tab", { name: label });
-  await expect(tab).toHaveCount(1);
-  await tab.click();
-  await expect(tab).toHaveAttribute("aria-selected", "true");
-  // Diagnostics keeps its debug panels behind one disclosure.
-  if (label === "Diagnostics") await page.locator(".olympus-debug > summary").click();
-}
-
-async function collectVisualMetrics(page) {
-  return page.evaluate(({ bannedPhrases, privatePhrases, allowedRoutes }) => {
-    const rectOf = (el) => {
-      const rect = el.getBoundingClientRect();
-      return {
-        bottom: rect.bottom,
-        height: rect.height,
-        left: rect.left,
-        right: rect.right,
-        top: rect.top,
-        width: rect.width
-      };
-    };
+async function collectVisualMetrics(page, minTarget) {
+  return page.evaluate(({ bannedPhrases, privatePhrases, allowedRoutes, minTarget }) => {
     const visible = (el) => {
       const rect = el.getBoundingClientRect();
       const style = window.getComputedStyle(el);
       return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
     };
     const pageEl = document.querySelector(".olympus-page");
-    if (!pageEl) return { missingPage: true };
-    const viewport = document.querySelector(".olympus-command-viewport");
-    const pantheon = document.querySelector(".olympus-pantheon");
-    const agentCards = Array.from(document.querySelectorAll(".olympus-agent-card"));
-    const tinyVisibleText = Array.from(pageEl.querySelectorAll("*"))
-      .filter((el) => {
-        const text = (el.textContent || "").trim();
-        if (!text) return false;
-        const style = window.getComputedStyle(el);
-        return visible(el) && Number.parseFloat(style.fontSize || "0") < 10;
-      })
-      .map((el) => ({
-        className: String(el.className || ""),
-        fontSize: window.getComputedStyle(el).fontSize,
-        text: (el.textContent || "").trim().slice(0, 80)
-      }));
     const renderedText = pageEl.innerText || "";
-    const badCopyPhrases = bannedPhrases
-      .filter((phrase) => new RegExp("\\b" + phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i").test(renderedText));
-    const badLinks = Array.from(pageEl.querySelectorAll("a"))
-      .filter(visible)
-      .map((el) => ({
-        href: el.getAttribute("href") || "",
-        text: (el.textContent || "").trim()
-      }))
-      .filter((item) => {
-        const route = item.href.split(/[?#]/)[0];
-        return !item.href ||
-          item.href === "#" ||
-          item.href.startsWith("javascript:") ||
-          item.text.length < 4 ||
-          (route.startsWith("/") && !allowedRoutes.includes(route));
-      });
-    const smallControls = Array.from(pageEl.querySelectorAll("button, a, summary"))
-      .filter(visible)
-      .map((el) => {
-        const rect = el.getBoundingClientRect();
-        return {
-          className: String(el.className || ""),
-          height: rect.height,
-          text: (el.textContent || "").trim().slice(0, 80),
-          width: rect.width
-        };
-      })
-      .filter((item) => item.width < 32 || item.height < 32);
     return {
-      agentCards: agentCards.length,
-      agentMonitorTiles: Array.from(pageEl.querySelectorAll(".olympus-agent-hq .olympus-hq-tile")).filter(visible).length,
-      visibleTuningItems: Array.from(pageEl.querySelectorAll(".olympus-needs-you .olympus-tuning-item")).filter(visible).length,
-      collapsedBacklog: Boolean(pageEl.querySelector(".olympus-agent-hq .olympus-backlog-details")),
-      badCopyPhrases,
-      badLinks,
-      evidenceSourcesVisible: renderedText.includes("Evidence Sources"),
-      policyVisible: Boolean(document.querySelector(".olympus-policy") && renderedText.includes("Tool Policy & Aux Cost")),
-      traceSpineVisible: Boolean(document.querySelector(".olympus-trace-spine") && renderedText.includes("Trace Spine")),
-      opsEvalsVisible: Boolean(document.querySelector(".olympus-ops-evals") && renderedText.includes("Operational Evals")),
-      metricsSpineVisible: Boolean(document.querySelector(".olympus-metrics-spine") && renderedText.includes("Metrics Spine")),
-      horizontalOverflow: Math.max(
-        document.documentElement.scrollWidth - window.innerWidth,
-        document.body.scrollWidth - window.innerWidth
-      ),
-      sectionCount: document.querySelectorAll(".olympus-section").length + document.querySelectorAll(".olympus-hero").length,
-      modeTabs: Array.from(pageEl.querySelectorAll(".olympus-mode-tab")).filter(visible).map((el) => ({
-        selected: el.getAttribute("aria-selected"),
-        text: (el.querySelector("span") && el.querySelector("span").textContent || "").trim()
-      })),
-      pantheonVisible: Boolean(pantheon && visible(pantheon) && renderedText.includes("Live Work")),
-      pantheonButtons: Array.from(document.querySelectorAll(".olympus-pantheon .olympus-agent-card")).filter(visible).length,
-      smallControls,
+      badCopyPhrases: bannedPhrases.filter((phrase) => new RegExp("\\b" + phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i").test(renderedText)),
+      emDashes: (renderedText.match(/—/g) || []).length,
+      badLinks: Array.from(pageEl.querySelectorAll("a"))
+        .filter(visible)
+        .map((el) => ({ href: el.getAttribute("href") || "", text: (el.textContent || "").trim() }))
+        .filter((item) => {
+          const route = item.href.split(/[?#]/)[0];
+          return !item.href || item.href === "#" || item.href.startsWith("javascript:") || item.text.length < 4 ||
+            (route.startsWith("/") && !allowedRoutes.includes(route));
+        }),
+      smallControls: Array.from(pageEl.querySelectorAll("button, a, summary"))
+        .filter(visible)
+        .map((el) => {
+          const rect = el.getBoundingClientRect();
+          return { text: (el.textContent || el.getAttribute("aria-label") || "").trim().slice(0, 60), width: Math.round(rect.width), height: Math.round(rect.height) };
+        })
+        .filter((item) => item.height < minTarget || item.width < 24),
+      tinyVisibleText: Array.from(pageEl.querySelectorAll("*"))
+        .filter((el) => (el.textContent || "").trim() && visible(el) && Number.parseFloat(window.getComputedStyle(el).fontSize || "0") < 11)
+        .map((el) => (el.textContent || "").trim().slice(0, 60)),
+      horizontalOverflow: Math.max(document.documentElement.scrollWidth - window.innerWidth, document.body.scrollWidth - window.innerWidth),
+      clippedCells: Array.from(pageEl.querySelectorAll(".olympus-roster td, .olympus-queue-title, .olympus-step-text"))
+        .filter(visible)
+        .filter((el) => el.scrollWidth > el.clientWidth + 1 && !el.querySelector(".olympus-now-label, small"))
+        .map((el) => (el.textContent || "").trim().slice(0, 60)),
       svgTextCount: pageEl.querySelectorAll("svg text").length,
-      tinyVisibleText,
+      gradients: Array.from(pageEl.querySelectorAll("*")).filter((el) => /gradient/.test(window.getComputedStyle(el).backgroundImage)).length,
+      shadows: Array.from(pageEl.querySelectorAll("*")).filter((el) => window.getComputedStyle(el).boxShadow !== "none").length,
       privateLabelLeaks: [
-        ...Array.from((renderedText.matchAll(/(?:\/Users\/|\\\\Users\\\\|\.hermes|kanban\/boards|state\.db|gateway\.pid)/gi))).map((m) => m[0]),
+        ...Array.from(renderedText.matchAll(/(?:\/Users\/|\\Users\\|\.hermes|kanban\/boards|state\.db|gateway\.pid)/gi)).map((m) => m[0]),
         ...privatePhrases.filter((phrase) => renderedText.includes(phrase))
-      ],
-      viewport: viewport ? rectOf(viewport) : null
+      ]
     };
-  }, { bannedPhrases: bannedCopyPhrases, privatePhrases: privateLabelPhrases, allowedRoutes: allowedHermesRoutes });
+  }, { bannedPhrases: bannedCopyPhrases, privatePhrases: privateLabelPhrases, allowedRoutes: allowedHermesRoutes, minTarget });
+}
+
+function expectClean(metrics, messages, scenario) {
+  expect(messages).toEqual([]);
+  expect(metrics.badCopyPhrases).toEqual([]);
+  expect(metrics.emDashes).toBe(0);
+  expect(metrics.badLinks).toEqual([]);
+  expect(metrics.smallControls).toEqual([]);
+  expect(metrics.tinyVisibleText).toEqual([]);
+  expect(metrics.horizontalOverflow).toBeLessThanOrEqual(2);
+  expect(metrics.svgTextCount).toBe(0);
+  expect(metrics.gradients).toBe(0);
+  expect(metrics.shadows).toBe(0);
+  if (scenario.privateLabelsHidden) expect(metrics.privateLabelLeaks).toEqual([]);
 }
 
 for (const scenario of scenarios) {
-  test(`desktop ${scenario.name} viewport is readable and console-clean`, async ({ page }, testInfo) => {
-    const messages = await openFixture(page, testInfo, { width: 1280, height: 720 }, scenario.name);
-    await assertBriefOnly(page);
-    await assertAbsentSections(page, scenario.absentSections);
-    const metrics = await collectVisualMetrics(page);
+  test(`desktop ${scenario.name}: roster, queue and inspector are readable and console-clean`, async ({ page }, testInfo) => {
+    const messages = await openFixture(page, testInfo, DESKTOP, { state: scenario.name });
 
-    expect(messages).toEqual([]);
-    expect(metrics.agentCards).toBeGreaterThanOrEqual(scenario.minAgentCards);
-    expect(metrics.badCopyPhrases).toEqual([]);
-    expect(metrics.evidenceSourcesVisible).toBe(false);
-    expect(metrics.policyVisible).toBe(false);
-    expect(metrics.traceSpineVisible).toBe(false);
-    expect(metrics.opsEvalsVisible).toBe(false);
-    expect(metrics.metricsSpineVisible).toBe(false);
-    expect(metrics.pantheonVisible).toBe(false);
-    expect(metrics.badLinks).toEqual([]);
-    expect(metrics.modeTabs.map((item) => item.text)).toEqual(["Brief", "Agents", "Skills", "Kanban", "Policy", "Diagnostics"]);
-    expect(metrics.agentMonitorTiles).toBeLessThanOrEqual(6);
-    expect(metrics.visibleTuningItems).toBeLessThanOrEqual(3);
-    expect(metrics.horizontalOverflow).toBeLessThanOrEqual(2);
-    expect(metrics.sectionCount).toBeLessThanOrEqual(5);
-    expect(metrics.smallControls).toEqual([]);
-    expect(metrics.svgTextCount).toBe(0);
-    expect(metrics.tinyVisibleText).toEqual([]);
-    if (metrics.viewport) expect(metrics.viewport.width).toBeGreaterThan(800);
-    if (scenario.assertPrivateLabelsHidden) expect(metrics.privateLabelLeaks).toEqual([]);
+    await expect(page.locator(".olympus-roster tbody tr")).toHaveCount(scenario.agents);
+    await expect(page.locator(".olympus-banner .olympus-queue-item")).toHaveCount(Math.min(3, scenario.queue));
+    if (!scenario.queue) await expect(page.locator(".olympus-banner")).toHaveCount(0);
+    expectClean(await collectVisualMetrics(page, 24), messages, scenario);
+    expect((await collectVisualMetrics(page, 24)).clippedCells).toEqual([]);
+
+    await page.locator(".olympus-roster tbody tr").first().click();
+    await expect(page.locator(".olympus-inspector h2")).toBeVisible();
+    await expect(page.locator(".olympus-inspector-section").first()).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`olympus-${scenario.name}-inspector.png`), fullPage: true });
+    expectClean(await collectVisualMetrics(page, 24), messages, scenario);
   });
 
-  test(`mobile ${scenario.name} viewport stacks without microscopic labels`, async ({ page }, testInfo) => {
-    const messages = await openFixture(page, testInfo, { width: 390, height: 844 }, scenario.name);
-    await assertBriefOnly(page);
-    await assertAbsentSections(page, scenario.absentSections);
-    const metrics = await collectVisualMetrics(page);
+  test(`mobile ${scenario.name}: agents stack as cards and the inspector fills the screen`, async ({ page }, testInfo) => {
+    const messages = await openFixture(page, testInfo, MOBILE, { state: scenario.name });
 
-    expect(messages).toEqual([]);
-    expect(metrics.agentCards).toBeGreaterThanOrEqual(scenario.minAgentCards);
-    expect(metrics.badCopyPhrases).toEqual([]);
-    expect(metrics.evidenceSourcesVisible).toBe(false);
-    expect(metrics.policyVisible).toBe(false);
-    expect(metrics.traceSpineVisible).toBe(false);
-    expect(metrics.opsEvalsVisible).toBe(false);
-    expect(metrics.metricsSpineVisible).toBe(false);
-    expect(metrics.pantheonVisible).toBe(false);
-    expect(metrics.badLinks).toEqual([]);
-    expect(metrics.modeTabs.map((item) => item.text)).toEqual(["Brief", "Agents", "Skills", "Kanban", "Policy", "Diagnostics"]);
-    expect(metrics.agentMonitorTiles).toBeLessThanOrEqual(6);
-    expect(metrics.visibleTuningItems).toBeLessThanOrEqual(3);
-    expect(metrics.horizontalOverflow).toBeLessThanOrEqual(2);
-    expect(metrics.sectionCount).toBeGreaterThanOrEqual(scenario.expectedSections.length);
-    expect(metrics.smallControls).toEqual([]);
-    expect(metrics.svgTextCount).toBe(0);
-    expect(metrics.tinyVisibleText).toEqual([]);
-    if (metrics.viewport) expect(metrics.viewport.width).toBeLessThanOrEqual(340);
-    if (scenario.assertPrivateLabelsHidden) expect(metrics.privateLabelLeaks).toEqual([]);
+    const firstRow = page.locator(".olympus-roster tbody tr").first();
+    await expect(firstRow).toHaveCSS("display", "grid");
+    expectClean(await collectVisualMetrics(page, 32), messages, scenario);
+
+    await firstRow.click();
+    const inspector = page.locator(".olympus-inspector");
+    await expect(inspector).toHaveCSS("position", "fixed");
+    const box = await inspector.boundingBox();
+    expect(Math.round(box.width)).toBeGreaterThanOrEqual(MOBILE.width - 20);
+    await page.screenshot({ path: testInfo.outputPath(`olympus-${scenario.name}-mobile-inspector.png`) });
+    await page.getByRole("button", { name: "Back to agents" }).click();
+    await expect(inspector).toHaveCount(0);
+    expectClean(await collectVisualMetrics(page, 32), messages, scenario);
   });
 }
 
-test("desktop noisy mode navigation stages deep inspection panels", async ({ page }, testInfo) => {
-  const messages = await openFixture(page, testInfo, { width: 1280, height: 720 }, "noisy");
-  expect(messages).toEqual([]);
-  await assertBriefOnly(page);
+for (const size of [DESKTOP, MOBILE]) {
+  test(`checks view at ${size.width}px reads as lists, not tiles`, async ({ page }, testInfo) => {
+    const messages = await openFixture(page, testInfo, size, { state: "noisy", view: "checks" });
 
-  for (const [label, sections] of Object.entries(stagedModeSections)) {
-    await selectMode(page, label);
-    await assertExpectedSections(page, sections);
-    const metrics = await collectVisualMetrics(page);
-    expect(metrics.horizontalOverflow).toBeLessThanOrEqual(2);
-    expect(metrics.smallControls).toEqual([]);
-    expect(metrics.tinyVisibleText).toEqual([]);
-  }
+    for (const title of ["Findings", "Backlog", "Skills", "Policy", "Where spend goes"]) {
+      await expect(page.getByRole("heading", { level: 2, name: title, exact: true })).toBeVisible();
+    }
+    await expect(page.getByRole("heading", { level: 2, name: /^Readiness \d+/ })).toBeVisible();
+    await page.locator(".olympus-debug > summary").click();
+    await expect(page.locator(".olympus-debug")).toContainText("Scan built in");
+    expectClean(await collectVisualMetrics(page, size === MOBILE ? 32 : 24), messages, { name: "checks" });
+  });
+}
+
+test("the page follows a light Hermes theme", async ({ page }, testInfo) => {
+  const messages = await openFixture(page, testInfo, DESKTOP, { state: "noisy", theme: "light" });
+  const colors = await page.evaluate(() => {
+    const css = (selector, prop) => window.getComputedStyle(document.querySelector(selector))[prop];
+    return { text: css(".olympus-page", "color"), body: css("body", "backgroundColor") };
+  });
+  expect(colors.text).toBe("rgb(23, 13, 2)");
+  expect(colors.body).toBe("rgb(232, 242, 253)");
+  expect(messages).toEqual([]);
 });
 
-test("static user-plugin mode falls back to Hermes dashboard APIs", async ({ page }, testInfo) => {
-  const messages = await openFixture(page, testInfo, { width: 1280, height: 720 }, "static-user-plugin");
+test("with the backend off, Olympus lists the agents and says how to enable it", async ({ page }, testInfo) => {
+  const messages = await openFixture(page, testInfo, DESKTOP, { state: "static-user-plugin" });
 
+  const notice = page.locator(".olympus-backend-off");
+  await expect(notice).toContainText("The Olympus backend is not running");
+  await expect(notice).toContainText("hermes plugins enable olympus");
+  await expect(page.locator(".olympus-static-roster li")).toHaveCount(3);
+  await expect(page.locator(".olympus-static-roster")).not.toContainText("vulcan");
+  await expect(page.locator(".olympus-banner")).toHaveCount(0);
   expect(messages).toEqual([]);
-  await expect(page.locator(".olympus-static-compatibility")).toBeVisible();
-  await expect(page.locator(".olympus-static-compatibility")).toContainText("Backend Unavailable");
-  await expect(page.locator(".olympus-static-compatibility")).toContainText("/api/dashboard/plugins");
-  await expect(page.locator(".olympus-static-compatibility")).toContainText("Readiness scoring and deductions");
-  await expect(page.locator(".olympus-needs-you")).toContainText("Backend unavailable");
-  await selectMode(page, "Diagnostics");
-  await expect(page.locator(".olympus-diagnostics")).toContainText("Evidence Sources");
-  await expect(page.locator(".olympus-diagnostics")).toContainText("/api/status");
 });

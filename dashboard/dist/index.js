@@ -4,27 +4,15 @@
   const SDK = window.__HERMES_PLUGIN_SDK__;
   const { React } = SDK;
   const { useEffect, useRef, useState } = SDK.hooks;
-  const C = SDK.components || {};
-  const Badge = C.Badge || "span";
-  const Button = C.Button || "button";
 
   const API = "/api/plugins/olympus";
+  const KANBAN_API = "/api/plugins/kanban";
   const POLL_INTERVAL_MS = 10000;
-  const STATIC_BACKEND_REQUIRED = [
-    "Readiness scoring and deductions",
-    "Kanban, Trace Spine, and worker synthesis",
-    "Skill hygiene and profile fitness scoring",
-    "Tool policy and auxiliary cost recommendations",
-    "Operational evals and production diagnostics"
-  ];
-  const OLYMPUS_MODES = [
-    { id: "brief", label: "Brief", summary: "Top actions" },
-    { id: "agents", label: "Agents", summary: "Profiles" },
-    { id: "skills", label: "Skills", summary: "Reuse" },
-    { id: "kanban", label: "Kanban", summary: "Work" },
-    { id: "policy", label: "Policy", summary: "Risk" },
-    { id: "diagnostics", label: "Diagnostics", summary: "Evidence" }
-  ];
+  const BANNER_ITEMS = 3;
+  const TIMELINE_PREVIEW = 12;
+  const NOTICE_MS = 6000;
+  const STATUS_ORDER = ["waiting", "stalled", "failed", "offline", "working", "idle", "unknown"];
+  const ROLE_TEXT = { auto: "Role written by Hermes, not reviewed", missing: "No role description" };
 
   function el(type, props, ...children) {
     return React.createElement(type, props || null, ...children);
@@ -38,25 +26,13 @@
     return Array.isArray(value) ? value : [];
   }
 
-  function stateClass(state) {
-    return "olympus-state olympus-state-" + String(state || "unknown").toLowerCase();
+  function plural(count, one, many) {
+    return count + " " + (count === 1 ? one : many || one + "s");
   }
 
-  function StatePill({ state, label }) {
-    return el("span", { className: stateClass(state) }, label || state || "unknown");
-  }
-
-  // Metric tiles show a chip only when the value needs attention; healthy,
-  // idle and unknown values stay quiet so warnings keep their meaning.
-  const PROBLEM_STATES = new Set(["warning", "critical", "error", "failed", "stale", "blocked"]);
-
-  function MetricPill({ state, label }) {
-    return PROBLEM_STATES.has(String(state || "").toLowerCase()) ? el(StatePill, { state, label }) : null;
-  }
-
-  function severityClass(severity) {
-    return "olympus-severity olympus-severity-" + String(severity || "info").toLowerCase();
-  }
+  // ---------------------------------------------------------------------
+  // Links and URL state
+  // ---------------------------------------------------------------------
 
   const SAFE_ROUTES = new Set(["/analytics", "/config", "/cron", "/kanban", "/logs", "/profiles", "/sessions", "/skills"]);
 
@@ -96,51 +72,78 @@
     return labels[route] || "Open Route";
   }
 
-  // Tuning items name sessions by hashed ref. The raw session ID is looked up
-  // only when the operator clicks, and opens in Hermes chat.
-  function SessionLink({ target }) {
-    const [state, setState] = useState("idle");
-    function open() {
-      setState("opening");
-      SDK.fetchJSON(API + "/open/session?ref=" + encodeURIComponent(target.ref))
-        .then((result) => {
-          if (result && result.href) {
-            window.location.assign(basePath() + result.href);
-            return;
-          }
-          setState("missing");
-        })
-        .catch(() => setState("missing"));
-    }
-    return el("button", { type: "button", className: "olympus-session-link", onClick: open, disabled: state !== "idle" },
-      state === "missing" ? "Session no longer available" : state === "opening" ? "Opening\u2026" : "Open " + (target.label || "session") + " session"
-    );
+  // The open agent and the view live in the URL so a refresh or a shared
+  // link lands in the same place. Other parameters (?profile=) are kept.
+  function readParam(name) {
+    return new URLSearchParams(window.location.search).get(name);
   }
 
-  function SessionLinks({ targets }) {
-    const sessions = asList(targets).filter((target) => target && target.kind === "session" && target.ref);
-    if (!sessions.length) return null;
-    return el("div", { className: "olympus-session-links" },
-      sessions.map((target) => el(SessionLink, { key: target.ref, target }))
-    );
+  function writeParam(name, value) {
+    const params = new URLSearchParams(window.location.search);
+    if (value) params.set(name, value);
+    else params.delete(name);
+    const query = params.toString();
+    window.history.replaceState(window.history.state, "", window.location.pathname + (query ? "?" + query : "") + window.location.hash);
+  }
+
+  // ---------------------------------------------------------------------
+  // Formatting: one duration format everywhere ("45 s", "12 min", "3 h", "2 d").
+  // ---------------------------------------------------------------------
+
+  function parseTime(iso) {
+    const ts = iso ? Date.parse(iso) : NaN;
+    return Number.isFinite(ts) ? ts : null;
+  }
+
+  function formatSpan(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return s + " s";
+    if (s < 3600) return Math.round(s / 60) + " min";
+    if (s < 86400) return Math.round(s / 3600) + " h";
+    return Math.round(s / 86400) + " d";
+  }
+
+  function ago(iso, now) {
+    const ts = parseTime(iso);
+    return ts == null ? null : formatSpan((now || Date.now()) - ts) + " ago";
+  }
+
+  function elapsed(iso, now) {
+    const ts = parseTime(iso);
+    return ts == null ? null : "for " + formatSpan((now || Date.now()) - ts);
+  }
+
+  function until(iso, now) {
+    const ts = parseTime(iso);
+    if (ts == null) return null;
+    const delta = ts - (now || Date.now());
+    return delta >= 0 ? "in " + formatSpan(delta) : formatSpan(-delta) + " late";
+  }
+
+  function clockTime(iso) {
+    const ts = parseTime(iso);
+    return ts == null ? "" : new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
   function formatCount(value) {
-    const n = Number(value || 0);
-    return n.toLocaleString();
+    return Number(value || 0).toLocaleString();
   }
 
-  function formatDuration(seconds) {
-    const n = Number(seconds || 0);
-    if (!Number.isFinite(n) || n <= 0) return "none";
-    if (n < 60) return Math.round(n) + "s";
-    if (n < 3600) return Math.round(n / 60) + "m";
-    return (n / 3600).toFixed(1) + "h";
+  function formatTokens(value) {
+    const n = Number(value || 0);
+    if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k";
+    return String(Math.round(n));
   }
 
   function formatMoney(value) {
     const n = Number(value || 0);
-    return n > 0 ? "$" + n.toFixed(2) : "unpriced";
+    return n > 0 ? "$" + n.toFixed(2) : "$0.00";
+  }
+
+  function formatDuration(seconds) {
+    const n = Number(seconds || 0);
+    return Number.isFinite(n) && n > 0 ? formatSpan(n * 1000) : "none";
   }
 
   function formatBytes(value) {
@@ -155,179 +158,82 @@
     return String(error && error.message ? error.message : error || "request failed");
   }
 
-  function safeFetchJSON(path) {
-    return SDK.fetchJSON(path)
-      .then((value) => ({ ok: true, path, value }))
-      .catch((error) => ({ ok: false, path, error: toErrorMessage(error) }));
+  // A clock that re-renders its subtree every second, for "N s ago" text.
+  function useNow(intervalMs) {
+    const [now, setNow] = useState(Date.now());
+    useEffect(() => {
+      const timer = window.setInterval(() => setNow(Date.now()), intervalMs);
+      return () => window.clearInterval(timer);
+    }, [intervalMs]);
+    return now;
   }
 
-  function buildStaticCompatibilityData(reason, results) {
-    const plugins = asList(results.plugins && results.plugins.value);
-    const olympus = plugins.find((item) => item && item.name === "olympus") || null;
-    const status = results.status && results.status.ok && results.status.value || {};
-    const profiles = asList(results.profiles && results.profiles.value && results.profiles.value.profiles);
-    const skills = asList(results.skills && results.skills.value);
-    const sessionStats = results.sessionStats && results.sessionStats.ok && results.sessionStats.value || {};
-    const cronJobsRaw = results.cronJobs && results.cronJobs.ok && results.cronJobs.value;
-    const cronJobs = Array.isArray(cronJobsRaw) ? cronJobsRaw : asList(cronJobsRaw && cronJobsRaw.jobs);
-    const apiResults = [results.plugins, results.status, results.profiles, results.skills, results.sessionStats, results.cronJobs]
-      .filter(Boolean);
-    const availableCount = apiResults.filter((item) => item.ok).length;
-    const frontendApis = apiResults.map((item) => ({
-      id: item.path,
-      label: item.path,
-      type: "Hermes dashboard API",
-      state: item.ok ? "ok" : "warning",
-      counts: item.ok ? { responses: 1 } : { errors: 1 },
-      fields: item.ok ? ["read-only JSON"] : [],
-      redaction: item.ok ? "available" : item.error || "unavailable",
-      recommended_view: item.path === "/api/dashboard/plugins" ? "/config" : ""
-    }));
-    const profileRows = profiles.slice(0, 6).map((profile, idx) => ({
-      id: "profile:" + idx,
-      label: "Profile " + String(idx + 1),
-      role_state: null,
-      route: "inherited",
-      gateway_state: "unknown",
-      running: 0,
-      open: 0,
-      blocked: 0,
-      sessions_7d: 0,
-      spend_7d_usd: 0,
-      last_active_at: null,
-      state: "unknown",
-      top_issue: null,
-      reasons: [],
-      recommended_view: "/profiles"
-    }));
+  // ---------------------------------------------------------------------
+  // Identity: laurel mark, serif wordmark, one Greek-key hairline.
+  // ---------------------------------------------------------------------
 
-    return {
-      generated_at: new Date().toISOString(),
-      static_compatibility: {
-        enabled: true,
-        reason: reason || "Olympus backend route unavailable",
-        frontend_available: ["/api/dashboard/plugins", "/api/status", "/api/profiles", "/api/skills", "/api/sessions/stats", "/api/cron/jobs"],
-        backend_required: STATIC_BACKEND_REQUIRED
-      },
-      health: {
-        status: "warning",
-        status_label: "Backend unavailable",
-        summary: "Olympus backend synthesis is unavailable, so this tab is showing a read-only compatibility view from existing Hermes dashboard APIs."
-      },
-      tuning: {
-        score: 0,
-        score_breakdown: {
-          base: 0,
-          score: 0,
-          label: "Backend unavailable",
-          explanation: "Readiness scoring requires /api/plugins/olympus/overview. Current user-plugin installs should mount it when manifest.api is safe; project plugins stay static-only.",
-          deductions: [{ label: "Olympus backend unavailable", points: 0, reason: reason || "backend unavailable", evidence: "/api/plugins/olympus/overview unavailable", source: "frontend compatibility fallback" }]
-        },
-        methodology: {
-          thresholds: STATIC_BACKEND_REQUIRED.map((item) => ({ signal: item, threshold: "requires mounted Olympus backend", why: "First-party Hermes dashboard APIs expose page data, not Olympus' redacted synthesis model." })),
-          sources: frontendApis.map((item) => ({ label: item.label, detail: item.redaction }))
-        },
-        agent_hq: {
-          summary: { agents: profiles.length, recommendations: 2, total_tokens: 0, looping_sessions: 0, context_pressure_sessions: 0, total_cost_usd: 0 },
-          metrics: { median_duration_seconds: 0, p90_duration_seconds: 0, total_tokens: 0, total_tool_calls: 0, failed_kanban_runs: 0 },
-          agents: [],
-          recommendations: [
-            { kind: "compatibility", severity: "warning", title: "Backend unavailable", detail: "Hermes served the Olympus tab, but the Olympus backend routes did not mount. Check plugin source, safe API path, dashboard restart state, and Hermes version.", evidence: reason || "backend unavailable", recommended_view: "/config", action_label: "Open Config" },
-            { kind: "integration", severity: "info", title: "Fallback APIs are limited", detail: "Existing Hermes dashboard APIs provide counts and links; Olympus scoring and evidence synthesis require mounted backend routes.", evidence: availableCount + " of " + apiResults.length + " fallback APIs responded", recommended_view: "/profiles", action_label: "Open Profiles" }
-          ]
-        }
-      },
-      fleet: { summary: { profiles: profiles.length, needs_review: 0, roles_missing: 0, roles_unreviewed: 0 }, profiles: profileRows },
-      skill_coverage: {
-        summary: { profiles: profiles.length, total_skills: skills.length, zero_skill_profiles: 0, forced_skill_tasks: 0, looping_sessions: 0, tool_heavy_sessions: 0, long_threads: 0, context_pressure_sessions: 0 },
-        suggestions: [{ kind: "compatibility", severity: "info", title: "Skill counts available; skill coverage synthesis unavailable", detail: "The frontend can read /api/skills, but repeated-use recommendations require the Olympus backend collectors.", evidence: formatCount(skills.length) + " skills returned by /api/skills", recommended_view: "/skills", action_label: "Open Skills" }],
-        profiles: []
-      },
-      skill_hygiene: { summary: { state: "unknown", issues: 0, total_skills: skills.length, archived: 0, stale: 0, never_used: 0, recently_patched: 0, hub_installed: 0, hub_missing_trust: 0, hub_missing_scan: 0, hub_audit_pass: 0, hub_audit_warn: 0, hub_audit_fail: 0, forced_skill_metadata_gaps: 0 }, signals: [], usage: [], hub: [] },
-      performance: {
-        summary: { state: "unknown", window_sessions: sessionStats.total || 0, completed_sessions: 0, total_tokens: 0, total_tool_calls: 0, avg_tools_per_session: 0, avg_tokens_per_call: 0, total_cost_usd: 0 },
-        lanes: [
-          { id: "sessions", label: "Sessions", value: sessionStats.total || 0, unit: "count", state: sessionStats.total ? "active" : "idle", detail: "Count from /api/sessions/stats; no transcript content read.", source: "Hermes dashboard API", recommended_view: "/sessions" },
-          { id: "cron", label: "Cron Jobs", value: cronJobs.length, unit: "count", state: cronJobs.length ? "active" : "idle", detail: "Job count from /api/cron/jobs; scheduling synthesis requires backend mode.", source: "Hermes dashboard API", recommended_view: "/cron" }
-        ],
-        signals: []
-      },
-      diagnostics: { state: "warning", generated_ms: 0, payload_bytes: 0, budgets: { api_response_ms: 750, client_render_ms: 150 }, budget_status: { api_response: "unknown", payload: "unknown" }, counts: { kanban_boards_scanned: 0, kanban_board_read_failures: 0 }, hermes: { version: status.version || "unknown" } },
-      evidence_sources: {
-        summary: { sources: frontendApis.length, available: availableCount, warnings: apiResults.length - availableCount, missing: 0 },
-        items: [{ id: "olympus-manifest", label: "Olympus manifest", type: "dashboard plugin discovery", state: olympus ? "ok" : "warning", counts: { plugins: plugins.length }, fields: olympus ? ["source: " + (olympus.source || "unknown"), "has_api: " + String(Boolean(olympus.has_api))] : [], redaction: olympus ? "Manifest visible through /api/dashboard/plugins." : "Olympus manifest not found in /api/dashboard/plugins.", recommended_view: "/config" }, ...frontendApis]
-      },
-      config_policy: {
-        summary: { state: "warning", findings: 1, toolsets: 0, enabled_toolsets: 0, risky_toolsets: 0, max_turns: 0, aux_configured: 0, aux_missing: 0, gateway_platforms: Object.keys(status.gateway_platforms || {}).length, browser_privacy_flags: 0 },
-        settings: [],
-        findings: [{ kind: "compatibility", severity: "warning", title: "Policy synthesis hidden in static mode", detail: "The frontend does not inspect config/env details directly. Use Hermes-owned config pages or bundled Olympus backend mode.", evidence: "Static compatibility fallback", recommended_view: "/config", action_label: "Open Config" }]
-      },
-      ops_evals: null,
-      metrics_spine: null,
-      trace_spine: null,
-      kanban: null,
-      party: null,
-      orchestration: null,
-      activity_events: []
-    };
-  }
-
-  function loadStaticCompatibility(reason) {
-    return Promise.all([
-      safeFetchJSON("/api/dashboard/plugins"),
-      safeFetchJSON("/api/status"),
-      safeFetchJSON("/api/profiles"),
-      safeFetchJSON("/api/skills"),
-      safeFetchJSON("/api/sessions/stats"),
-      safeFetchJSON("/api/cron/jobs")
-    ]).then((items) => buildStaticCompatibilityData(reason, { plugins: items[0], status: items[1], profiles: items[2], skills: items[3], sessionStats: items[4], cronJobs: items[5] }));
-  }
-
-  function StaticCompatibilityNotice({ compatibility }) {
-    const info = compatibility || {};
-    if (!info.enabled) return null;
-    return el("section", { className: "olympus-section olympus-static-compatibility" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Backend Unavailable"),
-          el("p", null, "Hermes served the Olympus tab, but /api/plugins/olympus/* is unavailable. User-plugin backends should mount on current Hermes when manifest.api is safe; project plugins stay static-only.")
-        ),
-        el(StatePill, { state: "warning", label: "frontend only" })
-      ),
-      el("div", { className: "olympus-policy-grid" },
-        el("div", { className: "olympus-policy-pane" },
-          el("h3", null, "Works with existing Hermes APIs"),
-          asList(info.frontend_available).map((item) => el("div", { key: item, className: "olympus-mini-row" }, el("span", null, item), el("small", null, "read-only dashboard API")))
-        ),
-        el("div", { className: "olympus-policy-pane" },
-          el("h3", null, "Requires mounted backend"),
-          asList(info.backend_required).map((item) => el("div", { key: item, className: "olympus-mini-row" }, el("span", null, item), el("small", null, "not synthesized in static mode")))
-        )
-      ),
-      info.reason ? el("p", { className: "olympus-muted" }, info.reason) : null
+  function Laurel() {
+    const leaf = (x, y, angle) => el("ellipse", { key: x + "," + y, cx: x, cy: y, rx: 1.3, ry: 2.6, transform: "rotate(" + angle + " " + x + " " + y + ")" });
+    return el("svg", { className: "olympus-laurel", viewBox: "0 0 24 24", width: 22, height: 22, "aria-hidden": "true", focusable: "false" },
+      el("path", { d: "M11 21C6.5 18.5 4.2 13.5 5.2 7.5M13 21c4.5-2.5 6.8-7.5 5.8-13.5", fill: "none", stroke: "currentColor", strokeWidth: 1.2, strokeLinecap: "round" }),
+      el("g", { fill: "none", stroke: "currentColor", strokeWidth: 1 },
+        leaf(5.6, 17, -50), leaf(4.3, 13, -25), leaf(4.4, 8.8, 0),
+        leaf(18.4, 17, 50), leaf(19.7, 13, 25), leaf(19.6, 8.8, 0)
+      )
     );
   }
 
-  function needsYou(tuning) {
-    const hq = (tuning && tuning.agent_hq) || {};
-    return asList(hq.recommendations).filter((item) => item.severity === "critical" || item.severity === "warning");
+  function GreekKey() {
+    return el("svg", { className: "olympus-key", width: "100%", height: 8, "aria-hidden": "true", focusable: "false" },
+      el("defs", null,
+        el("pattern", { id: "olympus-key-unit", width: 12, height: 8, patternUnits: "userSpaceOnUse" },
+          el("path", { d: "M0 7.5H10.5V0.5H2.5V5H7.5V3M10.5 7.5H12", fill: "none", stroke: "currentColor", strokeWidth: 1 })
+        )
+      ),
+      el("rect", { width: "100%", height: 8, fill: "url(#olympus-key-unit)" })
+    );
   }
 
-  // A 14-day readiness trend drawn as a bare polyline: no text inside the SVG
-  // (labels stay HTML), hidden from assistive tech because the change is
-  // announced in words next to it.
+  // A soft tint per agent, derived from its id, so the same agent keeps the
+  // same avatar across views. The initial is the only text.
+  function avatarHue(id) {
+    let hash = 0;
+    for (const ch of String(id || "")) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+    return hash % 360;
+  }
+
+  function Avatar({ agent, size }) {
+    if (!agent) return el("span", { className: "olympus-avatar olympus-avatar-fleet", "aria-hidden": "true" }, "∗");
+    return el("span", {
+      className: cx("olympus-avatar", size === "large" && "olympus-avatar-large"),
+      style: { "--olympus-avatar-hue": avatarHue(agent.id) },
+      "aria-hidden": "true"
+    }, agent.avatar || String(agent.label || "?").slice(0, 1).toUpperCase());
+  }
+
+  function StatusPill({ status, label }) {
+    return el("span", { className: "olympus-status olympus-status-" + (status || "unknown") },
+      el("span", { className: "olympus-status-dot", "aria-hidden": "true" }),
+      label || "Not checked"
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // Charts
+  // ---------------------------------------------------------------------
+
+  // Readiness trend: a bare polyline; the change is stated in words beside it.
   function Sparkline({ points }) {
     const values = points.filter((value) => typeof value === "number");
     if (values.length < 2) return null;
-    const width = 120;
-    const height = 28;
-    // Scale to the recent range so a few points of movement stay visible.
+    const width = 56;
+    const height = 16;
     const min = Math.max(0, Math.min(...values) - 5);
     const max = Math.min(100, Math.max(...values) + 5);
     const step = width / (values.length - 1);
     const coords = values.map((value, idx) => (idx * step).toFixed(1) + "," + (height - ((value - min) / (max - min || 1)) * height).toFixed(1));
     return el("svg", { className: "olympus-sparkline", viewBox: "0 0 " + width + " " + height, width, height, "aria-hidden": "true", focusable: "false" },
-      el("polyline", { points: coords.join(" "), fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinejoin: "round", strokeLinecap: "round" })
+      el("polyline", { points: coords.join(" "), fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinejoin: "round", strokeLinecap: "round" })
     );
   }
 
@@ -337,1216 +243,984 @@
       return Number((history && history.recorded_days) || 0) ? "trend after 1 more day" : "trend starts today";
     }
     if (change === 0) return "no change in 7 days";
-    return (change > 0 ? "+" : "\u2212") + Math.abs(change) + " in 7 days";
+    return (change > 0 ? "+" : "−") + Math.abs(change) + " in 7 days";
   }
 
-  function Hero({ health, tuning, history, loading, onRefresh }) {
-    const status = health.status || (loading ? "checking" : "unknown");
-    const statusLabel = health.status_label || status;
-    const breakdown = tuning.score_breakdown || {};
-    const metrics = (tuning.agent_hq && tuning.agent_hq.metrics) || {};
-    const urgent = needsYou(tuning);
-    const sessions24h = Number(metrics.sessions_24h || 0);
-    const facts = [
-      ["Needs you", urgent.length ? urgent.length + (urgent.length === 1 ? " item" : " items") : "Nothing urgent"],
-      ["Spend, last 24h", sessions24h ? formatMoney(metrics.spend_24h_usd) + " across " + sessions24h + (sessions24h === 1 ? " session" : " sessions") : "No sessions"],
-      ["Session window", (metrics.window && metrics.window.label) || breakdown.window || "No sessions yet"],
-    ];
-    return el("section", { className: "olympus-hero" },
-      el("div", { className: "olympus-hero-copy" },
-        el("div", { className: "olympus-hero-title" },
-          el("h1", null, "Olympus"),
-          el(StatePill, { state: status, label: statusLabel }),
-          el(Button, { className: "olympus-refresh", onClick: onRefresh, disabled: loading }, loading ? "Refreshing" : "Refresh")
-        ),
-        health.summary ? el("p", { className: "olympus-health-summary" }, health.summary) : null,
-        el("dl", { className: "olympus-hero-facts" },
-          facts.map((fact) => el("div", { key: fact[0] },
-            el("dt", null, fact[0]),
-            el("dd", null, fact[1])
-          ))
-        )
-      ),
-      el("div", { className: "olympus-oracle" },
-        el("span", null, "Readiness"),
-        el("strong", null, typeof tuning.score === "number" ? String(tuning.score) : "\u2013"),
-        el("small", null, breakdown.label || "local evidence"),
-        el(Sparkline, { points: asList(history && history.days).map((day) => day.score) }),
-        el("small", { className: "olympus-trend" }, trendLabel(history))
-      )
+  // Seven days of sessions as tiny bars; today is the last bar.
+  function ActivityBars({ days }) {
+    const values = asList(days).map((value) => Number(value || 0));
+    if (!values.length) return el("span", { className: "olympus-muted" }, "–");
+    const max = Math.max(1, ...values);
+    const total = values.reduce((sum, value) => sum + value, 0);
+    return el("span", { className: "olympus-activity", role: "img", "aria-label": plural(total, "session") + " in 7 days" },
+      values.map((value, idx) => el("span", {
+        key: idx,
+        className: cx("olympus-activity-bar", idx === values.length - 1 && "olympus-activity-today"),
+        style: { height: Math.max(2, Math.round((value / max) * 16)) + "px" }
+      }))
     );
   }
 
-  function FixButton({ item, tracked, onFixes }) {
+  const TOKEN_SERIES = [
+    { key: "input_tokens", label: "Input", className: "olympus-series-input" },
+    { key: "cache_tokens", label: "Cache", className: "olympus-series-cache" },
+    { key: "output_tokens", label: "Output", className: "olympus-series-output" }
+  ];
+
+  function dayName(day) {
+    const ts = Date.parse(day + "T12:00:00Z");
+    return Number.isFinite(ts) ? new Date(ts).toLocaleDateString([], { weekday: "short", timeZone: "UTC" }) : day;
+  }
+
+  // Stacked bars: tokens per UTC day, input / cache / output.
+  function TokenChart({ days }) {
+    const rows = asList(days);
+    const totals = rows.map((day) => TOKEN_SERIES.reduce((sum, series) => sum + Number(day[series.key] || 0), 0));
+    const max = Math.max(...totals, 0);
+    const summary = rows.map((day, idx) => dayName(day.day) + " " + formatTokens(totals[idx])).join(", ");
+    return el("figure", { className: "olympus-token-chart" },
+      el("figcaption", null,
+        el("span", null, "Tokens per day"),
+        el("span", { className: "olympus-legend" },
+          TOKEN_SERIES.map((series) => el("span", { key: series.key }, el("i", { className: series.className, "aria-hidden": "true" }), series.label))
+        )
+      ),
+      max ? el("div", { className: "olympus-token-bars", role: "img", "aria-label": "Tokens per day, last 7 days: " + summary },
+        rows.map((day, idx) => el("div", { key: day.day, className: "olympus-token-day", title: dayName(day.day) + ": " + formatCount(totals[idx]) + " tokens" },
+          el("div", { className: "olympus-token-stack", style: { height: Math.round((totals[idx] / max) * 100) + "%" } },
+            TOKEN_SERIES.map((series) => totals[idx] ? el("span", {
+              key: series.key,
+              className: series.className,
+              style: { flexGrow: Number(day[series.key] || 0) }
+            }) : null)
+          ),
+          el("small", null, dayName(day.day))
+        ))
+      ) : el("p", { className: "olympus-muted" }, "No tokens recorded in the last 7 days."),
+      max ? el("small", { className: "olympus-chart-scale" }, "Peak " + formatTokens(max) + " tokens") : null
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // Controls: every action is confirmed in a popover that states its exact
+  // effect, runs through Hermes' own endpoint, and is logged by Olympus.
+  // ---------------------------------------------------------------------
+
+  function jsonRequest(method, body) {
+    return { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  }
+
+  async function resolveTarget(kind, ref, board) {
+    const query = "kind=" + encodeURIComponent(kind) + "&ref=" + encodeURIComponent(ref) + (board ? "&board=" + encodeURIComponent(board) : "");
+    const found = await SDK.fetchJSON(API + "/resolve?" + query);
+    if (!found.allowed) throw new Error(found.reason || "Controls are off.");
+    if (!found.found) throw new Error("Hermes no longer has this item. It may have changed since the last refresh.");
+    return found;
+  }
+
+  async function performAction(action, input) {
+    const target = action.target;
+    if (action.id === "fix") {
+      const result = await SDK.fetchJSON(API + "/fixes?key=" + encodeURIComponent(target.ref), { method: "POST" });
+      if (!result.tracked) throw new Error("This finding already cleared.");
+      return result;
+    }
+    if (target.kind === "cron") {
+      const verb = { pause: "pause", resume: "resume", run_now: "trigger" }[action.id];
+      let result = null;
+      // "Pause all scheduled" carries several jobs; each is its own call.
+      for (const ref of target.refs || [target.ref]) {
+        const job = await resolveTarget("cron", ref);
+        result = await SDK.fetchJSON("/api/cron/jobs/" + encodeURIComponent(job.job_id) + "/" + verb + "?profile=" + encodeURIComponent(job.profile), { method: "POST" });
+      }
+      return result;
+    }
+    const task = await resolveTarget("task", target.ref, target.board);
+    const url = KANBAN_API + "/tasks/" + encodeURIComponent(task.task_id);
+    const board = "?board=" + encodeURIComponent(task.board);
+    if (action.id === "answer") {
+      await SDK.fetchJSON(url + "/comments" + board, jsonRequest("POST", { body: input.text }));
+      return SDK.fetchJSON(url + board, jsonRequest("PATCH", { status: "ready" }));
+    }
+    if (action.id === "retry") return SDK.fetchJSON(url + board, jsonRequest("PATCH", { status: "ready" }));
+    if (action.id === "reclaim") return SDK.fetchJSON(url + "/reclaim" + board, jsonRequest("POST", { reason: "Reclaimed from Olympus" }));
+    const profile = await resolveTarget("profile", input.agent);
+    return SDK.fetchJSON(url + "/reassign" + board, jsonRequest("POST", {
+      profile: profile.profile,
+      reclaim_first: target.status === "running",
+      reason: "Reassigned from Olympus"
+    }));
+  }
+
+  function logAction(action, subject, agentId, ok, detail) {
+    if (action.id === "fix") return Promise.resolve();
+    const params = new URLSearchParams({ action: action.id, kind: action.target.kind, ref: action.target.ref, label: subject, ok: ok ? "true" : "false" });
+    if (agentId) params.set("agent", agentId);
+    if (detail) params.set("detail", detail);
+    return SDK.fetchJSON(API + "/actions?" + params.toString(), { method: "POST" }).catch(() => undefined);
+  }
+
+  const DONE_TEXT = {
+    answer: "Answer posted; back to ready",
+    retry: "Moved back to ready",
+    reclaim: "Worker stopped; back to ready",
+    reassign: "Reassigned",
+    assign: "Assigned",
+    pause: "Paused",
+    resume: "Resumed",
+    run_now: "Started",
+    fix: "Tracking your fix"
+  };
+
+  function ActionButton({ action, subject, agentId, agents, controls, onDone, primary }) {
+    const [open, setOpen] = useState(false);
+    const [phase, setPhase] = useState("idle");
+    const [message, setMessage] = useState("");
+    const [text, setText] = useState("");
+    const [choice, setChoice] = useState("");
+    const box = useRef(null);
+    const trigger = useRef(null);
+    const needsAgent = action.id === "reassign" || action.id === "assign";
+    const choices = asList(agents).filter((agent) => agent.id !== agentId);
+
+    useEffect(() => {
+      if (!open) return undefined;
+      const field = box.current && box.current.querySelector("textarea, select, button");
+      if (field) field.focus();
+      function outside(event) {
+        if (box.current && !box.current.contains(event.target) && trigger.current && !trigger.current.contains(event.target)) setOpen(false);
+      }
+      document.addEventListener("mousedown", outside);
+      return () => document.removeEventListener("mousedown", outside);
+    }, [open]);
+
+    if (action.id !== "fix" && !controls) return null;
+
+    function close() {
+      setOpen(false);
+      if (trigger.current) trigger.current.focus();
+    }
+
+    const name = action.target.name || subject;
+
+    function confirm() {
+      setPhase("pending");
+      setMessage("");
+      performAction(action, { text: text.trim(), agent: choice })
+        .then(() => {
+          setPhase("done");
+          setOpen(false);
+          logAction(action, name, agentId, true, null);
+          onDone(DONE_TEXT[action.id] + ": " + name);
+        })
+        .catch((error) => {
+          const reason = toErrorMessage(error);
+          setPhase("failed");
+          setMessage(reason);
+          logAction(action, name, agentId, false, reason);
+        });
+    }
+
+    const blocked = (action.id === "answer" && !text.trim()) || (needsAgent && !choice) || phase === "pending";
+    const labelText = phase === "pending" ? action.label + "…" : action.label;
+    return el("span", {
+      className: "olympus-action",
+      onClick: (event) => event.stopPropagation(),
+      onKeyDown: (event) => {
+        // Keys pressed on a control never reach the roster row behind it;
+        // Escape closes the popover first and only then the inspector.
+        if (event.key === "Escape") {
+          if (open) { event.stopPropagation(); close(); }
+          return;
+        }
+        event.stopPropagation();
+      }
+    },
+      phase === "done" ? el("span", { className: "olympus-action-done", role: "status" }, DONE_TEXT[action.id] || "Done") : el("button", {
+        type: "button",
+        ref: trigger,
+        className: cx("olympus-button", primary && "olympus-button-primary"),
+        "aria-expanded": open ? "true" : "false",
+        "aria-haspopup": "dialog",
+        disabled: phase === "pending",
+        onClick: () => setOpen(!open)
+      }, labelText),
+      open ? el("div", { ref: box, className: "olympus-popover", role: "dialog", "aria-label": action.label + ": " + subject },
+        el("p", null, action.effect),
+        action.id === "answer" ? el("textarea", {
+          rows: 3,
+          value: text,
+          placeholder: "Your answer",
+          "aria-label": "Your answer",
+          onChange: (event) => setText(event.target.value)
+        }) : null,
+        needsAgent ? el("label", { className: "olympus-popover-field" },
+          el("span", null, "Give it to"),
+          el("select", { value: choice, onChange: (event) => setChoice(event.target.value) },
+            el("option", { value: "" }, "Choose an agent"),
+            choices.map((agent) => el("option", { key: agent.id, value: agent.id }, agent.label))
+          )
+        ) : null,
+        phase === "failed" ? el("p", { className: "olympus-popover-error", role: "alert" }, "Hermes said: " + message) : null,
+        el("div", { className: "olympus-popover-actions" },
+          el("button", { type: "button", className: "olympus-button olympus-button-primary", disabled: blocked, onClick: confirm },
+            phase === "pending" ? "Working…" : phase === "failed" ? "Try again" : "Confirm"),
+          el("button", { type: "button", className: "olympus-button olympus-button-quiet", onClick: close }, "Cancel")
+        )
+      ) : null
+    );
+  }
+
+  // Sessions are named by hashed ref; the raw id is looked up only on click.
+  function SessionLink({ target }) {
     const [state, setState] = useState("idle");
-    if (!item.key || item.severity === "ok") return null;
-    if (tracked) return el("span", { className: "olympus-fix-tracked" }, "Tracking your fix");
-    function track() {
-      setState("saving");
-      SDK.fetchJSON(API + "/fixes?key=" + encodeURIComponent(item.key), { method: "POST" })
+    function open() {
+      setState("opening");
+      SDK.fetchJSON(API + "/open/session?ref=" + encodeURIComponent(target.ref))
         .then((result) => {
-          if (result && result.tracked) {
-            setState("idle");
-            onFixes(result.fixes);
+          if (result && result.href) {
+            window.location.assign(basePath() + result.href);
             return;
           }
-          setState("gone");
+          setState("missing");
         })
-        .catch(() => setState("failed"));
+        .catch(() => setState("missing"));
     }
-    return el("button", { type: "button", className: "olympus-fix-button", onClick: track, disabled: state !== "idle" },
-      state === "saving" ? "Saving\u2026" : state === "gone" ? "Already cleared" : state === "failed" ? "Could not save" : "I fixed this"
+    return el("button", { type: "button", className: "olympus-link-button", onClick: open, disabled: state !== "idle" },
+      state === "missing" ? "Session no longer available" : state === "opening" ? "Opening…" : "Open " + (target.label || "session") + " session"
     );
   }
 
-  function renderTuningItem(item, idx, fixKeys, onFixes) {
-    return el("article", { key: idx, className: cx("olympus-tuning-item", "olympus-tuning-item-" + String(item.severity || "info").toLowerCase()) },
-      el("div", { className: "olympus-item-head" },
-        el("div", null,
-          el("span", null, String(item.kind || "signal")),
-          el("h4", null, item.title || "Tuning item")
-        ),
-        el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
+  function SessionLinks({ targets }) {
+    const sessions = asList(targets).filter((target) => target && target.kind === "session" && target.ref);
+    if (!sessions.length) return null;
+    return el("span", { className: "olympus-session-links" }, sessions.map((target) => el(SessionLink, { key: target.ref, target })));
+  }
+
+  // ---------------------------------------------------------------------
+  // Header
+  // ---------------------------------------------------------------------
+
+  function census(summary) {
+    const parts = [plural(Number(summary.agents || 0), "agent")];
+    parts.push(Number(summary.working || 0) + " working");
+    parts.push(Number(summary.need_you || 0) ? summary.need_you + " need you" : "none need you");
+    return parts.join(" · ");
+  }
+
+  function Header({ data, view, onView, loading, now }) {
+    const summary = (data && data.agents && data.agents.summary) || {};
+    const tuning = (data && data.tuning) || {};
+    const history = data && data.history;
+    const days = asList(history && history.days);
+    const updated = data && data.generated_at ? ago(data.generated_at, now) : null;
+    return el("header", { className: "olympus-header" },
+      el("div", { className: "olympus-brand" },
+        el(Laurel),
+        el("h1", { className: "olympus-wordmark" }, "Olympus")
       ),
-      el("p", null, item.detail || ""),
-      (item.evidence || item.basis) ? el("small", { className: "olympus-evidence-line" }, [item.evidence, item.basis].filter(Boolean).join(" \u00b7 ")) : null,
-      el("div", { className: "olympus-item-actions" },
-        el(SessionLinks, { targets: item.targets }),
-        onFixes ? el(FixButton, { item, tracked: fixKeys.has(item.key), onFixes }) : null,
-        item.recommended_view ? el("a", { className: "olympus-inline-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
+      el("p", { className: "olympus-census", "aria-live": "polite" },
+        data && data.agents ? census(summary) : data && data.static ? "Agents only: the Olympus backend is off" : "Reading your agents…"),
+      el("div", { className: "olympus-header-meta" },
+        el("span", { className: "olympus-updated" }, loading && !data ? "Loading" : updated ? "Updated " + updated : ""),
+        typeof tuning.score === "number" ? el("button", {
+          type: "button",
+          className: "olympus-readiness",
+          onClick: () => onView("checks", "olympus-check-readiness"),
+          title: (tuning.score_breakdown && tuning.score_breakdown.explanation) || "Readiness from local Hermes evidence"
+        },
+          el("span", null, "Readiness"),
+          el("strong", null, String(tuning.score)),
+          el(Sparkline, { points: days.map((day) => day.score) }),
+          el("small", null, trendLabel(history))
+        ) : null,
+        el("button", { type: "button", className: "olympus-view-switch", onClick: () => onView(view === "checks" ? "agents" : "checks") },
+          view === "checks" ? "Back to agents" : "Checks")
       )
     );
   }
 
-  function NeedsYou({ tuning, fixes, onFixes }) {
-    const hq = (tuning && tuning.agent_hq) || {};
-    const items = asList(hq.recommendations);
+  // ---------------------------------------------------------------------
+  // Needs you: one queue across everything Olympus checks.
+  // ---------------------------------------------------------------------
+
+  // `own`: listed inside that agent's inspector, so the agent is not repeated.
+  function QueueItem({ item, ctx, compact, own }) {
+    const actions = asList(item.actions);
+    const shown = compact ? actions.slice(0, 1) : actions;
+    const subject = item.title;
+    const since = item.since ? elapsed(item.since, ctx.now) : null;
+    return el("li", { className: cx("olympus-queue-item", own && "olympus-queue-item-own") },
+      own ? null : el(Avatar, { agent: item.agent && ctx.agentById[item.agent.id] || item.agent }),
+      el("div", { className: "olympus-queue-text" },
+        el("p", { className: "olympus-queue-title" },
+          own ? null : item.agent ? el("button", { type: "button", className: "olympus-agent-link", onClick: () => ctx.openAgent(item.agent.id) }, item.agent.label) : el("span", { className: "olympus-queue-scope" }, "All agents"),
+          el("span", null, subject)
+        ),
+        el("p", { className: "olympus-queue-detail" }, [item.detail, since].filter(Boolean).join(" · ")),
+        compact ? null : el(SessionLinks, { targets: item.targets })
+      ),
+      el("div", { className: "olympus-queue-actions" },
+        shown.map((action, idx) => el(ActionButton, {
+          key: action.id,
+          action,
+          subject,
+          agentId: item.agent && item.agent.id,
+          agents: ctx.agents,
+          controls: ctx.controls,
+          onDone: ctx.onActionDone,
+          primary: idx === 0
+        })),
+        !shown.length || !ctx.controls && shown.every((action) => action.id !== "fix")
+          ? el("a", { className: "olympus-link", href: routeLink(item.link) }, item.link_label || routeLabel(item.link))
+          : null
+      )
+    );
+  }
+
+  function NeedsYouBanner({ queue, ctx }) {
+    const [expanded, setExpanded] = useState(false);
+    const items = asList(queue);
     if (!items.length) return null;
-    const urgent = needsYou(tuning);
-    const primary = items.slice(0, 3);
-    const backlog = items.slice(3);
-    return el("section", { className: "olympus-section olympus-needs-you" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, urgent.length ? "Needs you (" + urgent.length + ")" : "Nothing urgent"),
-          el("p", null, urgent.length ? "Ranked by severity. Each item names its evidence and the Hermes page that owns the fix." : "No warning or critical findings in this scan.")
-        )
-      ),
-      el("div", { className: "olympus-hq-tuning-items" },
-        primary.map((item, idx) => renderTuningItem(item, idx, new Set(asList(fixes).map((fix) => fix.key)), onFixes)),
-        backlog.length ? el("details", { className: "olympus-details olympus-backlog-details" },
-          el("summary", null, "More findings (" + backlog.length + ")"),
-          backlog.map((item, idx) => el("div", { key: idx, className: "olympus-mini-row" },
-            el("span", null, item.title || "Tuning item"),
-            el("small", null, [item.severity, item.kind, item.evidence].filter(Boolean).join(" / ")),
-            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
-          ))
-        ) : null
+    const shown = expanded ? items : items.slice(0, BANNER_ITEMS);
+    const more = items.length - BANNER_ITEMS;
+    return el("section", { className: "olympus-banner", "aria-labelledby": "olympus-banner-title" },
+      el("h2", { id: "olympus-banner-title" }, "Needs you", el("span", { className: "olympus-count" }, String(items.length))),
+      el("ol", { className: "olympus-queue" }, shown.map((item) => el(QueueItem, { key: item.key, item, ctx, compact: true }))),
+      more > 0 ? el("button", { type: "button", className: "olympus-link-button", "aria-expanded": expanded ? "true" : "false", onClick: () => setExpanded(!expanded) },
+        expanded ? "Show the top " + BANNER_ITEMS : "+" + more + " more") : null
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // Roster
+  // ---------------------------------------------------------------------
+
+  const SORTS = {
+    status: (a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) || b.issues - a.issues || String(a.label).localeCompare(String(b.label)),
+    name: (a, b) => String(a.label).localeCompare(String(b.label)),
+    last: (a, b) => (parseTime(b.last_active_at) || 0) - (parseTime(a.last_active_at) || 0)
+  };
+
+  function NowCell({ agent, now }) {
+    const current = agent.current;
+    if (!current) return el("span", { className: "olympus-muted" }, "Nothing running");
+    return el("span", { className: "olympus-now" },
+      agent.live ? el("span", { className: "olympus-live-dot", "aria-hidden": "true" }) : null,
+      el("span", { className: "olympus-now-label" }, current.label),
+      current.since ? el("small", null, current.kind === "waiting" ? "waiting " + elapsed(current.since, now) : elapsed(current.since, now)) : null
+    );
+  }
+
+  function Helpers({ helpers }) {
+    const h = helpers || {};
+    const chips = [
+      h.subagents ? plural(h.subagents, "subagent") : null,
+      h.workers ? plural(h.workers, "worker") : null,
+      h.cron ? h.cron + " scheduled" : null
+    ].filter(Boolean);
+    if (!chips.length) return el("span", { className: "olympus-muted" }, "None");
+    return el("span", { className: "olympus-chips" }, chips.map((chip) => el("span", { key: chip, className: "olympus-chip" }, chip)));
+  }
+
+  function rowAction(agent, queue) {
+    const item = asList(queue).find((entry) => entry.agent && entry.agent.id === agent.id && asList(entry.actions).length);
+    return item ? { item, action: item.actions[0] } : null;
+  }
+
+  function Roster({ agents, queue, selected, ctx, sort, onSort }) {
+    const body = useRef(null);
+    const rows = asList(agents).slice().sort(SORTS[sort] || SORTS.status);
+
+    function focusRow(offset, from) {
+      const all = Array.from(body.current ? body.current.querySelectorAll("tr[data-agent]") : []);
+      const next = all[Math.min(all.length - 1, Math.max(0, all.indexOf(from) + offset))];
+      if (next) next.focus();
+    }
+
+    function onKey(event, agent) {
+      if (event.key === "ArrowDown") { event.preventDefault(); focusRow(1, event.currentTarget); }
+      else if (event.key === "ArrowUp") { event.preventDefault(); focusRow(-1, event.currentTarget); }
+      else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); ctx.openAgent(agent.id); }
+    }
+
+    function header(key, label) {
+      const active = sort === key;
+      return el("th", { scope: "col", "aria-sort": active ? (key === "last" ? "descending" : "ascending") : "none" },
+        el("button", { type: "button", className: cx("olympus-sort", active && "olympus-sort-active"), onClick: () => onSort(key) }, label)
+      );
+    }
+
+    return el("table", { className: "olympus-roster" },
+      el("caption", { className: "olympus-sr-only" }, "Your agents. Use the arrow keys to move and Enter to inspect one."),
+      el("thead", null, el("tr", null,
+        header("name", "Agent"),
+        header("status", "Status"),
+        el("th", { scope: "col" }, "Now"),
+        el("th", { scope: "col" }, "Helpers"),
+        header("last", "Last active"),
+        el("th", { scope: "col" }, "7 days"),
+        el("th", { scope: "col" }, "Issues"),
+        el("th", { scope: "col" }, el("span", { className: "olympus-sr-only" }, "Action"))
+      )),
+      el("tbody", { ref: body },
+        rows.map((agent) => {
+          const next = rowAction(agent, queue);
+          return el("tr", {
+            key: agent.id,
+            "data-agent": agent.id,
+            tabIndex: 0,
+            "aria-selected": selected === agent.id ? "true" : "false",
+            className: cx("olympus-row", selected === agent.id && "olympus-row-selected"),
+            onClick: () => ctx.openAgent(agent.id),
+            onKeyDown: (event) => onKey(event, agent)
+          },
+            el("td", { className: "olympus-cell-agent" },
+              el(Avatar, { agent }),
+              el("span", { className: "olympus-agent-name" },
+                el("strong", null, agent.label),
+                el("small", null, agent.role || ROLE_TEXT[agent.role_state] || (agent.dashboard_home ? "This dashboard's profile" : ""))
+              )
+            ),
+            el("td", { "data-label": "Status" }, el(StatusPill, { status: agent.status, label: agent.status_label })),
+            el("td", { className: "olympus-cell-now", "data-label": "Now" }, el(NowCell, { agent, now: ctx.now })),
+            el("td", { "data-label": "Helpers" }, el(Helpers, { helpers: agent.helpers })),
+            el("td", { "data-label": "Last active" }, agent.last_active_at ? ago(agent.last_active_at, ctx.now) : el("span", { className: "olympus-muted" }, "Never")),
+            el("td", { "data-label": "7 days" }, el(ActivityBars, { days: agent.activity_7d })),
+            el("td", { "data-label": "Issues", className: agent.issues ? null : "olympus-cell-quiet" }, agent.issues ? el("span", { className: "olympus-issues" }, plural(agent.issues, "issue")) : el("span", { className: "olympus-muted" }, "None")),
+            el("td", { className: "olympus-cell-action" },
+              next ? el(ActionButton, {
+                action: next.action,
+                subject: next.item.title,
+                agentId: agent.id,
+                agents: ctx.agents,
+                controls: ctx.controls,
+                onDone: ctx.onActionDone
+              }) : null
+            )
+          );
+        })
       )
     );
   }
 
-  const VERDICT_STATE = { cleared: "ok", improved: "ok", unchanged: "warning", worse: "critical", "still present": "warning" };
-
-  function StopTrackingButton({ fixKey, rows, onFixes }) {
-    const [state, setState] = useState("idle");
-    function stop() {
-      setState("saving");
-      SDK.fetchJSON(API + "/fixes?key=" + encodeURIComponent(fixKey), { method: "DELETE" })
-        .then(() => onFixes(rows.filter((row) => row.key !== fixKey)))
-        .catch(() => setState("failed"));
-    }
-    return el("button", { type: "button", className: "olympus-fix-stop", onClick: stop, disabled: state === "saving" },
-      state === "failed" ? "Could not stop; retry" : "Stop tracking"
-    );
-  }
-
-  function FixTracking({ fixes, onFixes }) {
-    const rows = asList(fixes);
-    if (!rows.length) return null;
-    return el("section", { className: "olympus-section olympus-fix-tracking" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Did your fixes work?"),
-          el("p", null, "Each finding you marked fixed, compared with the latest scan.")
-        )
-      ),
-      rows.map((row) => el("div", { key: row.key, className: "olympus-fix-row" },
-        el("div", null,
-          el("strong", null, row.title),
-          el("small", null, [
-            row.baseline == null ? null : row.baseline + " \u2192 " + row.current,
-            row.days_tracked ? "tracked " + row.days_tracked + (row.days_tracked === 1 ? " day" : " days") : "tracked since today",
-          ].filter(Boolean).join(" \u00b7 "))
-        ),
-        el(StatePill, { state: VERDICT_STATE[row.verdict] || "unknown", label: row.verdict }),
-        el(StopTrackingButton, { fixKey: row.key, rows, onFixes })
+  function RosterSkeleton() {
+    return el("div", { className: "olympus-skeleton", role: "status", "aria-label": "Loading agents" },
+      [0, 1, 2, 3, 4].map((idx) => el("div", { key: idx, className: "olympus-skeleton-row" },
+        el("span", { className: "olympus-skeleton-avatar" }),
+        el("span", { className: "olympus-skeleton-bar", style: { width: (38 + idx * 7) + "%" } }),
+        el("span", { className: "olympus-skeleton-bar olympus-skeleton-short" })
       ))
     );
   }
 
-  function ScoreExplainer({ tuning }) {
-    const breakdown = (tuning && tuning.score_breakdown) || {};
-    const methodology = (tuning && tuning.methodology) || {};
-    const deductions = asList(breakdown.deductions);
-    const thresholds = asList(methodology.thresholds);
-    const sources = asList(methodology.sources);
-    return el("section", { className: "olympus-section olympus-score-card olympus-score-card-compact" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Readiness Score"),
-          el("p", null, breakdown.explanation || "Heuristic score from local Hermes evidence.")
-        )
-      ),
-      deductions.length ? el("div", { className: "olympus-score-deductions" },
-        deductions.slice(0, 4).map((item, idx) => el("div", { key: idx, className: "olympus-score-deduction" },
-          el("span", { className: "olympus-reason-points" }, "\u2212" + String(item.points || 0) + " pts"),
-          el("div", null,
-            el("strong", null, item.label || "Deduction"),
-            el("small", null, [item.evidence, item.reason].filter(Boolean).join(" \u00b7 "))
-          )
-        )),
-        deductions.length > 4 ? el("small", { className: "olympus-muted" }, "+" + (deductions.length - 4) + " smaller deductions under Method and sources") : null
-      ) : el("p", { className: "olympus-muted" }, "No deductions in this scan."),
-      el("details", { className: "olympus-details olympus-score-details" },
-        el("summary", null, "Method and sources"),
-        el("div", { className: "olympus-score-grid" },
-          el("div", { className: "olympus-score-pane" },
-            el("h3", null, "All deductions"),
-            deductions.length ? deductions.map((item, idx) => el("div", { key: idx, className: "olympus-method-row" },
-              el("strong", null, item.label || "Deduction"),
-              el("span", null, "\u2212" + String(item.points || 0) + " pts"),
-              el("small", null, [item.reason, item.source].filter(Boolean).join(" \u00b7 "))
-            )) : el("p", { className: "olympus-muted" }, "None.")
-          ),
-          el("div", { className: "olympus-score-pane" },
-            el("h3", null, "Thresholds"),
-            thresholds.map((item, idx) => el("div", { key: idx, className: "olympus-method-row" },
-              el("strong", null, item.signal || "Signal"),
-              el("span", null, item.threshold || ""),
-              el("small", null, item.why || "")
-            )),
-            sources.length ? el("h3", null, "Sources") : null,
-            sources.map((item, idx) => el("div", { key: "source-" + idx, className: "olympus-source-row" },
-              el("strong", null, item.label || "Source"),
-              el("small", null, item.detail || "")
-            ))
-          )
-        )
-      )
+  function EmptyNote({ agents }) {
+    const rows = asList(agents);
+    const quiet = rows.length <= 1 && rows.every((agent) => !agent.last_active_at && !agent.current && !agent.issues);
+    if (!quiet) return null;
+    return el("p", { className: "olympus-note" },
+      "Olympus fills in as your agents work: sessions, scheduled jobs and Kanban tasks appear here as Hermes records them. Each Hermes profile is one agent. ",
+      el("a", { className: "olympus-link", href: routeLink("/profiles") }, "Create profiles in Hermes")
     );
   }
 
-  // WAI-ARIA tabs pattern: only the selected tab is in the Tab order; arrow
-  // keys, Home and End move between tabs and select them.
-  function ModeTabs({ activeMode, onChange }) {
-    function onKeyDown(event) {
-      const index = OLYMPUS_MODES.findIndex((mode) => mode.id === activeMode);
-      const last = OLYMPUS_MODES.length - 1;
-      const targets = { ArrowRight: index === last ? 0 : index + 1, ArrowLeft: index === 0 ? last : index - 1, Home: 0, End: last };
-      if (!(event.key in targets)) return;
-      event.preventDefault();
-      const next = OLYMPUS_MODES[targets[event.key]].id;
-      onChange(next);
-      document.getElementById("olympus-mode-tab-" + next).focus();
-    }
+  // ---------------------------------------------------------------------
+  // Inspector
+  // ---------------------------------------------------------------------
 
-    return el("div", { className: "olympus-mode-shell" },
-      el("div", { className: "olympus-mode-tabs", role: "tablist", "aria-label": "Olympus dashboard modes", onKeyDown },
-        OLYMPUS_MODES.map((mode) => el("button", {
-          key: mode.id,
-          id: "olympus-mode-tab-" + mode.id,
-          className: cx("olympus-mode-tab", activeMode === mode.id && "olympus-mode-tab-active"),
-          type: "button",
-          role: "tab",
-          tabIndex: activeMode === mode.id ? 0 : -1,
-          "aria-label": mode.label,
-          "aria-selected": activeMode === mode.id ? "true" : "false",
-          "aria-controls": "olympus-mode-panel-" + mode.id,
-          onClick: () => onChange(mode.id)
-        },
-          el("span", null, mode.label),
-          el("small", null, mode.summary)
+  const TIMELINE_KIND = { tool: "Tool", session: "Session", subagent: "Subagent", task: "Kanban", cron: "Scheduled", action: "You" };
+
+  function Timeline({ events, now }) {
+    const [all, setAll] = useState(false);
+    const rows = asList(events);
+    if (!rows.length) return el("p", { className: "olympus-muted" }, "No recorded steps yet.");
+    const shown = all ? rows : rows.slice(0, TIMELINE_PREVIEW);
+    return el(React.Fragment, null,
+      el("ol", { className: "olympus-timeline" },
+        shown.map((event, idx) => el("li", { key: idx, className: cx("olympus-step", event.state && "olympus-step-" + event.state) },
+          el("time", { dateTime: event.at, title: event.at }, clockTime(event.at)),
+          el("span", { className: "olympus-step-kind" }, TIMELINE_KIND[event.kind] || event.kind),
+          el("span", { className: "olympus-step-text" }, event.text, event.detail ? el("small", null, event.detail) : null),
+          el("small", { className: "olympus-step-ago" }, ago(event.at, now))
         ))
-      )
+      ),
+      rows.length > TIMELINE_PREVIEW ? el("button", { type: "button", className: "olympus-link-button", onClick: () => setAll(!all) },
+        all ? "Show fewer" : "Show all " + rows.length + " steps") : null
     );
   }
 
-  function ModePanel({ id, activeMode, children }) {
-    const mode = OLYMPUS_MODES.find((item) => item.id === id) || OLYMPUS_MODES[0];
-    if (activeMode !== id) return null;
-    return el("div", {
-      className: cx("olympus-mode-panel", "olympus-mode-panel-" + id),
-      id: "olympus-mode-panel-" + id,
-      role: "tabpanel",
-      "aria-labelledby": "olympus-mode-tab-" + id
-    },
+  function InspectorSection({ title, count, children }) {
+    return el("section", { className: "olympus-inspector-section" },
+      el("h3", null, title, typeof count === "number" ? el("span", { className: "olympus-count olympus-count-quiet" }, String(count)) : null),
       children
     );
   }
 
-  function AgentHQ({ hq }) {
-    const data = hq || {};
-    const summary = data.summary || {};
-    const metrics = data.metrics || {};
-    const agents = asList(data.agents);
-    const medianDuration = Number(metrics.median_duration_seconds || 0);
-    const p90Duration = Number(metrics.p90_duration_seconds || 0);
-    const failedRuns = Number(metrics.failed_kanban_runs || 0);
-    const costRisks = Number(summary.expensive_sessions || metrics.expensive_sessions || 0);
-    const tiles = [
-      { label: "Profiles", value: summary.agents || agents.length || 0, state: "ok" },
-      { label: "Median run", value: formatDuration(medianDuration), state: medianDuration > 900 ? "warning" : "ok" },
-      { label: "P90 run", value: formatDuration(p90Duration), state: p90Duration > 1800 ? "warning" : "ok" },
-      { label: "Tool calls", value: formatCount(metrics.total_tool_calls), state: "ok" },
-      { label: "Looping", value: summary.looping_sessions || 0, state: summary.looping_sessions ? "warning" : "ok" },
-      { label: "Context pressure", value: summary.context_pressure_sessions || 0, state: summary.context_pressure_sessions ? "warning" : "ok" },
-      { label: "Failed worker runs", value: failedRuns, state: failedRuns ? "warning" : "ok" },
-      { label: "Runs over $1", value: costRisks, state: costRisks ? "warning" : "ok" },
-    ];
-    // The first screen shows six tiles; the rest stay one click away.
-    const primaryTiles = tiles.slice(0, 6);
-    const secondaryTiles = tiles.slice(6);
-    const window = metrics.window || {};
-
-    return el("section", { className: "olympus-section olympus-agent-hq" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Agent Monitor"),
-          el("p", null, window.label ? "Session signals from the " + window.label + "; Kanban counts are live." : "No sessions recorded yet; Kanban counts are live.")
-        )
+  function CronRow({ job, ctx, agentId, now }) {
+    return el("li", { className: "olympus-work-row" },
+      el("div", null,
+        el("strong", null, job.label),
+        el("small", null, [
+          job.schedule,
+          job.enabled ? (job.next_run_at ? "next " + until(job.next_run_at, now) : null) : "paused",
+          job.last_run_at ? "last ran " + ago(job.last_run_at, now) : "never ran",
+          job.no_agent ? "no model" : null
+        ].filter(Boolean).join(" · ")),
+        job.state === "error" ? el("small", { className: "olympus-error-text" }, job.last_error || "Last run failed") : null
       ),
-      el("div", { className: "olympus-hq-tiles" },
-        primaryTiles.map((item) => el("div", { key: item.label, className: "olympus-hq-tile" },
-          el("span", null, item.label),
-          el("strong", null, String(item.value)),
-          el(MetricPill, { state: item.state })
-        ))
-      ),
-      el("details", { className: "olympus-details olympus-backlog-details olympus-metric-backlog" },
-        el("summary", null, "More monitor signals (" + secondaryTiles.length + ")"),
-        el("div", { className: "olympus-hq-mini-grid" },
-          secondaryTiles.map((item) => el("div", { key: item.label, className: "olympus-hq-mini-tile" },
-            el("span", null, item.label),
-            el("strong", null, String(item.value)),
-            el(MetricPill, { state: item.state })
-          ))
-        )
+      el("div", { className: "olympus-work-actions" },
+        asList(job.actions).map((action) => el(ActionButton, { key: action.id, action, subject: job.label, agentId, agents: ctx.agents, controls: ctx.controls, onDone: ctx.onActionDone }))
       )
     );
   }
 
-  function EvidenceSources({ evidenceSources }) {
-    const data = evidenceSources || {};
-    const summary = data.summary || {};
-    const items = asList(data.items);
-    if (!items.length) return null;
+  const TASK_STATUS_TEXT = { blocked: "Blocked", running: "Running", ready: "Ready", todo: "To do", triage: "Triage", review: "In review", scheduled: "Scheduled", done: "Done", archived: "Archived" };
 
-    function countLine(counts) {
-      if (!counts || typeof counts !== "object") return "";
-      return Object.entries(counts)
-        .filter((entry) => Number(entry[1] || 0) > 0)
-        .slice(0, 3)
-        .map((entry) => entry[0].replaceAll("_", " ") + ": " + formatCount(entry[1]))
-        .join(" / ");
-    }
+  function taskWhen(task, now) {
+    if (task.status === "blocked" && task.blocked_at) return "blocked " + elapsed(task.blocked_at, now);
+    if (task.status === "running" && task.started_at) return task.stale ? task.stale : "running " + elapsed(task.started_at, now);
+    if (task.completed_at) return "finished " + ago(task.completed_at, now);
+    return null;
+  }
 
-    return el("div", { className: "olympus-evidence-sources" },
-      el("div", { className: "olympus-evidence-sources-head" },
-        el("div", null,
-          el("h3", null, "Evidence Sources"),
-          el("p", null, "Source health, safe fields, and redaction status for this scan.")
-        ),
-        el(StatePill, { state: summary.warnings ? "warning" : summary.missing ? "info" : "ok", label: [
-          formatCount(summary.available || 0),
-          "of",
-          formatCount(summary.sources || items.length),
-          "available"
-        ].join(" ") })
+  function TaskRow({ task, ctx, agentId, now }) {
+    const problem = task.stale || (task.status === "blocked" && task.block_kind !== "transient" && task.block_kind !== "dependency");
+    return el("li", { className: "olympus-work-row" },
+      el("div", null,
+        el("strong", null, task.title),
+        el("small", { className: problem ? "olympus-attention-text" : null }, [
+          TASK_STATUS_TEXT[task.status] || task.status,
+          task.block_kind ? task.block_kind.replace("_", " ") : null,
+          taskWhen(task, now),
+          Number(task.consecutive_failures || 0) > 1 ? task.consecutive_failures + " failed attempts" : null
+        ].filter(Boolean).join(" · "))
       ),
-      el("div", { className: "olympus-evidence-source-grid" },
-        items.map((item) => el("article", { key: item.id || item.label, className: "olympus-evidence-source" },
-          el("div", { className: "olympus-evidence-source-title" },
-            el("div", null,
-              el("span", null, item.type || "source"),
-              el("strong", null, item.label || "Evidence source")
-            ),
-            el(StatePill, { state: item.state || "unknown" })
-          ),
-          countLine(item.counts) ? el("small", null, countLine(item.counts)) : null,
-          asList(item.fields).length ? el("em", null, asList(item.fields).slice(0, 4).join(" / ")) : null,
-          item.redaction ? el("p", null, item.redaction) : null,
-          item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, routeLabel(item.recommended_view)) : null
-        ))
+      el("div", { className: "olympus-work-actions" },
+        asList(task.actions).map((action, idx) => el(ActionButton, { key: action.id, action, subject: task.title, agentId, agents: ctx.agents, controls: ctx.controls, onDone: ctx.onActionDone, primary: idx === 0 && action.id === "answer" }))
       )
     );
   }
 
-  function CostAttribution({ attribution }) {
-    const data = attribution || {};
-    const cron = data.cron || {};
-    const background = data.background || {};
-    const jobs = asList(cron.jobs);
-    const tasks = asList(background.tasks);
-    if (!Number(data.window_cost_usd || 0) && !jobs.length && !tasks.length) return null;
-    const days = data.window_days || 7;
-    const facts = [
-      ["Session spend", formatMoney(data.window_cost_usd)],
-      ["Scheduled (cron)", formatMoney(cron.total_cost_usd)],
-      ["Background tasks", formatMoney(background.total_cost_usd)],
-    ];
-    return el("section", { className: "olympus-section olympus-cost" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Where spend goes"),
-          el("p", null, "Last " + days + " days. Hermes Analytics has the full ledger; this shows which scheduled jobs and background tasks drive it.")
-        ),
-        el("a", { className: "olympus-link", href: routeLink(data.recommended_view || "/analytics") }, "Open Analytics")
-      ),
-      el("dl", { className: "olympus-hero-facts olympus-cost-facts" },
-        facts.map((fact) => el("div", { key: fact[0] }, el("dt", null, fact[0]), el("dd", null, fact[1])))
-      ),
-      jobs.length ? el("div", { className: "olympus-cost-table", role: "table", "aria-label": "Cron jobs by estimated cost" },
-        el("div", { className: "olympus-cost-row olympus-cost-row-head", role: "row" },
-          ["Cron job", "Runs", "Tokens", "Avg run", "Errors", "\u2248 Cost"].map((label) => el("span", { key: label, role: "columnheader" }, label))
-        ),
-        jobs.map((job) => el("div", { key: job.job_ref, className: "olympus-cost-row", role: "row" },
-          el("span", { role: "cell" }, el("strong", null, job.label), el("small", null, [job.profile, job.schedule].filter(Boolean).join(" · "))),
-          el("span", { role: "cell" }, formatCount(job.fires)),
-          el("span", { role: "cell" }, formatCount(job.tokens)),
-          el("span", { role: "cell" }, formatDuration(job.avg_duration_seconds)),
-          el("span", { role: "cell" }, job.errors ? el(StatePill, { state: "warning", label: String(job.errors) }) : "0"),
-          el("span", { role: "cell" }, formatMoney(job.est_cost_usd))
-        ))
-      ) : null,
-      tasks.length ? el("div", { className: "olympus-cost-tasks" },
-        el("h3", null, "Background tasks"),
-        tasks.map((task) => el("div", { key: task.task, className: "olympus-cost-task" },
-          el("span", null, task.task.replaceAll("_", " ")),
-          el("small", null, formatCount(task.calls) + " calls \u00b7 " + formatCount(task.tokens) + " tokens"),
-          el("strong", null, formatMoney(task.cost_usd))
-        ))
-      ) : null,
-      cron.allocation && jobs.length ? el("small", { className: "olympus-muted olympus-cost-note" }, cron.allocation) : null
-    );
+  const VERDICT_TEXT = { cleared: "Cleared", improved: "Improved", unchanged: "Unchanged", worse: "Worse", "still present": "Still present" };
+
+  function PauseAll({ detail, ctx }) {
+    const jobs = asList(detail.cron).filter((job) => job.enabled);
+    if (!jobs.length || !ctx.controls) return null;
+    const agent = detail.agent;
+    const pauses = jobs.map((job) => job.actions.find((action) => action.id === "pause")).filter(Boolean);
+    const refs = pauses.map((action) => action.target.ref);
+    const combined = {
+      id: "pause",
+      label: "Pause all scheduled",
+      target: { kind: "cron", ref: refs.join(","), refs },
+      effect: "Pause " + plural(pauses.length, "scheduled job") + " for " + agent.label + " until you resume " + (pauses.length === 1 ? "it." : "them.")
+    };
+    return el(ActionButton, {
+      action: combined,
+      subject: plural(pauses.length, "scheduled job"),
+      agentId: agent.id,
+      agents: ctx.agents,
+      controls: ctx.controls,
+      onDone: ctx.onActionDone
+    });
   }
 
-  function PerformanceTracking({ performance }) {
-    const data = performance || {};
-    const summary = data.summary || {};
-    const lanes = asList(data.lanes);
-    const signals = asList(data.signals);
-    if (!lanes.length && !signals.length) return null;
-
-    function laneValue(item) {
-      if (item.unit === "seconds") return formatDuration(item.value);
-      if (item.unit === "usd") return formatMoney(item.value);
-      return formatCount(item.value);
-    }
-
-    return el("section", { className: "olympus-section olympus-performance" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Performance Tracking"),
-          el("p", null, "Latency, tool pressure, context risk, and reliability from the latest scan.")
-        ),
-        el(MetricPill, { state: summary.state || "unknown" })
-      ),
-      el("div", { className: "olympus-performance-grid" },
-        lanes.map((item) => el("article", { key: item.id || item.label, className: cx("olympus-performance-lane", "olympus-performance-lane-" + String(item.state || "unknown").toLowerCase()) },
-          el("div", { className: "olympus-performance-lane-head" },
-            el("span", null, item.label || "Signal"),
-            el(MetricPill, { state: item.state })
-          ),
-          el("strong", null, laneValue(item)),
-          el("p", null, item.detail || ""),
-          item.source ? el("small", null, item.source) : null,
-          item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, routeLabel(item.recommended_view)) : null
-        ))
-      ),
-      signals.length ? el("div", { className: "olympus-performance-signals" },
-        signals.map((item, idx) => el("div", { key: idx, className: "olympus-mini-row" },
-          el("span", null, item.label || "Signal"),
-          el("small", null, item.detail || ""),
-          el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
-        ))
-      ) : null
-    );
-  }
-
-  function ProductionDiagnostics({ diagnostics, clientDiagnostics, evidenceSources }) {
-    const diag = diagnostics || {};
-    const client = clientDiagnostics || {};
-    if (!diag.generated_ms && !client.fetch_ms && !(evidenceSources && asList(evidenceSources.items).length)) return null;
-
-    return el("section", { className: "olympus-section olympus-diagnostics" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Production Diagnostics"),
-          el("p", null, "Payload, fetch, render, board, and source health for this scan.")
-        ),
-        el(StatePill, { state: diag.state || client.render_state || "unknown" })
-      ),
-      (diag.generated_ms || client.fetch_ms) ? el("div", { className: "olympus-diagnostic-grid" },
-        [
-          { label: "API Build", value: diag.generated_ms ? Math.round(Number(diag.generated_ms)) + "ms" : "unknown", state: diag.budget_status && diag.budget_status.api_response || "unknown" },
-          { label: "Payload", value: diag.payload_bytes ? formatBytes(diag.payload_bytes) : "unknown", state: diag.budget_status && diag.budget_status.payload || "unknown" },
-          { label: "Fetch", value: client.fetch_ms ? Math.round(Number(client.fetch_ms)) + "ms" : "pending", state: client.fetch_state || "unknown" },
-          { label: "Render", value: client.render_ms ? Math.round(Number(client.render_ms)) + "ms" : "pending", state: client.render_state || "unknown" },
-          { label: "Boards", value: String(diag.counts && diag.counts.kanban_boards_scanned || 0), state: diag.counts && diag.counts.kanban_board_read_failures ? "warning" : "ok" },
-          { label: "Hermes", value: diag.hermes && diag.hermes.version || "unknown", state: diag.hermes && diag.hermes.version && diag.hermes.version !== "unknown" ? "ok" : "unknown" },
-        ].map((item) => el("div", { key: item.label, className: "olympus-diagnostic-tile" },
-          el("span", null, item.label),
-          el("strong", null, item.value),
-          el(MetricPill, { state: item.state })
-        ))
-      ) : null,
-      el(EvidenceSources, { evidenceSources })
-    );
-  }
-
-  function TraceSpine({ trace }) {
-    const data = trace || {};
-    const summary = data.summary || {};
-    const items = asList(data.items);
-    const hasEvidence = items.length || summary.tasks || summary.sessions || summary.runs || summary.events;
-    if (!hasEvidence) return null;
-
-    const tiles = [
-      { label: "Tasks", value: formatCount(summary.tasks || 0), state: summary.tasks ? "active" : "idle" },
-      { label: "Linked", value: formatCount(summary.correlated_tasks || 0), state: summary.correlated_tasks ? "active" : "idle" },
-      { label: "Failures", value: formatCount(summary.failure_points || 0), state: summary.failure_points ? "warning" : "ok" },
-      { label: "Sessions", value: formatCount(summary.sessions || 0), state: summary.sessions ? "active" : "idle" },
-      { label: "Runs", value: formatCount(summary.runs || 0), state: summary.runs ? "active" : "idle" },
-      { label: "Events", value: formatCount(summary.events || 0), state: summary.events ? "active" : "idle" },
-    ];
-    const visibleItems = items.slice(0, 4);
-
-    function refLine(label, refs) {
-      const safeRefs = asList(refs).slice(0, 3);
-      if (!safeRefs.length) return null;
-      return el("small", null, label + ": " + safeRefs.join(" / "));
-    }
-
-    return el("section", { className: "olympus-section olympus-trace-spine" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Trace Spine"),
-          el("p", null, "Task, session, run, and event correlation without transcript content.")
-        ),
-        el(MetricPill, { state: summary.state || "unknown" })
-      ),
-      el("div", { className: "olympus-trace-tiles" },
-        tiles.map((item) => el("div", { key: item.label, className: "olympus-trace-tile" },
-          el("span", null, item.label),
-          el("strong", null, item.value),
-          el(MetricPill, { state: item.state })
-        ))
-      ),
-      visibleItems.length ? el("div", { className: "olympus-trace-list" },
-        visibleItems.map((item, idx) => el("article", { key: item.task_ref || idx, className: cx("olympus-trace-item", "olympus-trace-item-" + String(item.severity || "info").toLowerCase()) },
-          el("div", { className: "olympus-item-head" },
-            el("div", null,
-              el("span", null, [item.board || "board", item.status || "task"].filter(Boolean).join(" / ")),
-              el("h3", null, item.title || "Trace item")
-            ),
-            el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
-          ),
-          el("p", null, item.recommendation || item.detail || "Review the linked Hermes view."),
-          el("div", { className: "olympus-trace-signals" },
-            asList(item.signals).slice(0, 5).map((signal) => el("span", { key: signal }, signal.replaceAll("_", " ")))
-          ),
-          el("div", { className: "olympus-trace-refs" },
-            item.task_ref ? el("small", null, "Task ref: " + item.task_ref) : null,
-            item.session_ref ? el("small", null, "Session ref: " + item.session_ref) : null,
-            refLine("Runs", item.run_refs),
-            refLine("Events", item.event_refs),
-            item.basis ? el("small", null, item.basis) : null
-          ),
-          item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
-        ))
-      ) : el("p", { className: "olympus-muted" }, "No correlated task failures in this scan."),
-      items.length > visibleItems.length ? el("p", { className: "olympus-trace-more" }, "Showing the top " + visibleItems.length + " traces by severity.") : null
-    );
-  }
-
-  function OpsEvals({ evals }) {
-    const data = evals || {};
-    const summary = data.summary || {};
-    const items = asList(data.items);
-    if (!items.length) return null;
-
-    const tiles = [
-      { label: "Checks", value: summary.checks || items.length, state: items.length ? "active" : "idle" },
-      { label: "Passed", value: summary.passed || 0, state: summary.passed ? "ok" : "idle" },
-      { label: "Warnings", value: summary.warnings || 0, state: summary.warnings ? "warning" : "ok" },
-      { label: "Failures", value: summary.failures || 0, state: summary.failures ? "critical" : "ok" },
-    ];
-
-    return el("section", { className: "olympus-section olympus-ops-evals" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Operational Evals"),
-          el("p", null, "Deterministic reliability, routing, skill-use, and efficiency checks from current Hermes evidence.")
-        ),
-        el(MetricPill, { state: summary.state || "unknown" })
-      ),
-      el("div", { className: "olympus-ops-eval-tiles" },
-        tiles.map((item) => el("div", { key: item.label, className: "olympus-ops-eval-tile" },
-          el("span", null, item.label),
-          el("strong", null, String(item.value)),
-          el(MetricPill, { state: item.state })
-        ))
-      ),
-      el("div", { className: "olympus-ops-eval-grid" },
-        items.map((item) => el("article", { key: item.id || item.label, className: cx("olympus-ops-eval-item", "olympus-ops-eval-item-" + String(item.state || "unknown").toLowerCase()) },
-          el("div", { className: "olympus-item-head" },
-            el("div", null,
-              el("span", null, item.id ? String(item.id).replaceAll("_", " ") : "check"),
-              el("h3", null, item.label || "Operational check")
-            ),
-            el(StatePill, { state: item.state || "unknown" })
-          ),
-          el("p", null, item.evidence || item.detail || ""),
-          asList(item.signals).length || item.basis ? el("small", null, [
-            asList(item.signals).length ? "Signals: " + asList(item.signals).slice(0, 4).join(" / ") : null,
-            item.basis || null,
-          ].filter(Boolean).join(" / ")) : null,
-          item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
-        ))
-      )
-    );
-  }
-
-  function MetricsSpine({ metrics }) {
-    const data = metrics || {};
-    if (!data.schema_version) return null;
-    const usage = data.usage || {};
-    const agents = data.agents || {};
-    const skills = data.skills || {};
-    const work = data.work || {};
-    const coverage = data.coverage || {};
-    const signals = asList(data.signals);
-    const tiles = [
-      {
-        id: "usage",
-        label: "Usage Visibility",
-        state: coverage.cost_visibility === "missing" || coverage.cost_visibility === "partial" ? "warning" : coverage.cost_visibility ? "active" : "unknown",
-        rows: [
-          ["Sessions", formatCount(usage.sessions)],
-          ["API Calls", formatCount(usage.api_calls)],
-          ["Tokens", formatCount(usage.total_tokens)],
-          ["Cost", usage.cost_confidence || "unknown"]
-        ],
-        detail: "Operational evidence only. Hermes Analytics owns the ledger.",
-        view: usage.recommended_view || "/analytics"
-      },
-      {
-        id: "agents",
-        label: "Agent Workload",
-        state: agents.needs_review ? "warning" : agents.profiles ? "active" : "unknown",
-        rows: [
-          ["Profiles", formatCount(agents.profiles)],
-          ["Active", formatCount(agents.active_profiles)],
-          ["Idle", formatCount(agents.idle_profiles)],
-          ["With Skills", formatCount(agents.profiles_with_skills)]
-        ],
-        detail: "Profile workload and readiness grounded in Hermes profile stores.",
-        view: agents.recommended_view || "/profiles"
-      },
-      {
-        id: "skills",
-        label: "Skill Lifecycle",
-        state: skills.never_used || skills.metadata_gaps ? "warning" : skills.recorded ? "active" : "unknown",
-        rows: [
-          ["Recorded", formatCount(skills.recorded)],
-          ["Created 30d", formatCount(skills.created_30d)],
-          ["Used", formatCount(skills.used)],
-          ["Never Used", formatCount(skills.never_used)]
-        ],
-        detail: "Lifecycle counts come from Hermes skill usage metadata across profiles.",
-        view: skills.recommended_view || "/skills"
-      },
-      {
-        id: "work",
-        label: "Work Reliability",
-        state: work.blocked || work.failed_runs || work.stale_workers ? "warning" : work.open ? "active" : "idle",
-        rows: [
-          ["Open", formatCount(work.open)],
-          ["Ready", formatCount(work.ready)],
-          ["Blocked", formatCount(work.blocked)],
-          ["Failed Runs", formatCount(work.failed_runs)]
-        ],
-        detail: "Kanban reliability tells whether agent work is actually moving.",
-        view: work.recommended_view || "/kanban"
+  function Inspector({ agentId, detail, error, ctx, onClose }) {
+    const panel = useRef(null);
+    useEffect(() => {
+      if (panel.current) panel.current.focus({ preventScroll: true });
+    }, [agentId]);
+    const row = ctx.agentById[agentId];
+    const agent = (detail && detail.agent) || row;
+    if (!agent) return null;
+    const usage = (detail && detail.usage) || {};
+    const success = (detail && detail.success) || {};
+    return el("aside", {
+      ref: panel,
+      tabIndex: -1,
+      className: "olympus-inspector",
+      "aria-label": "Agent " + agent.label,
+      onKeyDown: (event) => {
+        if (event.key === "Escape") { event.stopPropagation(); onClose(); }
       }
-    ];
-
-    return el("section", { className: "olympus-section olympus-metrics-spine" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Metrics Spine"),
-          el("p", null, "Operational metrics for tuning. Hermes Analytics owns the usage ledger.")
+    },
+      el("div", { className: "olympus-inspector-head" },
+        el("button", { type: "button", className: "olympus-back", onClick: onClose }, "Back to agents"),
+        el(Avatar, { agent, size: "large" }),
+        el("div", { className: "olympus-inspector-title" },
+          el("h2", null, agent.label),
+          el("p", null, agent.role || ROLE_TEXT[agent.role_state] || ""),
+          el("div", { className: "olympus-inspector-status" },
+            el(StatusPill, { status: agent.status, label: agent.status_label }),
+            agent.last_active_at ? el("span", { className: "olympus-muted" }, "last active " + ago(agent.last_active_at, ctx.now)) : null
+          )
         ),
-        el(StatePill, { state: data.coverage && data.coverage.state_store || "unknown" })
+        el("div", { className: "olympus-inspector-controls" },
+          detail ? el(PauseAll, { detail, ctx }) : null,
+          agent.current && agent.current.kind === "session" && agent.current.ref ? el(SessionLink, { target: { kind: "session", ref: agent.current.ref, label: "current" } }) : null,
+          el("a", { className: "olympus-link", href: routeLink("/profiles") }, "Open in Hermes"),
+          el("button", { type: "button", className: "olympus-close", "aria-label": "Close inspector", onClick: onClose }, "×")
+        )
       ),
-      el("div", { className: "olympus-metrics-ownership" },
-        el("span", null, "Olympus: " + ((data.ownership && data.ownership.olympus) || "operational evidence")),
-        el("span", null, "Hermes: " + ((data.ownership && data.ownership.hermes_analytics) || "usage ledger"))
-      ),
-      el("div", { className: "olympus-metrics-grid" },
-        tiles.map((tile) => el("article", { key: tile.id, className: cx("olympus-metrics-card", "olympus-metrics-card-" + String(tile.state || "unknown").toLowerCase()) },
-          el("div", { className: "olympus-metrics-card-head" },
-            el("h3", null, tile.label),
-            el(MetricPill, { state: tile.state })
-          ),
-          el("div", { className: "olympus-metrics-rows" },
-            tile.rows.map((row) => el("div", { key: row[0], className: "olympus-mini-row" },
-              el("span", null, row[0]),
-              el("small", null, row[1])
-            ))
-          ),
-          el("p", null, tile.detail),
-          tile.view ? el("a", { className: "olympus-link", href: routeLink(tile.view) }, routeLabel(tile.view)) : null
-        ))
-      ),
-      signals.length ? el("div", { className: "olympus-metrics-signals" },
-        signals.map((item, idx) => el("article", { key: idx, className: cx("olympus-metrics-signal", "olympus-metrics-signal-" + String(item.severity || "info").toLowerCase()) },
-          el("div", { className: "olympus-item-head" },
-            el("div", null,
-              el("span", null, item.kind || "signal"),
-              el("h3", null, item.title || "Metrics signal")
-            ),
-            el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
-          ),
-          el("p", null, item.detail || ""),
-          item.evidence ? el("small", null, item.evidence) : null,
-          item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
-        ))
+      error ? el("p", { className: "olympus-error-text", role: "alert" }, "Could not load this agent: " + error) : null,
+      !detail && !error ? el(RosterSkeleton) : null,
+      detail && detail.start_gateway ? el("p", { className: "olympus-note" }, "Its gateway is not running, so scheduled jobs and Kanban work wait. Start it with ", el("code", null, detail.start_gateway), ".") : null,
+      detail && asList(detail.needs_you).length ? el(InspectorSection, { title: "Needs you", count: detail.needs_you.length },
+        el("ol", { className: "olympus-queue" }, detail.needs_you.map((item) => el(QueueItem, { key: item.key, item, ctx, own: true })))
+      ) : null,
+      detail ? el(InspectorSection, { title: "Now" }, el(Timeline, { events: detail.timeline, now: ctx.now })) : null,
+      detail && asList(detail.cron).length ? el(InspectorSection, { title: "Scheduled", count: detail.cron.length },
+        el("ul", { className: "olympus-work" }, detail.cron.map((job) => el(CronRow, { key: job.id, job, ctx, agentId: agent.id, now: ctx.now })))
+      ) : null,
+      detail && asList(detail.tasks).length ? el(InspectorSection, { title: "Kanban", count: detail.tasks_total },
+        el("ul", { className: "olympus-work" }, detail.tasks.map((task) => el(TaskRow, { key: task.board + ":" + task.id, task, ctx, agentId: agent.id, now: ctx.now }))),
+        detail.tasks_total > detail.tasks.length ? el("a", { className: "olympus-link", href: routeLink("/kanban") }, "All " + detail.tasks_total + " tasks in Kanban") : null
+      ) : null,
+      detail ? el("footer", { className: "olympus-inspector-foot" },
+        el(TokenChart, { days: usage.days }),
+        el("dl", { className: "olympus-facts" },
+          el("div", null, el("dt", null, "Cost this week"), el("dd", null, formatMoney(usage.cost_7d_usd))),
+          el("div", null, el("dt", null, "Worker runs"), el("dd", null,
+            success.rate == null ? "None finished this week" : success.succeeded + " of " + (success.succeeded + success.failed) + " succeeded (" + Math.round(success.rate * 100) + "%)"))
+        ),
+        asList(detail.fixes).length ? el("div", { className: "olympus-fixes" },
+          el("h4", null, "Your fixes"),
+          el("ul", null, detail.fixes.map((fix) => el("li", { key: fix.key },
+            el("span", null, fix.title),
+            el("small", { className: "olympus-verdict olympus-verdict-" + fix.verdict.replace(" ", "-") }, VERDICT_TEXT[fix.verdict] || fix.verdict)
+          )))
+        ) : null,
+        el("small", { className: "olympus-muted" }, usage.basis || "")
       ) : null
     );
   }
 
-  function ToolPolicy({ policy }) {
-    const data = policy || {};
-    const summary = data.summary || {};
-    const settings = asList(data.settings);
-    const findings = asList(data.findings);
-    if (!settings.length && !findings.length && !summary.root_config_present && !summary.profile_configs) return null;
+  // ---------------------------------------------------------------------
+  // Checks: the material that is not about one agent.
+  // ---------------------------------------------------------------------
 
-    function settingValue(item) {
-      if (item.unit === "usd") return formatMoney(item.value);
-      if (typeof item.value === "number") return formatCount(item.value);
-      return String(item.value || "none");
+  const SEVERITY_TEXT = { critical: "Critical", warning: "Warning", info: "Note", ok: "OK" };
+
+  function CheckSection({ id, title, lead, link, children }) {
+    return el("section", { id, className: "olympus-check", "aria-labelledby": id + "-title" },
+      el("div", { className: "olympus-check-head" },
+        el("h2", { id: id + "-title" }, title),
+        link ? el("a", { className: "olympus-link", href: routeLink(link) }, routeLabel(link)) : null
+      ),
+      lead ? el("p", { className: "olympus-check-lead" }, lead) : null,
+      children
+    );
+  }
+
+  function Finding({ item, children }) {
+    return el("li", { className: "olympus-finding" },
+      el("span", { className: "olympus-severity olympus-severity-" + (item.severity || "info") }, SEVERITY_TEXT[item.severity] || item.severity),
+      el("div", null,
+        el("strong", null, item.title),
+        item.detail ? el("p", null, item.detail) : null,
+        item.evidence ? el("small", null, item.evidence) : null,
+        children
+      ),
+      item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
+    );
+  }
+
+  function FindingsCheck({ tuning, fixes, ctx }) {
+    const items = asList(tuning && tuning.agent_hq && tuning.agent_hq.recommendations).filter((item) => item.severity !== "ok");
+    const tracked = new Set(asList(fixes).map((fix) => fix.key));
+    return el(CheckSection, { id: "olympus-check-findings", title: "Findings", lead: items.length ? "Everything Olympus noticed across your agents, worst first. The urgent ones are also in Needs you." : "Nothing to report in this scan." },
+      items.length ? el("ul", { className: "olympus-findings" }, items.map((item) => el(Finding, { key: item.key, item },
+        el("div", { className: "olympus-finding-actions" },
+          el(SessionLinks, { targets: item.targets }),
+          tracked.has(item.key) ? el("span", { className: "olympus-action-done" }, "Tracking your fix") : el(ActionButton, {
+            action: { id: "fix", label: "I fixed this", target: { kind: "finding", ref: item.key }, effect: "Olympus notes the current count and tells you on later scans whether it cleared." },
+            subject: item.title,
+            controls: ctx.controls,
+            onDone: ctx.onActionDone
+          })
+        )
+      ))) : null,
+      asList(fixes).length ? el(React.Fragment, null,
+        el("h3", null, "Did your fixes work?"),
+        el("ul", { className: "olympus-fix-list" }, fixes.map((fix) => el("li", { key: fix.key },
+          el("span", null, fix.title),
+          el("small", null, [
+            fix.baseline == null ? null : fix.baseline + " → " + fix.current,
+            fix.days_tracked ? "tracked " + plural(fix.days_tracked, "day") : "tracked since today"
+          ].filter(Boolean).join(" · ")),
+          el("small", { className: "olympus-verdict olympus-verdict-" + fix.verdict.replace(" ", "-") }, VERDICT_TEXT[fix.verdict] || fix.verdict),
+          el(StopTracking, { fixKey: fix.key, onDone: ctx.onActionDone })
+        )))
+      ) : null
+    );
+  }
+
+  function StopTracking({ fixKey, onDone }) {
+    const [state, setState] = useState("idle");
+    function stop() {
+      setState("saving");
+      SDK.fetchJSON(API + "/fixes?key=" + encodeURIComponent(fixKey), { method: "DELETE" })
+        .then(() => onDone())
+        .catch(() => setState("failed"));
     }
+    return el("button", { type: "button", className: "olympus-link-button", onClick: stop, disabled: state === "saving" },
+      state === "failed" ? "Could not stop; retry" : "Stop tracking");
+  }
 
-    const tiles = [
-      { label: "Config", value: summary.root_config_present ? "root" : summary.profile_configs ? "profile" : "missing", state: summary.root_config_present || summary.profile_configs ? "active" : "unknown" },
-      { label: "Findings", value: summary.findings || 0, state: summary.findings ? "warning" : "ok" },
-      { label: "Max Turns", value: summary.max_turns || 0, state: summary.max_turns >= 80 && !summary.hard_loop_stop ? "warning" : summary.max_turns ? "active" : "unknown" },
-      { label: "Loop Stop", value: summary.interactive_hard_stop ? "all sessions" : summary.hard_loop_stop ? "unattended only" : "off", state: summary.hard_loop_stop ? "ok" : summary.max_turns >= 80 ? "warning" : "unknown" },
-      { label: "Fallbacks", value: summary.fallback_providers || 0, state: summary.fallback_providers ? "active" : "idle" },
-      { label: "Aux Signals", value: summary.auxiliary_routes || 0, state: summary.auxiliary_routes ? "active" : "idle" },
-      { label: "Costed Runs", value: summary.costed_sessions || 0, state: summary.costed_sessions ? "active" : summary.auxiliary_routes ? "warning" : "unknown" },
-      { label: "Browser Flags", value: summary.browser_private_flags || 0, state: summary.browser_private_flags ? "warning" : "ok" },
-    ];
-
-    return el("section", { className: "olympus-section olympus-policy" },
-      el("div", { className: "olympus-section-head" },
+  function BacklogCheck({ backlog }) {
+    const groups = asList(backlog && backlog.groups);
+    if (!groups.length) return null;
+    const summary = backlog.summary || {};
+    return el(CheckSection, {
+      id: "olympus-check-backlog",
+      title: "Backlog",
+      link: "/kanban",
+      lead: plural(Number(summary.tasks || 0), "stuck task") + ", grouped by who has to act. " + formatCount(summary.needs_you) + " need a person."
+    },
+      el("ul", { className: "olympus-findings" }, groups.map((group) => el("li", { key: group.kind, className: "olympus-finding" },
+        el("span", { className: "olympus-severity olympus-severity-" + group.severity }, plural(group.count, "task")),
         el("div", null,
-          el("h2", null, "Tool Policy & Aux Cost"),
-          el("p", null, "Config limits, route audit, browser privacy, and background cost visibility.")
-        ),
-        el("div", { className: "olympus-section-actions" },
-          el(MetricPill, { state: summary.state || "unknown" }),
-          el("a", { className: "olympus-link", href: routeLink("/config") }, "Open Config")
+          el("strong", null, group.label),
+          el("p", null, group.action),
+          el("small", null, [
+            group.oldest_days != null ? "oldest " + plural(group.oldest_days, "day") : null,
+            group.repeat_blocks ? group.repeat_blocks + " blocked more than once" : null,
+            asList(group.assignees).map((a) => a.assignee + " " + a.count).join(", ")
+          ].filter(Boolean).join(" · "))
         )
-      ),
-      el("div", { className: "olympus-policy-tiles" },
-        tiles.map((item) => el("div", { key: item.label, className: "olympus-policy-tile" },
-          el("span", null, item.label),
-          el("strong", null, String(item.value)),
-          el(MetricPill, { state: item.state })
-        ))
-      ),
-      el("div", { className: "olympus-policy-grid" },
-        el("div", { className: "olympus-policy-pane" },
-          el("h3", null, "Policy Signals"),
-          settings.length ? settings.map((item) => el("div", { key: item.id || item.label, className: "olympus-policy-setting" },
-            el("div", null,
-              el("span", null, item.label || "Policy"),
-              el("strong", null, settingValue(item)),
-              el("small", null, [item.detail, item.source].filter(Boolean).join(" / "))
-            ),
-            el(MetricPill, { state: item.state })
-          )) : el("p", { className: "olympus-muted" }, "No config policy evidence in this scan.")
-        ),
-        el("div", { className: "olympus-policy-pane" },
-          el("h3", null, "Findings"),
-          findings.length ? findings.map((item, idx) => el("article", { key: idx, className: cx("olympus-policy-finding", "olympus-policy-finding-" + String(item.severity || "info").toLowerCase()) },
-            el("div", { className: "olympus-item-head" },
-              el("div", null,
-                el("span", null, String(item.kind || "policy")),
-                el("h4", null, item.title || "Policy finding")
-              ),
-              el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
-            ),
-            el("p", null, item.detail || ""),
-            item.evidence ? el("small", null, item.evidence) : null,
-            item.threshold ? el("small", null, "Trigger: " + item.threshold) : null,
-            item.basis ? el("small", null, item.basis) : null,
-            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
-          )) : el("p", { className: "olympus-muted" }, "No config policy risks in this scan.")
-        )
-      )
+      )))
     );
   }
 
-  function SkillCoverage({ coverage }) {
-    const data = coverage || {};
-    const summary = data.summary || {};
-    const suggestions = asList(data.suggestions);
-    const profiles = asList(data.profiles);
-    if (!suggestions.length && !profiles.length) return null;
-    const tiles = [
-      { label: "Skills", value: formatCount(summary.total_skills), state: summary.total_skills ? "active" : "idle" },
-      { label: "Bare Profiles", value: summary.zero_skill_profiles || 0, state: summary.zero_skill_profiles ? "warning" : "ok" },
-      { label: "Forced Skill Tasks", value: summary.forced_skill_tasks || 0, state: summary.forced_skill_tasks ? "active" : "idle" },
-      { label: "Looping", value: summary.looping_sessions || 0, state: summary.looping_sessions ? "warning" : "ok" },
-      { label: "Tool Heavy", value: summary.tool_heavy_sessions || 0, state: summary.tool_heavy_sessions ? "warning" : "ok" },
-      { label: "Context", value: summary.context_pressure_sessions || 0, state: summary.context_pressure_sessions ? "warning" : "ok" },
-    ];
-
-    return el("section", { className: "olympus-section olympus-skill-coverage" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Skill Coverage"),
-          el("p", null, "Skill signals from repeated tool use, loops, long context, and profiles without skill coverage.")
-        ),
-        el("a", { className: "olympus-link", href: routeLink("/skills") }, "Open Skills")
-      ),
-      el("div", { className: "olympus-skill-tiles" },
-        tiles.map((item) => el("div", { key: item.label, className: "olympus-skill-tile" },
-          el("span", null, item.label),
-          el("strong", null, String(item.value)),
-          el(MetricPill, { state: item.state })
-        ))
-      ),
-      el("div", { className: "olympus-skill-grid" },
-        el("div", { className: "olympus-skill-pane" },
-          el("h3", null, "Skill Recommendations"),
-          suggestions.map((item, idx) => el("article", { key: idx, className: cx("olympus-skill-suggestion", "olympus-skill-suggestion-" + String(item.severity || "info").toLowerCase()) },
-            el("div", { className: "olympus-item-head" },
-              el("div", null,
-                el("span", null, String(item.kind || "skill")),
-                el("h4", null, item.title || "Skill item")
-              ),
-              el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
-            ),
-            el("p", null, item.detail || ""),
-            item.evidence ? el("small", null, item.evidence) : null,
-            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
-          ))
-        ),
-        el("div", { className: "olympus-skill-pane" },
-          el("h3", null, "Profiles"),
-          profiles.map((profile) => el("div", { key: profile.id || profile.label, className: "olympus-skill-profile" },
-            el("div", null,
-              el("strong", null, profile.label || "Profile"),
-              el("small", null, [
-                (profile.skill_count || 0) + " skills",
-                (profile.open_work || 0) + " open",
-                (profile.forced_skill_tasks || 0) + " forced-skill tasks",
-              ].join(" / "))
-            ),
-            el(StatePill, { state: profile.state || "unknown" }),
-            el("p", null, profile.top_issue || "No current skill signal."),
-            profile.recommended_view ? el("a", { className: "olympus-link", href: routeLink(profile.recommended_view) }, routeLabel(profile.recommended_view)) : null
-          ))
-        )
-      )
-    );
-  }
-
-  function SkillHygiene({ hygiene }) {
+  function SkillsCheck({ hygiene }) {
     const data = hygiene || {};
     const summary = data.summary || {};
     const signals = asList(data.signals);
-    const usage = asList(data.usage);
-    const hub = asList(data.hub);
-    if (!signals.length && !usage.length && !hub.length && !summary.total_skills && !summary.hub_installed) return null;
-    const tiles = [
-      { label: "Total Skills", value: summary.total_skills || 0, state: summary.total_skills ? "active" : "idle" },
-      { label: "Issues", value: summary.issues || 0, state: summary.issues ? "warning" : "ok" },
-      { label: "Stale", value: summary.stale || 0, state: summary.stale ? "warning" : "ok" },
-      { label: "Never Used", value: summary.never_used || 0, state: summary.never_used ? "info" : "ok" },
-      { label: "Patched", value: summary.recently_patched || 0, state: summary.recently_patched ? "info" : "ok" },
-      { label: "Hub Skills", value: summary.hub_installed || 0, state: summary.hub_installed ? "active" : "idle" },
-      { label: "Trust Gaps", value: (summary.hub_missing_trust || 0) + (summary.hub_missing_scan || 0), state: (summary.hub_missing_trust || summary.hub_missing_scan) ? "warning" : "ok" },
-      { label: "Audit Warn", value: summary.hub_audit_warn || 0, state: summary.hub_audit_warn ? "warning" : "ok" },
-      { label: "Audit Fail", value: summary.hub_audit_fail || 0, state: summary.hub_audit_fail ? "critical" : "ok" },
-    ];
-
-    return el("section", { className: "olympus-section olympus-skill-hygiene" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Skill Hygiene"),
-          el("p", null, "Activity, archive, patch, hub trust, and scan gaps from local skill metadata.")
-        ),
-        el("div", { className: "olympus-section-actions" },
-          el(MetricPill, { state: summary.state || "unknown" }),
-          el("a", { className: "olympus-link", href: routeLink("/skills") }, "Open Skills")
-        )
-      ),
-      el("div", { className: "olympus-skill-hygiene-tiles" },
-        tiles.map((item) => el("div", { key: item.label, className: "olympus-skill-hygiene-tile" },
+    const hub = asList(data.hub).filter((item) => item.state && item.state !== "ok");
+    if (!summary.total_skills && !signals.length) return null;
+    return el(CheckSection, {
+      id: "olympus-check-skills",
+      title: "Skills",
+      link: "/skills",
+      lead: plural(Number(summary.total_skills || 0), "skill") + " installed. " + [
+        summary.stale ? summary.stale + " stale" : null,
+        summary.never_used ? summary.never_used + " never used" : null,
+        summary.hub_audit_fail ? summary.hub_audit_fail + " failed a security audit" : null
+      ].filter(Boolean).join(", ") + (summary.stale || summary.never_used || summary.hub_audit_fail ? "." : "No hygiene issues.")
+    },
+      signals.length ? el("ul", { className: "olympus-findings" }, signals.map((item, idx) => el(Finding, { key: idx, item }))) : null,
+      hub.length ? el(React.Fragment, null,
+        el("h3", null, "Hub skills to review"),
+        el("ul", { className: "olympus-plain-list" }, hub.map((item) => el("li", { key: item.id || item.label },
           el("span", null, item.label),
-          el("strong", null, String(item.value)),
-          el(MetricPill, { state: item.state })
-        ))
-      ),
-      el("div", { className: "olympus-skill-hygiene-grid" },
-        el("div", { className: "olympus-skill-hygiene-pane" },
-          el("h3", null, "Hygiene Signals"),
-          signals.length ? signals.map((item, idx) => el("article", { key: idx, className: cx("olympus-skill-suggestion", "olympus-skill-suggestion-" + String(item.severity || "info").toLowerCase()) },
-            el("div", { className: "olympus-item-head" },
-              el("div", null,
-                el("span", null, String(item.kind || "skill")),
-                el("h4", null, item.title || "Skill hygiene item")
-              ),
-              el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
-            ),
-            el("p", null, item.detail || ""),
-            item.evidence ? el("small", null, item.evidence) : null,
-            item.recommended_view ? el("a", { className: "olympus-link", href: routeLink(item.recommended_view) }, item.action_label || routeLabel(item.recommended_view)) : null
-          )) : el("p", { className: "olympus-muted" }, "No skill hygiene issues in this scan.")
-        ),
-        el("div", { className: "olympus-skill-hygiene-pane" },
-          el("h3", null, "Skill Activity"),
-          usage.length ? usage.slice(0, 6).map((item) => el("div", { key: item.id || item.label, className: "olympus-mini-row" },
-            el("span", null, item.label || "Skill"),
-            el("small", null, [
-              (item.use_count || 0) + " uses",
-              (item.patch_count || 0) + " patches",
-              item.pinned ? "pinned" : "unpinned",
-              item.stale ? "stale" : null,
-            ].filter(Boolean).join(" / ")),
-            el(StatePill, { state: item.archived ? "warning" : item.stale ? "info" : "active" })
-          )) : el("p", { className: "olympus-muted" }, "No usage metadata recorded.")
-        ),
-        el("div", { className: "olympus-skill-hygiene-pane" },
-          el("h3", null, "Hub Provenance"),
-          hub.length ? hub.slice(0, 6).map((item) => el("div", { key: item.id || item.label, className: "olympus-mini-row" },
-            el("span", null, item.label || "Hub skill"),
-            el("small", null, [
-              item.trust_level ? "trust: " + item.trust_level : "trust missing",
-              item.scan_verdict ? "scan: " + item.scan_verdict : "scan missing",
-              item.audit_summary ? "audit: " + item.audit_summary : null,
-            ].filter(Boolean).join(" / ")),
-            el(StatePill, { state: item.state || "unknown" })
-          )) : el("p", { className: "olympus-muted" }, "No hub lock metadata recorded.")
-        )
-      )
+          el("small", null, [item.trust_level ? "trust " + item.trust_level : "no trust level", item.scan_verdict ? "scan " + item.scan_verdict : "not scanned", item.audit_summary].filter(Boolean).join(" · "))
+        )))
+      ) : null
     );
   }
 
-  function formatAgo(iso) {
-    if (!iso) return "no sessions this week";
-    const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
-    if (minutes < 60) return minutes + " min ago";
-    if (minutes < 60 * 24) return Math.round(minutes / 60) + " h ago";
-    return Math.round(minutes / (60 * 24)) + " d ago";
+  function settingValue(item) {
+    if (item.unit === "usd") return formatMoney(item.value);
+    if (typeof item.value === "number") return formatCount(item.value);
+    return String(item.value == null || item.value === "" ? "none" : item.value);
   }
 
-  const ROLE_TEXT = { described: "Role described", auto: "Role auto-generated, not reviewed", missing: "No role description" };
-
-  function Fleet({ fleet }) {
-    const data = fleet || {};
-    const summary = data.summary || {};
-    const rows = asList(data.profiles);
-    if (!rows.length) return null;
-    return el("section", { className: "olympus-section olympus-fleet" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Fleet"),
-          el("p", null, [
-            rows.length + (rows.length === 1 ? " profile" : " profiles"),
-            summary.needs_review ? summary.needs_review + " need review" : null,
-            summary.roles_missing ? summary.roles_missing + " without a role" : null,
-          ].filter(Boolean).join(" \u00b7 ") + ". Sessions and spend cover the last 7 days.")
-        ),
-        el("a", { className: "olympus-link", href: routeLink("/profiles") }, "Open Profiles")
-      ),
-      el("div", { className: "olympus-fleet-table", role: "table", "aria-label": "Profiles" },
-        el("div", { className: "olympus-fleet-row olympus-fleet-row-head", role: "row" },
-          ["Profile", "Gateway", "Work", "Sessions", "Spend", "Last active"].map((label) => el("span", { key: label, role: "columnheader" }, label))
-        ),
-        rows.map((row) => el("div", { key: row.id, className: "olympus-fleet-entry" },
-          el("div", { className: "olympus-fleet-row", role: "row" },
-            el("span", { role: "cell" },
-              el("strong", null, row.label),
-              el("small", null, row.role || ROLE_TEXT[row.role_state] || "", row.route === "inherited" ? " \u00b7 inherited route" : "")
-            ),
-            el("span", { role: "cell" }, row.gateway_state === "running" ? (row.gateway_mode === "multiplexed" ? "via default gateway" : "running") : row.gateway_state || "unknown"),
-            el("span", { role: "cell" }, row.running + " running \u00b7 " + row.open + " open" + (row.blocked ? " \u00b7 " + row.blocked + " blocked" : "")),
-            el("span", { role: "cell" }, formatCount(row.sessions_7d)),
-            el("span", { role: "cell" }, row.sessions_7d ? formatMoney(row.spend_7d_usd) : "–"),
-            el("span", { role: "cell" }, formatAgo(row.last_active_at))
-          ),
-          row.top_issue && row.state !== "ok" ? el("div", { className: "olympus-fleet-issue" },
-            el(MetricPill, { state: row.state }),
-            el("span", null, row.top_issue),
-            asList(row.reasons).map((reason, idx) => el("small", { key: idx },
-              reason.points ? el("span", { className: "olympus-reason-points" }, "\u2212" + String(reason.points) + " pts") : null,
-              [reason.label !== row.top_issue ? reason.label : null, reason.detail].filter(Boolean).join(": ")
-            )),
-            row.recommended_view ? el("a", { className: "olympus-inline-link", href: routeLink(row.recommended_view) }, routeLabel(row.recommended_view)) : null
-          ) : null
-        ))
-      )
+  function PolicyCheck({ policy }) {
+    const data = policy || {};
+    const findings = asList(data.findings);
+    const settings = asList(data.settings);
+    if (!findings.length && !settings.length) return null;
+    return el(CheckSection, { id: "olympus-check-policy", title: "Policy", link: "/config", lead: findings.length ? plural(findings.length, "configuration risk") + " found." : "No configuration risks found." },
+      findings.length ? el("ul", { className: "olympus-findings" }, findings.map((item, idx) => el(Finding, { key: idx, item }))) : null,
+      settings.length ? el("dl", { className: "olympus-settings" }, settings.map((item) => el("div", { key: item.id || item.label },
+        el("dt", null, item.label),
+        el("dd", null, settingValue(item), item.detail ? el("small", null, item.detail) : null)
+      ))) : null
     );
   }
 
-  function eventState(kind, fallback) {
-    const k = String(kind || "").toLowerCase();
-    if (k.includes("blocked") || k.includes("timed_out") || k.includes("crashed") || k.includes("failed") || k.includes("reclaimed")) return "warning";
-    if (k.includes("heartbeat") || k.includes("claimed") || k.includes("running")) return "running";
-    return fallback || "active";
-  }
-
-  // Live Work: which profile is running what right now, and the latest Kanban
-  // activity. Counts that other panels already own (readiness, Kanban totals,
-  // cron, gateways) are not repeated here.
-  function PartyView({ party, events }) {
-    const data = party || {};
-    const members = asList(data.members);
-    const [selectedId, setSelectedId] = useState(members[0] && members[0].id);
-    const selected = members.find((m) => m.id === selectedId) || members[0] || {};
-    const activity = asList(events).slice(0, 8);
-    useEffect(() => {
-      if (members.length && !members.some((member) => member.id === selectedId)) {
-        setSelectedId(members[0].id);
-      }
-    }, [members.map((member) => member.id).join("|"), selectedId]);
-    if (!members.length && !activity.length) return null;
-
-    return el("section", { className: "olympus-section olympus-party olympus-pantheon" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Live Work"),
-          el("p", null, "Which profile is running what, and the latest Kanban activity. Select a profile for its current task.")
-        ),
-        el("a", { className: "olympus-link", href: routeLink("/kanban") }, "Open Kanban")
-      ),
-      el("div", { className: "olympus-command-viewport" },
-        el("div", { className: "olympus-viewport-main" },
-          members.length ? el("div", { className: "olympus-pantheon-map olympus-pantheon-map-grid", role: "group", "aria-label": "Profiles" },
-            members.map((member) => el("button", {
-              key: member.id,
-              type: "button",
-              "aria-pressed": selected.id === member.id,
-              "aria-label": "Select profile " + (member.label || "Agent"),
-              className: cx(
-                "olympus-agent-card",
-                "olympus-pantheon-node",
-                "olympus-agent-card-" + String(member.state || "unknown").toLowerCase(),
-                selected.id === member.id && "olympus-agent-card-selected",
-                selected.id === member.id && "olympus-pantheon-node-selected"
-              ),
-              onClick: () => setSelectedId(member.id)
-            },
-              el("strong", null, member.label || "Agent"),
-              el("small", null, [
-                (member.running_work || 0) + " running",
-                (member.open_work || 0) + " open",
-                (member.blocked_work || 0) + " blocked",
-              ].join(" / ")),
-              el(MetricPill, { state: member.state })
-            ))
-          ) : el("p", { className: "olympus-muted" }, "No Hermes profiles detected.")
-        ),
-        el("aside", { className: "olympus-party-inspector" },
-          el("div", { className: "olympus-party-inspector-head" },
-            el("div", null,
-              el("span", null, "Selected profile"),
-              el("h3", null, selected.label || "No profile")
-            ),
-            el(StatePill, { state: selected.state || "unknown" })
-          ),
-          selected.id ? [
-            el("div", { key: "stats", className: "olympus-party-stat-grid" },
-              [
-                ["Running", selected.running_work || 0],
-                ["Ready", selected.ready_work || 0],
-                ["Blocked", selected.blocked_work || 0],
-                ["Open", selected.open_work || 0],
-                ["Skills", selected.skill_count || 0],
-                ["Cron", selected.cron_jobs || 0],
-              ].map((pair) => el("div", { key: pair[0], className: "olympus-party-stat" },
-                el("span", null, pair[0]),
-                el("strong", null, String(pair[1]))
-              ))
-            ),
-            el("div", { key: "current", className: "olympus-party-current" },
-              el("strong", null, "Current work"),
-              selected.current_task ? el("p", null, [selected.current_task.title, selected.current_task.status, selected.current_task.goal_mode ? "goal mode" : null].filter(Boolean).join(" / ")) : el("p", null, "No active Kanban task on this scan."),
-              selected.current_task && selected.current_task.forced_skill_count ? el("small", null, "Forced skills: " + String(selected.current_task.forced_skill_count)) : null,
-              selected.current_task && selected.current_task.model_override ? el("small", null, "Model override: " + selected.current_task.model_override) : null
-            ),
-            asList(selected.flags).length ? el("div", { key: "flags", className: "olympus-flags" },
-              asList(selected.flags).map((flag) => el("span", { key: flag }, flag))
-            ) : null
-          ] : el("p", { className: "olympus-muted" }, "No Hermes profiles detected.")
-        )
-      ),
-      el("div", { className: "olympus-party-feed" },
-        el("h3", null, "Activity"),
-        activity.length ? activity.map((item, idx) => el("div", { key: idx, className: "olympus-party-event" },
-          el("div", null,
-            el("strong", null, item.label || item.kind || "Event"),
-            el("small", null, [item.source, item.profile, item.detail].filter(Boolean).join(" / "))
-          ),
-          el(StatePill, { state: eventState(item.kind, item.state), label: item.state || eventState(item.kind) })
-        )) : el("p", { className: "olympus-muted" }, "No recent activity in this scan.")
-      )
+  function SpendCheck({ attribution }) {
+    const data = attribution || {};
+    const jobs = asList(data.cron && data.cron.jobs);
+    const tasks = asList(data.background && data.background.tasks);
+    if (!Number(data.window_cost_usd || 0) && !jobs.length && !tasks.length) return null;
+    return el(CheckSection, {
+      id: "olympus-check-spend",
+      title: "Where spend goes",
+      link: "/analytics",
+      lead: formatMoney(data.window_cost_usd) + " across sessions in the last " + (data.window_days || 7) + " days: " +
+        formatMoney(data.cron && data.cron.total_cost_usd) + " scheduled, " + formatMoney(data.background && data.background.total_cost_usd) + " in background tasks."
+    },
+      jobs.length ? el("table", { className: "olympus-table" },
+        el("caption", { className: "olympus-sr-only" }, "Scheduled jobs by estimated cost"),
+        el("thead", null, el("tr", null, ["Scheduled job", "Runs", "Tokens", "Avg run", "Errors", "Est. cost"].map((label) => el("th", { key: label, scope: "col" }, label)))),
+        el("tbody", null, jobs.map((job) => el("tr", { key: job.job_ref },
+          el("td", null, el("strong", null, job.label), el("small", null, [job.profile, job.schedule].filter(Boolean).join(" · "))),
+          el("td", null, formatCount(job.fires)),
+          el("td", null, formatTokens(job.tokens)),
+          el("td", null, formatDuration(job.avg_duration_seconds)),
+          el("td", { className: job.errors ? "olympus-attention-text" : null }, formatCount(job.errors)),
+          el("td", null, formatMoney(job.est_cost_usd))
+        )))
+      ) : null,
+      tasks.length ? el(React.Fragment, null,
+        el("h3", null, "Background tasks"),
+        el("ul", { className: "olympus-plain-list" }, tasks.map((task) => el("li", { key: task.task },
+          el("span", null, task.task.replaceAll("_", " ")),
+          el("small", null, formatCount(task.calls) + " calls · " + formatTokens(task.tokens) + " tokens · " + formatMoney(task.cost_usd))
+        )))
+      ) : null,
+      jobs.length && data.cron.allocation ? el("small", { className: "olympus-muted" }, data.cron.allocation) : null
     );
   }
 
-  const BACKLOG_STATE = { critical: "critical", warning: "warning", info: "info" };
-
-  function BacklogTriage({ backlog }) {
-    const data = backlog || {};
-    const summary = data.summary || {};
-    const groups = asList(data.groups);
-    if (!groups.length) return null;
-    return el("section", { className: "olympus-section olympus-backlog" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Backlog triage"),
-          el("p", null, formatCount(summary.tasks) + " stuck tasks in " + summary.groups + (summary.groups === 1 ? " group" : " groups") + ", sorted by who has to act. " + formatCount(summary.needs_you) + " need a person.")
-        ),
-        el("a", { className: "olympus-link", href: routeLink(data.recommended_view || "/kanban") }, "Open Kanban")
-      ),
-      el("div", { className: "olympus-backlog-grid" },
-        groups.map((group) => el("article", { key: group.kind, className: cx("olympus-backlog-group", "olympus-backlog-group-" + group.severity) },
-          el("div", { className: "olympus-item-head" },
-            el("div", null,
-              el("span", null, group.count + (group.count === 1 ? " task" : " tasks")),
-              el("h3", null, group.label)
-            ),
-            el(MetricPill, { state: BACKLOG_STATE[group.severity] })
-          ),
-          el("p", null, group.action),
-          el("small", null, [
-            group.oldest_days != null ? "oldest " + group.oldest_days + (group.oldest_days === 1 ? " day" : " days") : null,
-            group.stale ? group.stale + " older than 3 days" : null,
-            group.repeat_blocks ? group.repeat_blocks + " blocked more than once" : null,
-            asList(group.assignees).map((a) => a.assignee + " " + a.count).join(", "),
-          ].filter(Boolean).join(" \u00b7 ")),
-          asList(group.samples).length ? el("ul", { className: "olympus-backlog-samples" },
-            asList(group.samples).map((sample, idx) => el("li", { key: idx }, sample.title))
-          ) : null
-        ))
-      )
+  function ReadinessCheck({ tuning }) {
+    const breakdown = (tuning && tuning.score_breakdown) || {};
+    if (typeof (tuning && tuning.score) !== "number") return null;
+    const deductions = asList(breakdown.deductions);
+    return el(CheckSection, { id: "olympus-check-readiness", title: "Readiness " + tuning.score + " (" + (breakdown.label || "") + ")", lead: breakdown.explanation },
+      deductions.length ? el("ul", { className: "olympus-plain-list" }, deductions.map((item, idx) => el("li", { key: idx },
+        el("span", null, item.label),
+        el("small", null, "−" + item.points + " · " + [item.evidence, item.reason].filter(Boolean).join(" · "))
+      ))) : el("p", { className: "olympus-muted" }, "Nothing deducted.")
     );
   }
 
-  function KanbanIntelligence({ kanban }) {
-    const data = kanban || {};
-    const totals = data.totals || {};
-    const boards = asList(data.boards);
-    const attention = asList(data.attention);
-    const assignees = asList(data.assignee_load);
-    const workers = asList(data.active_workers);
-    const totalBoards = boards.length;
-    const open = Number(data.open || 0);
-    const blocked = Number(totals.blocked || 0);
-    const ready = Number(totals.ready || 0);
-    const hasSignal = totalBoards || open || blocked || ready || workers.length || attention.length;
-
-    if (!hasSignal) return null;
-
-    const summary = [
-      { label: "Boards", value: String(totalBoards), state: totalBoards ? "active" : "unknown" },
-      { label: "Open Work", value: String(open), state: open ? "active" : "idle" },
-      { label: "Ready", value: String(ready), state: ready ? "running" : "idle" },
-      { label: "Blocked", value: String(blocked), state: blocked ? "warning" : "ok" },
-      { label: "Workers", value: String(workers.length), state: workers.length ? "running" : "idle" },
-    ];
-
-    return el("section", { className: "olympus-section olympus-kanban" },
-      el("div", { className: "olympus-section-head" },
-        el("div", null,
-          el("h2", null, "Kanban Intelligence"),
-          el("p", null, "Board pressure, blocked work, worker activity, and assignee load.")
-        ),
-        el("a", { className: "olympus-link", href: routeLink("/kanban") }, "Open Kanban")
+  function DebugCheck({ data, client }) {
+    const diag = (data && data.diagnostics) || {};
+    const evals = asList(data && data.ops_evals && data.ops_evals.items);
+    const sources = asList(data && data.evidence_sources && data.evidence_sources.items);
+    return el("details", { className: "olympus-debug" },
+      el("summary", null, "Debug details"),
+      el("dl", { className: "olympus-settings" },
+        [
+          ["Scan built in", diag.generated_ms ? Math.round(diag.generated_ms) + " ms" : "unknown"],
+          ["Payload", formatBytes(diag.payload_bytes)],
+          ["Fetch", client && client.fetch_ms != null ? client.fetch_ms + " ms" : "pending"],
+          ["Render", client && client.render_ms != null ? client.render_ms + " ms" : "pending"],
+          ["Hermes", diag.hermes && diag.hermes.version || "unknown"]
+        ].map((pair) => el("div", { key: pair[0] }, el("dt", null, pair[0]), el("dd", null, pair[1])))
       ),
-      el("div", { className: "olympus-kanban-summary" },
-        summary.map((item) => el("div", { key: item.label, className: "olympus-kanban-tile" },
+      evals.length ? el(React.Fragment, null,
+        el("h3", null, "Operational checks"),
+        el("ul", { className: "olympus-plain-list" }, evals.map((item) => el("li", { key: item.id || item.label },
           el("span", null, item.label),
-          el("strong", null, item.value),
-          el(MetricPill, { state: item.state })
-        ))
-      ),
-      el("div", { className: "olympus-kanban-grid" },
-        el("div", { className: "olympus-evidence-pane" },
-          el("h3", null, "Boards"),
-          boards.length ? boards.map((board) => el("div", { key: board.slug, className: "olympus-mini-row" },
-            el("span", null, (board.name || board.slug) + (board.is_current ? " / current" : "")),
-            el("small", null, [
-              (board.open || 0) + " open",
-              (board.counts && board.counts.running || 0) + " running",
-              (board.counts && board.counts.blocked || 0) + " blocked"
-            ].join(" / ")),
-            el(StatePill, { state: board.error ? "warning" : (board.open ? "active" : "idle") })
-          )) : el("p", { className: "olympus-muted" }, "No Kanban boards detected.")
-        ),
-        el("div", { className: "olympus-evidence-pane" },
-          el("h3", null, "Assignee Load"),
-          assignees.length ? assignees.slice(0, 6).map((agent) => el("div", { key: agent.assignee, className: "olympus-mini-row" },
-            el("span", null, agent.assignee || "unassigned"),
-            el("small", null, [
-              (agent.open || 0) + " open",
-              (agent.running || 0) + " running",
-              (agent.ready || 0) + " ready",
-              (agent.blocked || 0) + " blocked"
-            ].join(" / ")),
-            el(StatePill, { state: Number(agent.blocked || 0) ? "warning" : Number(agent.running || 0) ? "running" : "active" })
-          )) : el("p", { className: "olympus-muted" }, "No assigned Kanban work right now.")
-        ),
-        el("div", { className: "olympus-evidence-pane" },
-          el("h3", null, "Kanban Attention"),
-          attention.length ? attention.slice(0, 6).map((item, idx) => el("div", { key: idx, className: "olympus-mini-row" },
-            el("span", null, item.label || "Kanban issue"),
-            el("small", null, [item.board, item.detail].filter(Boolean).join(" / ")),
-            el(Badge, { className: severityClass(item.severity) }, item.severity || "info")
-          )) : el("p", { className: "olympus-muted" }, "No blocked, stale, failed, or unassigned Kanban work detected.")
-        )
-      )
+          el("small", null, [item.state, item.evidence].filter(Boolean).join(" · "))
+        )))
+      ) : null,
+      sources.length ? el(React.Fragment, null,
+        el("h3", null, "Evidence sources"),
+        el("ul", { className: "olympus-plain-list" }, sources.map((item) => el("li", { key: item.id || item.label },
+          el("span", null, item.label),
+          el("small", null, [item.state, item.redaction].filter(Boolean).join(" · "))
+        )))
+      ) : null
     );
   }
+
+  function Checks({ data, ctx, client }) {
+    return el("div", { className: "olympus-checks" },
+      el(FindingsCheck, { tuning: data.tuning, fixes: data.fixes, ctx }),
+      el(BacklogCheck, { backlog: data.backlog }),
+      el(SkillsCheck, { hygiene: data.skill_hygiene }),
+      el(PolicyCheck, { policy: data.config_policy }),
+      el(SpendCheck, { attribution: data.cost_attribution }),
+      el(ReadinessCheck, { tuning: data.tuning }),
+      el(DebugCheck, { data, client })
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // Backend off: Hermes served the tab but /api/plugins/olympus did not
+  // mount. List the agents from Hermes' own API and say how to turn it on.
+  // ---------------------------------------------------------------------
+
+  function loadStaticRoster(reason) {
+    return SDK.fetchJSON("/api/profiles")
+      .catch(() => ({ profiles: [] }))
+      .then((result) => {
+        const profiles = asList(result && result.profiles);
+        const agents = profiles.map((_profile, idx) => {
+          const label = idx === 0 ? "Default" : "Profile " + idx;
+          return {
+            id: "profile:" + idx,
+            label,
+            avatar: idx === 0 ? "D" : String(idx),
+            status: "unknown",
+            status_label: "Not checked",
+            current: null,
+            helpers: {},
+            activity_7d: [],
+            issues: 0,
+            last_active_at: null
+          };
+        });
+        return { static: { reason }, generated_at: new Date().toISOString(), agents: null, static_agents: agents, needs_you: [], controls: false };
+      });
+  }
+
+  function BackendOff({ info }) {
+    return el("section", { className: "olympus-note olympus-backend-off", role: "status" },
+      el("h2", null, "The Olympus backend is not running"),
+      el("p", null, "Without it Olympus can only list your agents. Enable it and restart the dashboard:"),
+      el("pre", null, el("code", null, "hermes plugins enable olympus\nhermes dashboard")),
+      info.reason ? el("small", { className: "olympus-muted" }, "Hermes said: " + info.reason) : null
+    );
+  }
+
+  function StaticRoster({ agents }) {
+    return el("ul", { className: "olympus-static-roster" }, asList(agents).map((agent) => el("li", { key: agent.id },
+      el(Avatar, { agent }),
+      el("strong", null, agent.label),
+      el(StatusPill, { status: "unknown", label: "Not checked" })
+    )));
+  }
+
+  // ---------------------------------------------------------------------
+  // Page
+  // ---------------------------------------------------------------------
 
   function OlympusPage() {
     const [data, setData] = useState(null);
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [clientDiagnostics, setClientDiagnostics] = useState(null);
-    const [activeMode, setActiveMode] = useState("brief");
+    const [client, setClient] = useState(null);
+    const [view, setView] = useState(readParam("view") === "checks" ? "checks" : "agents");
+    const [selected, setSelected] = useState(readParam("agent"));
+    const [detail, setDetail] = useState(null);
+    const [detailError, setDetailError] = useState(null);
+    const [sort, setSort] = useState("status");
+    const [notice, setNotice] = useState(null);
+    const noticeTimer = useRef(null);
+    const now = useNow(1000);
     // One request at a time: the next poll is scheduled only after the
-    // previous /overview settles. A fixed interval let a slow backend (any
-    // response slower than the interval) discard every result it produced.
+    // previous /overview settles, so a slow backend never stacks requests.
     const inFlight = useRef(false);
     const mounted = useRef(true);
     const pollTimer = useRef(null);
+    const selectedRef = useRef(selected);
+    const lastRow = useRef(null);
 
-    function now() {
+    function clock() {
       return window.performance && performance.now ? performance.now() : Date.now();
     }
 
-    function scheduleNextPoll() {
-      window.clearTimeout(pollTimer.current);
-      if (mounted.current) pollTimer.current = window.setTimeout(load, POLL_INTERVAL_MS);
+    function loadDetail(agentId) {
+      if (!agentId) return Promise.resolve();
+      return SDK.fetchJSON(API + "/agent?ref=" + encodeURIComponent(agentId))
+        .then((next) => {
+          if (!mounted.current || selectedRef.current !== agentId) return;
+          if (next && next.found) {
+            setDetail(next);
+            setDetailError(null);
+          } else {
+            setDetail(null);
+            setDetailError("this agent no longer exists in Hermes");
+          }
+        })
+        .catch((err) => {
+          if (mounted.current && selectedRef.current === agentId) setDetailError(toErrorMessage(err));
+        });
     }
 
     function load() {
@@ -1554,50 +1228,29 @@
       inFlight.current = true;
       window.clearTimeout(pollTimer.current);
       setLoading(true);
-      const started = now();
+      const started = clock();
       SDK.fetchJSON(API + "/overview?ts=" + encodeURIComponent(String(Date.now())))
         .then((next) => {
           if (!mounted.current) return;
-          const received = now();
+          const received = clock();
           setData(next);
           setError(null);
           window.requestAnimationFrame(() => {
             if (!mounted.current) return;
-            const rendered = now();
-            const budgets = next && next.diagnostics && next.diagnostics.budgets || {};
-            const renderBudget = Number(budgets.client_render_ms || 150);
-            setClientDiagnostics({
-              fetch_ms: Math.round(received - started),
-              fetch_state: received - started > Number(budgets.api_response_ms || 750) ? "warning" : "ok",
-              render_ms: Math.round(rendered - received),
-              render_state: rendered - received > renderBudget ? "warning" : "ok",
-              total_ms: Math.round(rendered - started)
-            });
+            setClient({ fetch_ms: Math.round(received - started), render_ms: Math.round(clock() - received) });
           });
+          return loadDetail(selectedRef.current);
         })
-        .catch((err) => {
-          const message = toErrorMessage(err);
-          return loadStaticCompatibility(message).then((fallback) => {
-            if (!mounted.current) return;
-            const received = now();
-            setData(fallback);
-            setError(null);
-            setClientDiagnostics({
-              fetch_ms: Math.round(received - started),
-              fetch_state: "warning",
-              render_ms: 0,
-              render_state: "warning",
-              total_ms: Math.round(received - started)
-            });
-          }).catch((fallbackErr) => {
-            if (mounted.current) setError(toErrorMessage(fallbackErr));
-          });
-        })
+        .catch((err) => loadStaticRoster(toErrorMessage(err)).then((fallback) => {
+          if (mounted.current) setData(fallback);
+        }).catch((fallbackErr) => {
+          if (mounted.current) setError(toErrorMessage(fallbackErr));
+        }))
         .finally(() => {
           inFlight.current = false;
           if (!mounted.current) return;
           setLoading(false);
-          scheduleNextPoll();
+          pollTimer.current = window.setTimeout(load, POLL_INTERVAL_MS);
         });
     }
 
@@ -1607,51 +1260,100 @@
       return () => {
         mounted.current = false;
         window.clearTimeout(pollTimer.current);
+        window.clearTimeout(noticeTimer.current);
       };
     }, []);
 
-    const health = (data && data.health) || {};
-    const tuning = (data && data.tuning) || {};
-    const fixes = data && data.fixes;
-    const setFixes = (next) => setData((prev) => Object.assign({}, prev, { fixes: next }));
+    function openAgent(agentId) {
+      const active = document.activeElement;
+      if (active && active.matches && active.matches("tr[data-agent]")) lastRow.current = active.getAttribute("data-agent");
+      else lastRow.current = agentId;
+      selectedRef.current = agentId;
+      setSelected(agentId);
+      setDetail(null);
+      setDetailError(null);
+      setView("agents");
+      writeParam("view", null);
+      writeParam("agent", agentId);
+      loadDetail(agentId);
+    }
+
+    function closeAgent() {
+      const back = lastRow.current;
+      selectedRef.current = null;
+      setSelected(null);
+      setDetail(null);
+      writeParam("agent", null);
+      window.requestAnimationFrame(() => {
+        const row = back && document.querySelector('tr[data-agent="' + CSS.escape(back) + '"]');
+        if (row) row.focus();
+      });
+    }
+
+    function changeView(next, anchor) {
+      setView(next);
+      writeParam("view", next === "checks" ? "checks" : null);
+      if (anchor) window.requestAnimationFrame(() => {
+        const target = document.getElementById(anchor);
+        if (target) target.scrollIntoView({ block: "start" });
+      });
+    }
+
+    // After a control succeeds, say so (the item it fixed usually leaves the
+    // queue on the refresh) and refresh at once so the change shows.
+    function onActionDone(message) {
+      if (message) {
+        setNotice(message);
+        window.clearTimeout(noticeTimer.current);
+        noticeTimer.current = window.setTimeout(() => setNotice(null), NOTICE_MS);
+      }
+      window.clearTimeout(pollTimer.current);
+      if (!inFlight.current) load();
+    }
+
+    useEffect(() => {
+      function onKey(event) {
+        if (event.key === "Escape" && selectedRef.current && !event.defaultPrevented) closeAgent();
+      }
+      document.addEventListener("keydown", onKey);
+      return () => document.removeEventListener("keydown", onKey);
+    }, []);
+
+    const agents = asList(data && data.agents && data.agents.agents);
+    const agentById = {};
+    agents.forEach((agent) => { agentById[agent.id] = agent; });
+    const ctx = {
+      now,
+      agents,
+      agentById,
+      controls: Boolean(data && data.controls),
+      openAgent,
+      onActionDone
+    };
+    const open = selected && (agentById[selected] || detail);
+
+    let body;
+    if (error) body = el("p", { className: "olympus-error-text", role: "alert" }, "Olympus could not read Hermes: " + error);
+    else if (!data) body = el(RosterSkeleton);
+    else if (data.static) body = el(React.Fragment, null, el(BackendOff, { info: data.static }), el(StaticRoster, { agents: data.static_agents }));
+    else if (view === "checks") body = el(Checks, { data, ctx, client });
+    else body = el(React.Fragment, null,
+      el(NeedsYouBanner, { queue: data.needs_you, ctx }),
+      el("div", { className: cx("olympus-workspace", open && "olympus-workspace-split") },
+        el("div", { className: "olympus-roster-wrap" },
+          el(Roster, { agents, queue: data.needs_you, selected, ctx, sort, onSort: setSort }),
+          el(EmptyNote, { agents }),
+          !ctx.controls ? el("p", { className: "olympus-muted olympus-controls-off" }, "Controls are off (dashboard.olympus.controls: false). Olympus shows what needs you and links to the Hermes page that fixes it.") : null
+        ),
+        open ? el(Inspector, { agentId: selected, detail, error: detailError, ctx, onClose: closeAgent }) : null
+      )
+    );
 
     return el("div", { className: "olympus-page" },
-      el(Hero, { health, tuning, history: data && data.history, loading, onRefresh: load }),
-      error ? el("div", { className: "olympus-error" }, error) : null,
-      el(ModeTabs, { activeMode, onChange: setActiveMode }),
-      el(ModePanel, { id: "brief", activeMode },
-        el(StaticCompatibilityNotice, { compatibility: data && data.static_compatibility }),
-        el(NeedsYou, { tuning, fixes, onFixes: data && data.static_compatibility ? null : setFixes }),
-        el(FixTracking, { fixes, onFixes: setFixes }),
-        el(ScoreExplainer, { tuning }),
-        el(AgentHQ, { hq: tuning.agent_hq })
-      ),
-      el(ModePanel, { id: "agents", activeMode },
-        el(CostAttribution, { attribution: data && data.cost_attribution }),
-        el(PerformanceTracking, { performance: data && data.performance }),
-        el(Fleet, { fleet: data && data.fleet }),
-        el(PartyView, { party: data && data.party, events: data && data.activity_events })
-      ),
-      el(ModePanel, { id: "skills", activeMode },
-        el(SkillCoverage, { coverage: data && data.skill_coverage }),
-        el(SkillHygiene, { hygiene: data && data.skill_hygiene })
-      ),
-      el(ModePanel, { id: "kanban", activeMode },
-        el(BacklogTriage, { backlog: data && data.backlog }),
-        el(TraceSpine, { trace: data && data.trace_spine }),
-        el(KanbanIntelligence, { kanban: data && data.kanban })
-      ),
-      el(ModePanel, { id: "policy", activeMode },
-        el(ToolPolicy, { policy: data && data.config_policy })
-      ),
-      el(ModePanel, { id: "diagnostics", activeMode },
-        el(OpsEvals, { evals: data && data.ops_evals }),
-        el("details", { className: "olympus-details olympus-debug" },
-          el("summary", null, "Debug details: metrics spine, payload budgets, evidence sources"),
-          el(MetricsSpine, { metrics: data && data.metrics_spine }),
-          el(ProductionDiagnostics, { diagnostics: data && data.diagnostics, clientDiagnostics, evidenceSources: data && data.evidence_sources })
-        )
-      )
+      el(Header, { data, view, onView: changeView, loading, now }),
+      el(GreekKey),
+      el("p", { className: cx("olympus-notice", notice && "olympus-notice-shown"), role: "status" }, notice || ""),
+      body
     );
   }
 
