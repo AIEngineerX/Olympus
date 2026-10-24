@@ -22,10 +22,13 @@ the public internet.
 
 ## Local label opt-in
 
-Operators who want richer local labels can start Hermes with:
+Operators who want richer local labels can enable them in `config.yaml`:
 
-```bash
-OLYMPUS_EXPOSE_LOCAL_LABELS=1 hermes dashboard --no-open --skip-build
+```yaml
+# $HERMES_HOME/config.yaml
+dashboard:
+  olympus:
+    expose_local_labels: true
 ```
 
 Only use this on a private machine. With this setting enabled, Olympus may show

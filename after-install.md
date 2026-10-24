@@ -79,8 +79,11 @@ Deep inspection should stay behind the mode tabs:
 Olympus hides local labels, paths, and raw IDs by default. To show local labels
 on a private machine only:
 
-```bash
-OLYMPUS_EXPOSE_LOCAL_LABELS=1 hermes dashboard --no-open --skip-build
+```yaml
+# $HERMES_HOME/config.yaml
+dashboard:
+  olympus:
+    expose_local_labels: true
 ```
 
 Do not expose the Hermes dashboard or Olympus plugin directly to the public

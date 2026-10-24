@@ -84,7 +84,7 @@ Then verify the live dashboard:
 - Empty evidence hides instead of adding noise.
 - Links go to Hermes-owned pages.
 - Evidence Sources renders without local paths, raw database paths, raw IDs, or secret-like values.
-- Local names and paths stay hidden unless `OLYMPUS_EXPOSE_LOCAL_LABELS=1`.
+- Local names and paths stay hidden unless `dashboard.olympus.expose_local_labels` is enabled.
 - Brief mode stays lean, and each staged mode reveals its owned panels.
 
 Browser check:

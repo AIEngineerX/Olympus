@@ -4,6 +4,19 @@ All notable changes to Olympus are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The local-label opt-in moved from the `OLYMPUS_EXPOSE_LOCAL_LABELS` environment
+  variable to `dashboard.olympus.expose_local_labels` in `config.yaml`. It is
+  re-read on every request and fails closed when the config cannot be read.
+- Error and log text now has absolute paths and URLs scrubbed alongside
+  secret-like values.
+- Cron schedules stored as plain strings no longer break the scan.
+- Metrics Spine reads stale workers and auxiliary routes from the fields their
+  producers actually emit.
+
 ## [1.0.3] - 2026-06-08
 
 ### Fixed

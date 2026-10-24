@@ -57,7 +57,7 @@ Olympus is a diagnostic surface. Every change must keep these invariants:
 - **SQLite is opened read-only** (`?mode=ro`) and defensively (tolerate missing
   tables/columns — see the `collect_kanban` / `collect_sessions` pattern).
 - **Local labels stay hidden by default.** Session/task/cron names and exact
-  routes are only shown when `OLYMPUS_EXPOSE_LOCAL_LABELS=1`. Anything stripped
+  routes are only shown when `dashboard.olympus.expose_local_labels` is true. Anything stripped
   internally is keyed with a leading `_` and removed by `strip_internal`.
 
 If you change anything that reads HermesOS internals (schemas, env vars, paths,

@@ -211,8 +211,8 @@ function assertPayload(payload) {
   const privacy = payload.evidence_sources &&
     payload.evidence_sources.summary &&
     payload.evidence_sources.summary.privacy;
-  if (process.env.OLYMPUS_EXPOSE_LOCAL_LABELS !== "1" && privacy !== "local labels hidden") {
-    failures.push(`unexpected privacy state: ${privacy || "missing"}`);
+  if (privacy !== "local labels hidden") {
+    failures.push(`unexpected privacy state: ${privacy || "missing"} (run the security smoke with dashboard.olympus.expose_local_labels off)`);
   }
   return failures;
 }

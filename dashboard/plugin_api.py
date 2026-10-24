@@ -58,7 +58,11 @@ SKILLS_SH_AUDIT_CHECKS = ("agent-trust-hub", "socket", "snyk")
 SKILLS_SH_AUDIT_OK = {"pass", "passed", "ok", "clean"}
 SKILLS_SH_AUDIT_WARN = {"warn", "warning", "review"}
 SKILLS_SH_AUDIT_FAIL = {"fail", "failed", "error", "critical", "block"}
-EXPOSE_LOCAL_LABELS = os.environ.get("OLYMPUS_EXPOSE_LOCAL_LABELS", "").strip().lower() in {"1", "true", "yes", "on"}
+# Behavioral settings belong in config.yaml, not env vars, so the
+# private-machine label opt-in lives at dashboard.olympus.expose_local_labels.
+# Refreshed at the start of every request; fails closed (labels hidden) when
+# the config cannot be read.
+EXPOSE_LOCAL_LABELS = False
 REDACTION_PATTERNS = [
     re.compile(r"(?i)['\"]?(?:api[_-]?key|token|secret|password|passwd)['\"]?\s*[:=]\s*['\"]?[^'\"\s,}]+['\"]?"),
     re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd)\s*[:=]\s*['\"]?[^'\"\s]+"),
@@ -67,6 +71,15 @@ REDACTION_PATTERNS = [
     re.compile(r"github_pat_[A-Za-z0-9_]+"),
     re.compile(r"ghp_[A-Za-z0-9_]+"),
     re.compile(r"xox[baprs]-[A-Za-z0-9-]+"),
+]
+# Free-text error/log fields routinely embed absolute filesystem paths and
+# delivery URLs (worker tracebacks, handoff failures, webhook errors). The
+# privacy contract says local paths and base URLs are hidden by default, so
+# scrub them alongside secret-like strings before any error text is returned.
+URL_PATTERN = re.compile(r"(?i)\b(?:https?|ftp|wss?)://[^\s'\"<>]+")
+PATH_PATTERNS = [
+    re.compile(r"(?i)[a-z]:\\[^\s'\"|<>]+"),         # Windows: C:\Users\alice\...
+    re.compile(r"(?<![\w.])~?(?:/[\w.\-]+){2,}/?"),  # POSIX / home: /home/alice/.hermes, ~/x/y
 ]
 # Precise log failure signals (avoids false positives like "0 failed" / "failed: false").
 LOG_ERROR_PATTERNS = [
@@ -80,15 +93,34 @@ LOG_ERROR_PATTERNS = [
 ]
 
 
+def refresh_expose_local_labels() -> bool:
+    global EXPOSE_LOCAL_LABELS
+    try:
+        try:
+            from hermes_cli.config import load_config_readonly
+            cfg: Any = load_config_readonly() or {}
+        except ImportError:
+            # Standalone loads (plugin unit tests) run without hermes_cli on
+            # sys.path; read the active HERMES_HOME config directly.
+            cfg = read_yaml(get_hermes_home() / "config.yaml")
+        dashboard_cfg = cfg.get("dashboard") if isinstance(cfg, dict) else None
+        olympus_cfg = dashboard_cfg.get("olympus") if isinstance(dashboard_cfg, dict) else None
+        value = bool(olympus_cfg.get("expose_local_labels", False)) if isinstance(olympus_cfg, dict) else False
+    except Exception as exc:
+        log_read_warning("expose_local_labels config read failed", exc)
+        value = False
+    EXPOSE_LOCAL_LABELS = value
+    return value
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def redact_log_value(value: Any, limit: int = 180) -> str:
-    text = "" if value is None else str(value)
-    for pattern in REDACTION_PATTERNS:
-        text = pattern.sub(lambda m: m.group(1) + "[redacted]" if m.groups() else "[redacted]", text)
-    return text[:limit]
+    # Same redaction the API payloads use, so log warnings can't leak a path
+    # or secret that the response fields scrub.
+    return redact_text(value, limit)
 
 
 def log_read_warning(context: str, exc: BaseException) -> None:
@@ -168,6 +200,9 @@ def redact_text(value: Any, limit: int = 180) -> str:
     text = "" if value is None else str(value)
     for pattern in REDACTION_PATTERNS:
         text = pattern.sub(lambda m: m.group(1) + "[redacted]" if m.groups() else "[redacted]", text)
+    text = URL_PATTERN.sub("[redacted-url]", text)
+    for pattern in PATH_PATTERNS:
+        text = pattern.sub("[redacted-path]", text)
     return text[:limit]
 
 
@@ -1107,7 +1142,7 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
 
     def add(kind: str, severity: str, title: str, detail: str, evidence: str, view: str, basis: str, threshold: str = "") -> None:
         action = "Open Config" if view == "/config" else ("Open Sessions" if view == "/sessions" else "Open Analytics")
-        findings.append(_tuning_item(kind, severity, title, detail, evidence, view, action, "Athena", basis, threshold))
+        findings.append(_tuning_item(kind, severity, title, detail, evidence, view, action, "Olympus", basis, threshold))
 
     if root_config_path.exists() is False and not profile_configs:
         add(
@@ -1382,6 +1417,25 @@ def collect_profiles() -> List[Dict[str, Any]]:
     return profiles
 
 
+def cron_schedule_display(job: Dict[str, Any]) -> Optional[str]:
+    """Human-readable schedule for a cron job, tolerant of legacy shapes.
+
+    ``schedule`` may be a dict (current shape, carrying a ``display`` field), a
+    bare string (older / hand-edited ``jobs.json``), or absent. Mirrors Hermes'
+    own ``_schedule_display_for_job`` normalization so a string schedule doesn't
+    raise ``AttributeError`` on ``.get("display")`` and 500 the whole scan.
+    """
+    display = job.get("schedule_display")
+    if display:
+        return str(display)
+    schedule = job.get("schedule")
+    if isinstance(schedule, dict):
+        return schedule.get("display")
+    if schedule is not None:
+        return str(schedule)
+    return None
+
+
 def collect_cron(profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     base = get_hermes_home()
     data = read_json(base / "cron" / "jobs.json") or {}
@@ -1407,7 +1461,7 @@ def collect_cron(profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[s
             "label": public_label(job.get("name"), job_ref, "cron"),
             "state": state,
             "enabled": enabled,
-            "schedule": job.get("schedule_display") or (job.get("schedule") or {}).get("display"),
+            "schedule": cron_schedule_display(job),
             "next_run_at": ts_to_iso(job.get("next_run_at")),
             "last_run_at": ts_to_iso(job.get("last_run_at")),
             "last_status": last_status,
@@ -2385,7 +2439,7 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
             ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in looping[:3]),
             "/sessions",
             "Open Sessions",
-            "Hephaestus",
+            "Olympus",
             "Hermes records tool_call_count per session; runaway tool use without termination is a known failure signature.",
             f">= {RUNAWAY_TOOLS_THRESHOLD} tool calls in one run",
         ))
@@ -2399,7 +2453,7 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
             ", ".join(f"{s.get('label')}: ${_session_cost(s):.2f}" for s in expensive[:3]),
             "/analytics",
             "Open Analytics",
-            "Athena",
+            "Olympus",
             "Hermes records per-session token cost (estimated/actual_cost_usd); cost concentration is a routing signal.",
             f"single-run cost >= ${EXPENSIVE_RUN_USD:.2f}",
         ))
@@ -2500,7 +2554,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in tool_heavy[:3]),
             "/skills",
             "Open Skills",
-            "Hephaestus",
+            "Olympus",
             "Hermes records tool_call_count. Use traces, tool counts, outcomes, and repeatable evidence before changing routes.",
             f">= {TOOL_HEAVY_THRESHOLD} tool calls in a session",
         ))
@@ -2539,7 +2593,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             ", ".join(str(t.get("title") or t.get("id")) for t in blocked_tasks[:4]),
             "/kanban",
             "Open Kanban",
-            "Athena",
+            "Olympus",
             "Kanban blocked status is first-party orchestration evidence.",
             "task status = blocked",
         ))
@@ -2565,7 +2619,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             ", ".join(f"{r.get('task_id')}: {r.get('outcome') or r.get('status')}" for r in failed_runs[:4]),
             "/kanban",
             "Open Kanban",
-            "Argus",
+            "Olympus",
             "Kanban task_runs record worker failures, crashes, and timeouts.",
             "task_run status/outcome indicates failure",
         ))
@@ -2578,7 +2632,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             ", ".join(str(a.get("label")) for a in missing_models[:4]),
             "/profiles",
             "Open Profiles",
-            "Athena",
+            "Olympus",
             "Profile route metadata makes behavior changes auditable.",
             "profile route metadata is unset",
         ))
@@ -2619,7 +2673,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Current cross-surface scan is clean.",
             "/analytics",
             "Open Analytics",
-            "Athena",
+            "Olympus",
         ))
 
     tuning_items.sort(key=lambda x: _severity_rank(str(x.get("severity"))))
@@ -2713,7 +2767,7 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
             ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in looping[:3]),
             "/skills",
             "Open Skills",
-            "Hephaestus",
+            "Olympus",
             "Hermes session tool_call_count is first-party trace evidence.",
             f">= {RUNAWAY_TOOLS_THRESHOLD} tool calls in one session",
         ))
@@ -2726,7 +2780,7 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
             ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in tool_heavy[:3]),
             "/skills",
             "Open Skills",
-            "Hephaestus",
+            "Olympus",
             "Hermes records tool calls per session.",
             f"{TOOL_HEAVY_THRESHOLD}-{RUNAWAY_TOOLS_THRESHOLD - 1} tool calls in one session",
         ))
@@ -2765,7 +2819,7 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
             ", ".join(str(t.get("title") or t.get("id")) for t in forced_skill_tasks[:4]),
             "/kanban",
             "Open Kanban",
-            "Athena",
+            "Olympus",
             "Kanban task metadata exposes forced skill counts.",
             "task forced_skill_count > 0",
         ))
@@ -2780,7 +2834,7 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
             "Current skill coverage scan is clean.",
             "/skills",
             "Open Skills",
-            "Athena",
+            "Olympus",
         ))
 
     summary_state = "warning" if looping or zero_skill_profiles else ("info" if tool_heavy or long_threads or context_pressure else "ok")
@@ -3469,9 +3523,15 @@ def build_metrics_spine(
     ops_evals: Dict[str, Any],
     config_policy: Dict[str, Any],
     usage_rollup: Optional[Dict[str, Any]] = None,
+    orchestration: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Hermes-grounded operational metrics for tuning, not a usage ledger."""
     kanban = kanban or {}
+    # ``stale_workers`` is produced by build_orchestration().summary, never by
+    # the collect_kanban dict — read it from orchestration so the work metric
+    # isn't stuck at 0. Fall back to deriving it if a caller didn't pass one.
+    orchestration = orchestration or build_orchestration(kanban)
+    orch_summary = orchestration.get("summary") if isinstance(orchestration.get("summary"), dict) else {}
     rollup = usage_rollup or collect_usage_rollup(profiles)
     skill_summary = skill_metadata.get("summary") if isinstance(skill_metadata.get("summary"), dict) else {}
     coverage_summary = skill_coverage.get("summary") if isinstance(skill_coverage.get("summary"), dict) else {}
@@ -3536,13 +3596,13 @@ def build_metrics_spine(
             f"avg {performance_summary.get('avg_tools_per_session')} tools/session",
             "/sessions",
         )
-    if int(kanban_totals.get("blocked") or 0) or int(kanban.get("stale_workers") or 0):
+    if int(kanban_totals.get("blocked") or 0) or int(orch_summary.get("stale_workers") or 0):
         add_signal(
             "work",
             "warning",
             "Work reliability needs review",
             "Blocked work or stale workers reduce agent usability even when usage volume looks healthy.",
-            f"{kanban_totals.get('blocked') or 0} blocked / {kanban.get('stale_workers') or 0} stale worker(s)",
+            f"{kanban_totals.get('blocked') or 0} blocked / {orch_summary.get('stale_workers') or 0} stale worker(s)",
             "/kanban",
         )
 
@@ -3567,9 +3627,8 @@ def build_metrics_spine(
             "cost_visibility": cost_confidence,
             "config_grounding": {
                 "toolsets": policy_summary.get("toolsets") or 0,
-                "enabled_toolsets": policy_summary.get("enabled_toolsets") or 0,
                 "max_turns": policy_summary.get("max_turns") or 0,
-                "auxiliary_routes": policy_summary.get("aux_configured") or 0,
+                "auxiliary_routes": policy_summary.get("auxiliary_routes") or 0,
             },
         },
         "usage": {
@@ -3616,7 +3675,7 @@ def build_metrics_spine(
             "running": kanban_totals.get("running") or 0,
             "blocked": kanban_totals.get("blocked") or 0,
             "failed_runs": performance.get("metrics", {}).get("failed_kanban_runs") if isinstance(performance.get("metrics"), dict) else 0,
-            "stale_workers": kanban.get("stale_workers") or 0,
+            "stale_workers": orch_summary.get("stale_workers") or 0,
             "recommended_view": "/kanban",
         },
         "evals": {
@@ -3701,7 +3760,7 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
             f"{len(looping_sessions)} session(s) crossed {RUNAWAY_TOOLS_THRESHOLD} tool calls. Add a checklist skill, reduce max turns, or split the task.",
             ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in looping_sessions[:3]),
             "/sessions",
-            "Hephaestus",
+            "Olympus",
             "Open Sessions",
             "Runaway tool_call_count is a trace-level signal for loops, unclear plans, or missing procedures.",
         ))
@@ -3712,7 +3771,7 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
             f"{len(tool_heavy)} session(s) used 20 or more tool calls. Add skills, narrower prompts, or decomposition.",
             ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in tool_heavy[:3]),
             "/analytics",
-            "Hephaestus",
+            "Olympus",
             "Open Analytics",
             "High tool_call_count is a trace-level signal for workflow friction, missing skills, or poor decomposition.",
         ))
@@ -3745,7 +3804,7 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
             f"{len(missing_models)} profile(s) do not expose a default route in config.",
             ", ".join(str(p.get("label") or p.get("name")) for p in missing_models[:4]),
             "/profiles",
-            "Athena",
+            "Olympus",
             "Open Profiles",
             "Explicit route metadata makes changes auditable and keeps profile behavior intentional.",
         ))
@@ -3756,7 +3815,7 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
             "Gateway markers exist, but no running gateway was detected.",
             ", ".join(str(g.get("label")) for g in gateways[:4]),
             "/logs",
-            "Iris",
+            "Olympus",
             "Open Logs",
             "Gateway process state determines whether platform-delivered work can be routed.",
         ))
@@ -3767,7 +3826,7 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
             "Gateway or error log tails contain failure terms.",
             ", ".join(str(x) for x in health.get("recent_error_terms", [])[:5]),
             "/logs",
-            "Argus",
+            "Olympus",
             "Open Logs",
             "Olympus scans the last 8KB of each Hermes log file; timestamp recency is not inferred.",
         ))
@@ -3778,7 +3837,7 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
             f"{len(kanban_attention)} Kanban issue(s) need review.",
             ", ".join(str(x.get("label") or "Kanban issue") for x in kanban_attention[:3]),
             "/kanban",
-            "Athena",
+            "Olympus",
             "Open Kanban",
             "Kanban attention is derived from task status, heartbeats, retries, assignees, and task_runs.",
         ))
@@ -3800,7 +3859,7 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
             "Olympus did not detect failing cron jobs, stale sessions, handoff errors, or missing profile routes.",
             "Current metadata scan is clean.",
             "/analytics",
-            "Athena",
+            "Olympus",
             "Open Analytics",
             "No current heuristic crossed its threshold.",
         ))
@@ -3893,7 +3952,7 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
             "sources": [
                 {"label": "Hermes session store", "detail": "Uses local runtime metadata, message_count, tool_call_count, handoff_error, and timestamps from the Hermes state store."},
                 {"label": "Hermes Kanban", "detail": "Uses first-party task status, assignee load, worker heartbeats, retries, and task_runs."},
-                {"label": "HermesOS profiles and skills", "detail": "Uses profile runtime-route metadata, gateway state, and local SKILL.md counts."},
+                {"label": "Hermes profiles and skills", "detail": "Uses profile runtime-route metadata, gateway state, and local SKILL.md counts."},
                 {"label": "Provider-neutral agent evaluation", "detail": "Uses traces, tool calls, outcomes, and repeatable signals before changing agents or routes."},
             ],
         },
@@ -3907,6 +3966,7 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
 
 @router.get("/health")
 async def health() -> Dict[str, Any]:
+    refresh_expose_local_labels()
     profiles = collect_profiles()
     cron = collect_cron(profiles)
     h = collect_health(profiles, cron)
@@ -3915,6 +3975,7 @@ async def health() -> Dict[str, Any]:
 
 @router.get("/overview")
 async def overview() -> Dict[str, Any]:
+    refresh_expose_local_labels()
     started_at = time.perf_counter()
     profiles = collect_profiles()
     cron = collect_cron(profiles)
@@ -3946,6 +4007,7 @@ async def overview() -> Dict[str, Any]:
         ops_evals,
         config_policy,
         usage_rollup,
+        orchestration=orchestration,
     )
     health = collect_health(profiles, cron)
     attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
@@ -3979,6 +4041,7 @@ async def overview() -> Dict[str, Any]:
 
 @router.get("/tuning")
 async def tuning() -> Dict[str, Any]:
+    refresh_expose_local_labels()
     started_at = time.perf_counter()
     profiles = collect_profiles()
     cron = collect_cron(profiles)
@@ -4010,6 +4073,7 @@ async def tuning() -> Dict[str, Any]:
         ops_evals,
         config_policy,
         usage_rollup,
+        orchestration=orchestration,
     )
     health = collect_health(profiles, cron)
     attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
