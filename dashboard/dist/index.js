@@ -82,7 +82,7 @@
   }
 
   function routeLabel(path) {
-    const route = routeLink(path);
+    const route = path && path.startsWith("/") ? path : "/" + (path || "");
     const labels = {
       "/analytics": "Open Analytics",
       "/config": "Open Config",
