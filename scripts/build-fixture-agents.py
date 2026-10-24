@@ -85,6 +85,18 @@ def seed(home: Path, now: float) -> None:
     sessions(home / "profiles" / "coder", history("c", 7, 3, 24000) + [
         ("coder-kanban", "kanban", "Fix flaky checkout test", now - 2400, None, None, now - 60, 30000, 7000, 140000, 0.88, None),
     ])
+    # Behaviour only Olympus sees: a coder run that looped (58 tool calls,
+    # $2.40) and a researcher run that re-sent a huge context every call.
+    for profile, row in (
+        (home / "profiles" / "coder", ("c-loop", "kanban", "Retry the flaky test until green", now - 3 * 86400, now - 3 * 86400 + 2700,
+                                       "completed", now - 3 * 86400 + 2700, 34, 58, 40, 90000, 21000, 2600000, 0, 2.4, None)),
+        (home / "profiles" / "researcher", ("r-context", "cli", "Read every competitor pricing page", now - 2 * 86400, now - 2 * 86400 + 1800,
+                                            "completed", now - 2 * 86400 + 1800, 48, 14, 9, 40000, 8000, 720000, 0, 0.9, None)),
+    ):
+        con = sqlite3.connect(profile / "state.db")
+        con.execute("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", row)
+        con.commit()
+        con.close()
     sessions(home / "profiles" / "reviewer", history("v", 5, 1, 12000))
     sessions(home / "profiles" / "writer", history("w", 4, 1, 9000))
     sessions(home / "profiles" / "analyst", history("a", 3, 1, 6000))

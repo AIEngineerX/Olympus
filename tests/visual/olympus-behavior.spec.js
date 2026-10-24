@@ -115,7 +115,7 @@ test.describe("Olympus behaviour", () => {
     await confirm.click();
 
     await expect(page.locator(".olympus-notice")).toHaveText("Answer posted; back to ready: Which market should the pricing study cover?");
-    await expect(page.locator(".olympus-banner .olympus-count")).toHaveText("5");
+    await expect(page.locator(".olympus-banner .olympus-count")).toHaveText("7");
     const sent = await writes(page);
     expect(sent.slice(0, 2)).toEqual([
       { method: "POST", path: "/api/plugins/kanban/tasks/t-pricing/comments", query: "board=default", body: { body: "Cover the EU market first." } },
@@ -149,7 +149,7 @@ test.describe("Olympus behaviour", () => {
 
   test("assigning unowned work logs it on the agent that received it", async ({ page }) => {
     await openPage(page, { state: "noisy" });
-    await page.getByRole("button", { name: "+3 more" }).click();
+    await page.getByRole("button", { name: "+5 more" }).click();
     await bannerItem(page, "has no agent").getByRole("button", { name: "Assign" }).click();
     const popover = page.getByRole("dialog", { name: /^Assign:/ });
     await popover.getByRole("combobox").selectOption({ label: "Analyst" });
@@ -169,12 +169,39 @@ test.describe("Olympus behaviour", () => {
 
     await expect(popover.getByRole("alert")).toHaveText("Hermes said: 409: cannot reclaim (fixture refusal)");
     await expect(popover.getByRole("button", { name: "Try again" })).toBeEnabled();
-    await expect(page.locator(".olympus-banner .olympus-count")).toHaveText("6");
+    await expect(page.locator(".olympus-banner .olympus-count")).toHaveText("8");
     const logged = new URLSearchParams((await writes(page))[1].query);
     expect([logged.get("action"), logged.get("ok"), logged.get("detail")]).toEqual(["reclaim", "false", "409: cannot reclaim (fixture refusal)"]);
 
     await popover.getByRole("button", { name: "Cancel" }).click();
     await expect(popover).toHaveCount(0);
+  });
+
+  test("the inspector shows how the agent works, not a copy of the board", async ({ page }) => {
+    await openPage(page, { state: "noisy", agent: "profile:coder" });
+    const inspector = page.locator(".olympus-inspector");
+    await expect(inspector.locator(".olympus-setup")).toHaveText("model claude-sonnet-5-5 · 0 skills · shares the default gateway · loop hard stop unattended only");
+
+    const working = inspector.locator(".olympus-inspector-section").filter({ has: page.getByRole("heading", { name: "How it's working" }) });
+    await expect(working.locator(".olympus-signals li")).toHaveCount(3);
+    await expect(working.locator(".olympus-signals li").first()).toContainText("Looping or tool-thrashing in 1 session");
+    await expect(working.getByRole("button", { name: "Open Retry the flaky test until green session" }).first()).toBeVisible();
+    await expect(working).toContainText("Tools per run");
+
+    // Kanban keeps the board: only the running task and counts appear here.
+    const kanban = inspector.locator(".olympus-inspector-section").filter({ has: page.getByRole("heading", { name: "Kanban", exact: true }) });
+    await expect(kanban.locator(".olympus-work-row")).toHaveCount(1);
+    await expect(kanban.locator(".olympus-work-row")).toContainText("Fix flaky checkout test");
+    await expect(kanban.locator(".olympus-kanban-summary")).toContainText("2 open · 1 blocked · 1 done this week");
+    await expect(kanban).not.toContainText("Deploy the preview build");
+
+    // The behaviour warnings sit on Coder in the queue, with its sessions.
+    await expect(inspector.locator(".olympus-queue-item")).toHaveCount(3);
+  });
+
+  test("the roster says which tool a working agent is using", async ({ page }) => {
+    await openPage(page, { state: "noisy" });
+    await expect(page.locator('tr[data-agent="profile:default"] .olympus-now small')).toContainText(/^using web_extract \d+ (s|min) ago · for \d+ min$/);
   });
 
   test("Escape closes an open popover before the inspector", async ({ page }) => {
