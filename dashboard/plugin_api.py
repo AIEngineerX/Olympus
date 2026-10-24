@@ -47,6 +47,9 @@ CONTEXT_PRESSURE_TOKENS = 50000
 RUNAWAY_TOOLS_THRESHOLD = 40
 EXPENSIVE_RUN_USD = 1.0
 MAX_TURNS_REVIEW_THRESHOLD = 80
+KANBAN_CLOSED_TASK_SAMPLE = 100
+KANBAN_FINISHED_RUN_SAMPLE = 100
+KANBAN_DISPLAY_SAMPLE = 16
 API_RESPONSE_BUDGET_MS = 750.0
 PAYLOAD_BUDGET_BYTES = 250_000
 CLIENT_RENDER_BUDGET_MS = 150.0
@@ -393,6 +396,7 @@ def build_evidence_sources(profiles: List[Dict[str, Any]], sessions: List[Dict[s
     hub_lock = hermes_home / "skills" / ".hub" / "lock.json"
     boards = as_list(kanban.get("boards"))
     board_failures = sum(1 for board in boards if isinstance(board, dict) and board.get("error"))
+    boards_present = any(isinstance(board, dict) and board.get("db_exists") for board in boards)
 
     session_count = _sqlite_count(state_store, "sessions")
     message_count = _sqlite_count(state_store, "messages")
@@ -430,8 +434,8 @@ def build_evidence_sources(profiles: List[Dict[str, Any]], sessions: List[Dict[s
             "id": "hermes_kanban",
             "label": "Hermes Kanban store",
             "type": "sqlite",
-            "state": _source_state(bool(boards), board_failures),
-            "present": bool(boards),
+            "state": _source_state(boards_present, board_failures),
+            "present": boards_present,
             "counts": {
                 "boards_scanned": len(boards),
                 "open_tasks": int(kanban.get("open") or 0),
@@ -856,7 +860,7 @@ def build_skill_hygiene(skill_metadata: Dict[str, Any], skill_coverage: Dict[str
         )
 
     forced_skill_names: set[str] = set()
-    for task in kanban_items(kanban, "recent_tasks"):
+    for task in kanban_items(kanban, "_tasks"):
         for name in as_list(task.get("_skills")):
             if name:
                 forced_skill_names.add(str(name))
@@ -1126,7 +1130,7 @@ def _config_max_turns(configs: List[Dict[str, Any]], kanban: Dict[str, Any]) -> 
             val = _cfg_int(_cfg_value(cfg, *path))
             if val is not None:
                 values.append(val)
-    for task in kanban_items(kanban, "recent_tasks"):
+    for task in kanban_items(kanban, "_tasks"):
         val = _cfg_int(task.get("goal_max_turns"))
         if val is not None:
             values.append(val)
@@ -1756,8 +1760,8 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
     totals = {status: 0 for status in KANBAN_COLUMNS}
     attention: List[Dict[str, Any]] = []
     assignee_load: Dict[str, Dict[str, Any]] = {}
-    recent_tasks: List[Dict[str, Any]] = []
-    recent_runs: List[Dict[str, Any]] = []
+    tasks: List[Dict[str, Any]] = []
+    runs: List[Dict[str, Any]] = []
     active_workers: List[Dict[str, Any]] = []
 
     def add_attention(severity: str, label: str, detail: str, board: str, task_id: Optional[str] = None) -> None:
@@ -1783,8 +1787,15 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
             "diagnostic_count": 0,
             "active_workers": 0,
         })
-        if con is None:
+        if not db_path.exists():
+            board["state"] = "missing"
             continue
+        if con is None:
+            board["state"] = "error"
+            board["error"] = "unreadable (details hidden)" if not EXPOSE_LOCAL_LABELS else "SQLite could not open the board database read-only."
+            add_attention("warning", f"Could not read Kanban board {slug}", "The board database exists but could not be opened read-only.", slug)
+            continue
+        board["state"] = "ok"
         try:
             task_cols = table_columns(con, "tasks")
             run_cols = table_columns(con, "task_runs")
@@ -1803,13 +1814,24 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "goal_mode", "goal_max_turns", "workspace_kind", "tenant", "skills", "model_override",
             ]
             task_select = [c for c in task_select if c in task_cols]
+            task_rows = []
             if task_select:
-                task_rows = con.execute(
-                    f"SELECT {', '.join(task_select)} FROM tasks WHERE status != 'archived' "
-                    "ORDER BY COALESCE(completed_at, started_at, created_at) DESC LIMIT 400"
-                ).fetchall()
-            else:
-                task_rows = []
+                # Every open task is operational evidence (load, blocked,
+                # stale, unassigned); only closed history is sampled. A
+                # recency LIMIT over all tasks let newer completed work push
+                # an older running task out of the scan.
+                recency = ", ".join(c for c in ("completed_at", "started_at", "created_at") if c in task_cols) or "rowid"
+                open_marks = ", ".join("?" for _ in OPEN_KANBAN_STATUSES)
+                open_params = tuple(sorted(OPEN_KANBAN_STATUSES))
+                task_rows.extend(con.execute(
+                    f"SELECT {', '.join(task_select)} FROM tasks WHERE status IN ({open_marks})",
+                    open_params,
+                ).fetchall())
+                task_rows.extend(con.execute(
+                    f"SELECT {', '.join(task_select)} FROM tasks WHERE status NOT IN ({open_marks}) AND status != 'archived' "
+                    f"ORDER BY COALESCE({recency}) DESC LIMIT ?",
+                    open_params + (KANBAN_CLOSED_TASK_SAMPLE,),
+                ).fetchall())
 
             for t in task_rows:
                 status = str(row_value(t, "status", "unknown"))
@@ -1869,40 +1891,40 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                     except Exception:
                         pass
 
-                if len(recent_tasks) < 16:
-                    forced_skills: List[str] = []
-                    raw_skills = row_value(t, "skills")
-                    if raw_skills:
-                        try:
-                            parsed_skills = json.loads(raw_skills)
-                            if isinstance(parsed_skills, list):
-                                forced_skills = [str(x) for x in parsed_skills if x]
-                        except Exception:
-                            forced_skills = []
-                    recent_tasks.append({
-                        "id": public_task_id,
-                        "board": slug,
-                        "title": title,
-                        "status": status,
-                        "assignee": public_assignee,
-                        "_assignee": assignee,
-                        "priority": row_value(t, "priority", 0),
-                        "created_at": ts_to_iso(created_at),
-                        "started_at": ts_to_iso(started_at),
-                        "completed_at": ts_to_iso(row_value(t, "completed_at")),
-                        "last_heartbeat_at": ts_to_iso(heartbeat),
-                        "claim_expires_at": ts_to_iso(claim_expires),
-                        "worker_ref": public_ref(row_value(t, "worker_pid"), "pid"),
-                        "current_run_ref": public_ref(row_value(t, "current_run_id"), "run"),
-                        "max_runtime_seconds": row_value(t, "max_runtime_seconds"),
-                        "consecutive_failures": failures,
-                        "goal_mode": bool(row_value(t, "goal_mode", 0)),
-                        "goal_max_turns": row_value(t, "goal_max_turns"),
-                        "_skills": forced_skills,
-                        "forced_skill_count": len(forced_skills),
-                        "model_override": row_value(t, "model_override") if EXPOSE_LOCAL_LABELS else ("override" if row_value(t, "model_override") else None),
-                        "session_ref": row_value(t, "session_id") if EXPOSE_LOCAL_LABELS else (safe_id(row_value(t, "session_id"), "session") if row_value(t, "session_id") else None),
-                    })
+                forced_skills: List[str] = []
+                raw_skills = row_value(t, "skills")
+                if raw_skills:
+                    try:
+                        parsed_skills = json.loads(raw_skills)
+                        if isinstance(parsed_skills, list):
+                            forced_skills = [str(x) for x in parsed_skills if x]
+                    except (TypeError, ValueError):
+                        forced_skills = []
+                tasks.append({
+                    "_sort_ts": max(safe_float(row_value(t, c)) for c in ("completed_at", "last_heartbeat_at", "started_at", "created_at")),
+                    "id": public_task_id,
+                    "board": slug,
+                    "title": title,
+                    "status": status,
+                    "assignee": public_assignee,
+                    "_assignee": assignee,
+                    "priority": row_value(t, "priority", 0),
+                    "created_at": ts_to_iso(created_at),
+                    "started_at": ts_to_iso(started_at),
+                    "completed_at": ts_to_iso(row_value(t, "completed_at")),
+                    "last_heartbeat_at": ts_to_iso(heartbeat),
+                    "claim_expires_at": ts_to_iso(claim_expires),
+                    "worker_ref": public_ref(row_value(t, "worker_pid"), "pid"),
+                    "current_run_ref": public_ref(row_value(t, "current_run_id"), "run"),
+                    "max_runtime_seconds": row_value(t, "max_runtime_seconds"),
+                    "consecutive_failures": failures,
+                    "goal_mode": bool(row_value(t, "goal_mode", 0)),
+                    "goal_max_turns": row_value(t, "goal_max_turns"),
+                    "_skills": forced_skills,
+                    "forced_skill_count": len(forced_skills),
+                    "model_override": row_value(t, "model_override") if EXPOSE_LOCAL_LABELS else ("override" if row_value(t, "model_override") else None),
+                    "session_ref": row_value(t, "session_id") if EXPOSE_LOCAL_LABELS else (safe_id(row_value(t, "session_id"), "session") if row_value(t, "session_id") else None),
+                })
 
             if run_cols:
                 run_select = [
@@ -1910,9 +1932,20 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                     "last_heartbeat_at", "started_at", "ended_at", "error", "summary",
                 ]
                 run_select = [c for c in run_select if c in run_cols]
-                run_rows = con.execute(
-                    f"SELECT {', '.join(run_select)} FROM task_runs ORDER BY id DESC LIMIT 100"
-                ).fetchall() if run_select else []
+                run_rows = []
+                if run_select:
+                    # In-flight runs are always read; finished runs are a
+                    # recency sample ordered by time, not by id.
+                    run_recency = ", ".join(c for c in ("ended_at", "started_at") if c in run_cols) or "rowid"
+                    in_flight = "ended_at IS NULL" if "ended_at" in run_cols else "0"
+                    run_rows.extend(con.execute(
+                        f"SELECT {', '.join(run_select)} FROM task_runs WHERE {in_flight}"
+                    ).fetchall())
+                    run_rows.extend(con.execute(
+                        f"SELECT {', '.join(run_select)} FROM task_runs WHERE NOT ({in_flight}) "
+                        f"ORDER BY COALESCE({run_recency}) DESC LIMIT ?",
+                        (KANBAN_FINISHED_RUN_SAMPLE,),
+                    ).fetchall())
                 for r in run_rows:
                     run_status = str(row_value(r, "status", "unknown"))
                     outcome = row_value(r, "outcome")
@@ -1932,18 +1965,18 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                         })
                     if is_failed_run({"status": run_status, "outcome": outcome}):
                         add_attention("critical", f"Kanban worker {outcome or run_status}: {public_task_id}", public_error(row_value(r, "error"), 200) or "Worker run failed", slug, public_task_id)
-                    if len(recent_runs) < 16:
-                        recent_runs.append({
-                            "id": public_ref(row_value(r, "id"), "run"),
-                            "board": slug,
-                            "task_id": public_task_id,
-                            "profile": public_profile_label(row_value(r, "profile"), profile_public_names),
-                            "status": run_status,
-                            "outcome": outcome,
-                            "started_at": ts_to_iso(row_value(r, "started_at")),
-                            "ended_at": ts_to_iso(ended_at),
-                            "error": public_error(row_value(r, "error"), 180),
-                        })
+                    runs.append({
+                        "id": public_ref(row_value(r, "id"), "run"),
+                        "_sort_ts": max(safe_float(ended_at), safe_float(row_value(r, "started_at"))),
+                        "board": slug,
+                        "task_id": public_task_id,
+                        "profile": public_profile_label(row_value(r, "profile"), profile_public_names),
+                        "status": run_status,
+                        "outcome": outcome,
+                        "started_at": ts_to_iso(row_value(r, "started_at")),
+                        "ended_at": ts_to_iso(ended_at),
+                        "error": public_error(row_value(r, "error"), 180),
+                    })
 
             event_cols = table_columns(con, "task_events")
             recent_events: List[Dict[str, Any]] = board.setdefault("_recent_events", [])
@@ -1985,6 +2018,8 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     for load in assignee_load.values():
         load["boards"] = sorted(load["boards"])
+    tasks.sort(key=lambda item: item["_sort_ts"], reverse=True)
+    runs.sort(key=lambda item: item["_sort_ts"], reverse=True)
 
     all_events: List[Dict[str, Any]] = []
     for board in boards:
@@ -2001,8 +2036,12 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
         "active_workers": active_workers[:12],
         "assignee_load": sorted(assignee_load.values(), key=lambda x: (-int(x.get("open") or 0), str(x.get("assignee")))),
         "attention": attention[:16],
-        "recent_tasks": recent_tasks,
-        "recent_runs": recent_runs,
+        # _tasks/_runs are the complete operational sets every builder reads;
+        # recent_* are display samples, newest first across all boards.
+        "_tasks": tasks,
+        "_runs": runs,
+        "recent_tasks": tasks[:KANBAN_DISPLAY_SAMPLE],
+        "recent_runs": runs[:KANBAN_DISPLAY_SAMPLE],
         "recent_events": all_events[:40],
     }
 
@@ -2158,6 +2197,13 @@ def group_gateways_by_profile(gateways: List[Dict[str, Any]]) -> Dict[str, List[
     for gateway in gateways:
         grouped.setdefault(str(gateway.get("profile") or ""), []).append(gateway)
     return grouped
+
+
+def kanban_store_state(kanban: Optional[Dict[str, Any]]) -> str:
+    boards = [board for board in as_list((kanban or {}).get("boards")) if isinstance(board, dict)]
+    if any(board.get("error") for board in boards):
+        return "warning"
+    return "ok" if any(board.get("db_exists") for board in boards) else "missing"
 
 
 def kanban_items(kanban: Optional[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
@@ -2392,7 +2438,7 @@ def build_metrics(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any
     total_tools = sum(int(s.get("tool_call_count") or 0) for s in sessions)
     total_tokens = sum(int(s.get("total_tokens") or 0) for s in sessions)
     total_api_calls = sum(int(s.get("api_call_count") or 0) for s in sessions)
-    failed_runs = [r for r in kanban_items(kanban, "recent_runs") if is_failed_run(r)]
+    failed_runs = [r for r in kanban_items(kanban, "_runs") if is_failed_run(r)]
     return {
         "window_sessions": len(sessions),
         "total_cost_usd": round(sum(_session_cost(s) for s in sessions), 4),
@@ -2426,7 +2472,7 @@ def build_performance_tracking(sessions: List[Dict[str, Any]], kanban: Optional[
     context_pressure = [s for s in sessions if int(s.get("avg_input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS]
     stale_sessions = [s for s in sessions if s.get("state") == "stale"]
     errored_sessions = [s for s in sessions if s.get("state") == "error"]
-    failed_runs = [r for r in kanban_items(kanban, "recent_runs") if is_failed_run(r)]
+    failed_runs = [r for r in kanban_items(kanban, "_runs") if is_failed_run(r)]
     total_cost = float(metrics.get("total_cost_usd") or 0)
     expensive_sessions = int(metrics.get("expensive_sessions") or 0)
     median_duration = metrics.get("median_duration_seconds")
@@ -2608,13 +2654,13 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
     message_heavy = [s for s in sessions if int(s.get("message_count") or 0) >= LONG_THREAD_THRESHOLD]
     active_sessions = [s for s in sessions if s.get("state") in ("active", "recent")]
     stale_sessions = [s for s in sessions if s.get("state") == "stale"]
-    failed_runs = [r for r in kanban_items(kanban, "recent_runs") if is_failed_run(r)]
+    failed_runs = [r for r in kanban_items(kanban, "_runs") if is_failed_run(r)]
     ready_unassigned = [
-        t for t in kanban_items(kanban, "recent_tasks")
+        t for t in kanban_items(kanban, "_tasks")
         if t.get("status") == "ready" and (not t.get("assignee") or t.get("assignee") == "unassigned")
     ]
     blocked_tasks = [
-        t for t in kanban_items(kanban, "recent_tasks")
+        t for t in kanban_items(kanban, "_tasks")
         if t.get("status") == "blocked"
     ]
 
@@ -2819,7 +2865,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
 
 def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     kanban = kanban or {}
-    tasks = kanban_items(kanban, "recent_tasks")
+    tasks = kanban_items(kanban, "_tasks")
     forced_skill_tasks = [t for t in tasks if int(t.get("forced_skill_count") or 0) > 0]
     forced_skill_total = sum(int(t.get("forced_skill_count") or 0) for t in forced_skill_tasks)
     looping = [s for s in sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD]
@@ -2983,8 +3029,8 @@ def build_profile_fitness(profiles: List[Dict[str, Any]], gateways: List[Dict[st
         for a in as_list(kanban.get("assignee_load"))
         if isinstance(a, dict) and (a.get("_assignee") or a.get("assignee"))
     }
-    tasks = kanban_items(kanban, "recent_tasks")
-    runs = kanban_items(kanban, "recent_runs")
+    tasks = kanban_items(kanban, "_tasks")
+    runs = kanban_items(kanban, "_runs")
     cron_by_profile = group_cron_by_profile(cron)
     gateways_by_profile = group_gateways_by_profile(gateways)
 
@@ -3082,8 +3128,8 @@ def build_profile_fitness(profiles: List[Dict[str, Any]], gateways: List[Dict[st
 def build_orchestration(kanban: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     kanban = kanban or {}
     totals = kanban.get("totals") if isinstance(kanban.get("totals"), dict) else {}
-    tasks = kanban_items(kanban, "recent_tasks")
-    runs = kanban_items(kanban, "recent_runs")
+    tasks = kanban_items(kanban, "_tasks")
+    runs = kanban_items(kanban, "_runs")
     workers = kanban_items(kanban, "active_workers")
     now = time.time()
 
@@ -3131,8 +3177,8 @@ def build_party(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]], 
         for a in as_list(kanban.get("assignee_load"))
         if isinstance(a, dict) and (a.get("_assignee") or a.get("assignee"))
     }
-    tasks = kanban_items(kanban, "recent_tasks")
-    runs = kanban_items(kanban, "recent_runs")
+    tasks = kanban_items(kanban, "_tasks")
+    runs = kanban_items(kanban, "_runs")
     cron_by_profile = group_cron_by_profile(cron)
     gateways_by_profile = group_gateways_by_profile(gateways)
 
@@ -3313,10 +3359,10 @@ def build_trace_spine(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str,
         for session in sessions
         if isinstance(session, dict) and (session.get("session_ref") or session.get("id"))
     }
-    tasks = kanban_items(kanban, "recent_tasks")
+    tasks = kanban_items(kanban, "_tasks")
     runs_by_task: Dict[str, List[Dict[str, Any]]] = {}
     events_by_task: Dict[str, List[Dict[str, Any]]] = {}
-    for run in kanban_items(kanban, "recent_runs"):
+    for run in kanban_items(kanban, "_runs"):
         task_ref = str(run.get("task_id") or "")
         if task_ref:
             runs_by_task.setdefault(task_ref, []).append(run)
@@ -3475,8 +3521,8 @@ def build_ops_evals(
         sessions or
         kanban.get("open") or
         kanban.get("totals") or
-        kanban_items(kanban, "recent_runs") or
-        kanban_items(kanban, "recent_tasks") or
+        kanban_items(kanban, "_runs") or
+        kanban_items(kanban, "_tasks") or
         coverage_summary or
         hygiene_summary or
         policy_summary
@@ -3487,12 +3533,12 @@ def build_ops_evals(
             "items": [],
         }
 
-    failed_runs = [item for item in kanban_items(kanban, "recent_runs") if is_failed_run(item)]
+    failed_runs = [item for item in kanban_items(kanban, "_runs") if is_failed_run(item)]
     stale_sessions = [item for item in sessions if item.get("state") == "stale"]
     errored_sessions = [item for item in sessions if item.get("state") == "error"]
     blocked_tasks = int(kanban_totals.get("blocked") or 0)
     ready_unassigned = [
-        item for item in kanban_items(kanban, "recent_tasks")
+        item for item in kanban_items(kanban, "_tasks")
         if item.get("status") == "ready" and (not item.get("assignee") or item.get("assignee") == "unassigned")
     ]
     overloaded_assignees = [
@@ -3743,7 +3789,7 @@ def build_metrics_spine(
             "state_stores_seen": rollup.get("stores_seen") or 0,
             "skill_usage": "warning" if skill_summary.get("read_failures") else ("ok" if skill_summary.get("usage_present") else "missing"),
             "skill_usage_sources": skill_summary.get("usage_sources") or 0,
-            "kanban": "warning" if any(isinstance(board, dict) and board.get("error") for board in as_list(kanban.get("boards"))) else ("ok" if kanban.get("boards") else "missing"),
+            "kanban": kanban_store_state(kanban),
             "cost_visibility": cost_confidence,
             "config_grounding": {
                 "toolsets": policy_summary.get("toolsets") or 0,

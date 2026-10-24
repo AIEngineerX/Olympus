@@ -35,6 +35,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Cron jobs and sessions are read from every profile's own stores and
   attributed to the profile they came from (no more substring matching that
   let a profile named `li` claim `cli` sessions).
+- A missing Kanban database is reported as missing and an unreadable one as an
+  error with an attention item, instead of a healthy empty board.
+- Kanban scans read every open task and every in-flight run on every board;
+  only closed history is sampled, so older running or failed work is no longer
+  hidden behind newer completed tasks or the default board.
 
 ## [1.0.3] - 2026-06-08
 
