@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Olympus Desktop Harness</title>
+    <style>
+      :root {
+        --ui-text-primary: #ececec;
+        --ui-text-secondary: #b8b8b8;
+        --ui-text-tertiary: #8a8a8a;
+        --ui-stroke-secondary: #3a3a3a;
+        --ui-accent: #5aa9ff;
+      }
+      body { margin: 0; background: #1b1b1b; font-family: system-ui, sans-serif; }
+      #route { height: 100vh; }
+    </style>
+    <script src="../../../node_modules/react/umd/react.development.js"></script>
+    <script src="../../../node_modules/react-dom/umd/react-dom.development.js"></script>
+    <script src="../olympus-fixture-data.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "@hermes/plugin-sdk": "./sdk-shim.js",
+          "react": "./react-shim.js",
+          "react/jsx-runtime": "./jsx-runtime-shim.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="route"></div>
+    <script type="module">
+      import plugin from "../../../desktop/plugin.js";
+
+      const params = new URLSearchParams(window.location.search);
+      const data = window.__OLYMPUS_FIXTURE_DATA__;
+      const contributions = [];
+      const calls = (window.__DESKTOP_CALLS__ = { rest: [], actions: [] });
+
+      async function rest(path, options) {
+        calls.rest.push({ path, method: (options && options.method) || "GET" });
+        if (params.get("backend") === "down") throw new Error("404 /api/plugins/olympus/overview");
+        if (path === "/overview") return data;
+        if (path.startsWith("/open/session")) {
+          const ref = new URLSearchParams(path.split("?")[1]).get("ref");
+          return ref === "session:91be04d6aa" ? { href: null } : { href: "/chat?resume=fixture-session&profile=default", session_id: "fixture-session", profile: "default" };
+        }
+        if (path.startsWith("/fixes")) {
+          const key = new URLSearchParams(path.split("?")[1]).get("key");
+          const item = data.tuning.agent_hq.recommendations.find((rec) => rec.key === key);
+          data.fixes = [{ key, title: item.title, kind: item.kind, baseline: item.count, current: item.count, verdict: "unchanged", days_tracked: 0 }].concat(data.fixes);
+          return { tracked: true, fixes: data.fixes };
+        }
+        throw new Error("unexpected path " + path);
+      }
+
+      const ctx = {
+        source: "plugin:olympus",
+        rest,
+        registerMany: (items) => { contributions.push(...items); return () => {}; },
+        register: (item) => { contributions.push(item); return () => {}; },
+        setTimeout: (fn, ms) => { const id = window.setTimeout(fn, ms); return () => window.clearTimeout(id); },
+        runAction: (id) => { calls.actions.push(id); return { ok: true }; }
+      };
+
+      plugin.register(ctx);
+      window.__DESKTOP_CONTRIBUTIONS__ = contributions.map(({ id, area, data }) => ({ id, area, data }));
+      const route = contributions.find((item) => item.area === "routes");
+      ReactDOM.createRoot(document.getElementById("route")).render(route.render());
+    </script>
+  </body>
+</html>

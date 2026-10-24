@@ -91,7 +91,7 @@ class BriefDataTest(unittest.TestCase):
 
         found = plugin_api.open_session(plugin_api.safe_id("coder session/1", "session"))
 
-        self.assertEqual(found, {"href": "/chat?resume=coder%20session%2F1&profile=coder"})
+        self.assertEqual(found, {"href": "/chat?resume=coder%20session%2F1&profile=coder", "session_id": "coder session/1", "profile": "coder"})
         self.assertEqual(plugin_api.open_session("session:0000000000"), {"href": None})
 
     def test_open_session_accepts_raw_ids_only_when_labels_are_exposed(self):
