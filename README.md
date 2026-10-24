@@ -111,29 +111,27 @@ Olympus opens in Brief mode, which answers "what needs me?" first:
 
 Deeper inspection is split into purpose-built tabs:
 
-- Agents: Performance Tracking, Profile Fitness, and Live Work (who is running
-  what, and recent Kanban activity).
+- Agents: Where spend goes (cost per cron job and per background task), Fleet
+  (each profile's role, gateway, work, sessions, spend and top issue),
+  Performance Tracking, and Live Work (who is running what, and recent Kanban
+  activity).
 - Skills: Skill Coverage and Skill Hygiene.
-- Kanban: Trace Spine and Kanban Intelligence.
+- Kanban: Backlog triage (stuck tasks grouped by who has to act), Trace Spine
+  and Kanban Intelligence.
 - Policy: Tool Policy & Aux Cost.
 - Diagnostics: Operational Evals, with Metrics Spine, payload budgets and
   Evidence Sources under "Debug details".
 
 ## Hermes Desktop
 
-Hermes Desktop owns chat, agents, profiles, skills, sessions, cron, settings,
-and Command Center Usage. Olympus is the read-only operations monitor beside
-those controls. It should show risk and evidence, then link to the Hermes page
-that owns the fix.
-
-Today Olympus is verified through the Hermes web dashboard at `/olympus`.
-Desktop visibility requires Hermes Desktop plugin-tab parity for dashboard
-plugins. See
-[`dashboard/docs/HERMES_DESKTOP_INTEGRATION.md`](dashboard/docs/HERMES_DESKTOP_INTEGRATION.md).
-
-Run `npm run test:desktop` to verify the local Desktop app, Command Center
-Usage ownership, web dashboard plugin support, and the current plugin-tab parity
-status before preparing an upstream Desktop PR.
+Hermes Desktop does not render web-dashboard tabs, so Olympus ships a Desktop
+half too: `desktop/plugin.js`. When the package is installed, Desktop copies it
+into `$HERMES_HOME/desktop-plugins/olympus/`; turn it on under
+**Capabilities → Plugins**. It adds an **Olympus** page to the sidebar with the
+Brief: readiness and its trend, Needs you (with sessions that open in Desktop,
+"I fixed this", and hand-offs to the Cron, Profiles, Capabilities and Settings
+pages), fix tracking, cron spend, and backlog triage. It talks to the same
+read-only backend through the Desktop plugin SDK and nothing else.
 
 ## API
 

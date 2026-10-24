@@ -8,6 +8,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Hermes Desktop page (`desktop/plugin.js`): the Brief inside Desktop, with
+  native session opening and hand-offs to Desktop pages.
+- Fleet: one row per profile with its role from `profile.yaml`, route, gateway
+  (own, multiplexed, stopped), work, sessions and spend over 7 days, last
+  activity, and top issue; a finding asks for role descriptions when work is
+  routed between profiles.
+- Backlog triage: stuck Kanban tasks grouped by Hermes' block kind (waiting on
+  a human, missing capability, transient, untyped, sent to triage, waiting on
+  parents), with findings for unanswered and capability-blocked work.
 - Opt-in alerts: `hermes olympus install-alerts --deliver <target>` sets up a
   Hermes no-agent cron job that reports failed or overdue cron jobs, stalled or
   failed Kanban workers, looping sessions and spend spikes, once per issue.
@@ -29,6 +38,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Profile Fitness is folded into the Fleet table.
 - One headline score: Operational Evals and Profile Fitness no longer show
   competing score numbers.
 - Metric chips appear only for values that need attention.
