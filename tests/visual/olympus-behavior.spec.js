@@ -44,6 +44,11 @@ test.describe("Olympus behaviour", () => {
     for (const href of routed) {
       expect(href).toMatch(/^\/hermes\/(analytics|config|cron|kanban|logs|profiles|sessions|skills)\?profile=coder$/);
     }
+    // Labels come from the route, not the prefixed link.
+    await page.getByRole("tab", { name: "Agents" }).click();
+    const labels = await page.locator(".olympus-page a[href]").allTextContents();
+    expect(labels.length).toBeGreaterThan(3);
+    expect(labels.filter((label) => label === "Open Route")).toEqual([]);
   });
 
   test("session links resolve on click and report sessions that are gone", async ({ page }) => {
