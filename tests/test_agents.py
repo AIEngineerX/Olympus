@@ -147,8 +147,8 @@ class AgentsTest(unittest.TestCase):
         self.assertEqual(default["current"]["label"], "Refactor the billing module")
         self.assertEqual(default["helpers"], {"subagents": 1, "workers": 0, "cron": 0})
         self.assertTrue(default["live"])
-        self.assertEqual(default["activity_7d"][-1], 2)
-        self.assertEqual(len(default["activity_7d"]), 7)
+        runs = default["runs_7d"]  # live-main (open) and done-1; the subagent is not a run of its own
+        self.assertEqual((runs["runs"], runs["finished"], runs["succeeded"], runs["success_rate"], len(runs["days"]), runs["days"][-1]), (2, 1, 1, 1.0, 7, {"runs": 1, "unsuccessful": 0}))
         self.assertEqual(rows["Qa"]["current"]["label"], "Run the regression suite")
         self.assertEqual(rows["Qa"]["helpers"]["workers"], 1)
         self.assertFalse(rows["Qa"]["live"])  # a stalled worker is not working

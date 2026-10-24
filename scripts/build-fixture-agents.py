@@ -55,7 +55,7 @@ def seed(home: Path, now: float) -> None:
             "last_activity_at REAL, message_count INTEGER, tool_call_count INTEGER, api_call_count INTEGER, input_tokens INTEGER, "
             "output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER, actual_cost_usd REAL, parent_session_id TEXT)"
         )
-        con.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, tool_name TEXT, timestamp REAL)")
+        con.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, tool_calls TEXT, tool_name TEXT, timestamp REAL, token_count INTEGER, finish_reason TEXT)")
         con.executemany("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, 12, 6, 8, ?, ?, ?, 0, ?, ?)", rows)
         con.commit()
         con.close()
@@ -65,7 +65,8 @@ def seed(home: Path, now: float) -> None:
         for day in range(1, days):
             for n in range(per_day + (day % 3)):
                 start = now - day * 86400 - n * 3600
-                rows.append((f"{prefix}-{day}-{n}", "cli", None, start, start + 900, "completed", start + 900,
+                length = 120 + ((day * 7 + n * 13 + len(prefix) * 5) % 24) * 60  # 2 to 25 minutes
+                rows.append((f"{prefix}-{day}-{n}", "cli", None, start, start + length, "completed", start + length,
                              scale * (2 + n), scale // 2, scale * 6, round(scale / 40000, 4), None))
         return rows
 
@@ -97,6 +98,37 @@ def seed(home: Path, now: float) -> None:
         con.execute("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", row)
         con.commit()
         con.close()
+    # How those two runs ended, plus tool results Hermes' failure rule reads:
+    # the coder loop died on an agent error after failing terminal calls; the
+    # researcher run was cut off waiting on a tool.
+    con = sqlite3.connect(home / "profiles" / "coder" / "state.db")
+    start = now - 3 * 86400
+    loop = [("user", None, "Get the checkout test green", None, None, start + 5)]
+    for step in range(12):
+        loop.append(("assistant", None, "", '[{"id": "t%d"}]' % step, None, start + 20 + step * 200))
+        loop.append(("tool", "terminal", json.dumps({"exit_code": 1, "output": "1 failed"}) if step % 3 else json.dumps({"exit_code": 0, "output": "ok"}), None, None, start + 120 + step * 200))
+    loop.append(("tool", "read_file", "def test_checkout(): ...", None, None, start + 2550))
+    loop.append(("assistant", None, "", None, "agent_error", start + 2690))
+    con.executemany(
+        "INSERT INTO messages (session_id, role, tool_name, content, tool_calls, finish_reason, timestamp) VALUES ('c-loop', ?, ?, ?, ?, ?, ?)",
+        loop,
+    )
+    con.commit()
+    con.close()
+    con = sqlite3.connect(home / "profiles" / "researcher" / "state.db")
+    start = now - 2 * 86400
+    con.executemany(
+        "INSERT INTO messages (session_id, role, tool_name, content, tool_calls, finish_reason, timestamp) VALUES ('r-context', ?, ?, ?, ?, ?, ?)",
+        [
+            ("user", None, "Read every competitor pricing page", None, None, start + 5),
+            ("assistant", None, "", '[{"id": "w1"}]', None, start + 30),
+            ("tool", "web_extract", json.dumps({"results": [{"url": "a", "error": None}]}), None, None, start + 400),
+            ("assistant", None, "", '[{"id": "w2"}]', None, start + 420),
+            ("tool", "web_extract", json.dumps({"success": False, "error": "403 forbidden"}), None, None, start + 1790),
+        ],
+    )
+    con.commit()
+    con.close()
     sessions(home / "profiles" / "reviewer", history("v", 5, 1, 12000))
     sessions(home / "profiles" / "writer", history("w", 4, 1, 9000))
     sessions(home / "profiles" / "analyst", history("a", 3, 1, 6000))
@@ -170,12 +202,21 @@ def scan(home: Path) -> dict:
     os.environ["HERMES_KANBAN_HOME"] = str(home)
     plugin_api.refresh_expose_local_labels()
     overview = plugin_api.overview_payload(plugin_api.scan_hermes())
+    performance = {str(days): plugin_api.performance(days) for days in plugin_api.PERFORMANCE_DAYS}
+    refs = {
+        run["ref"]
+        for report in performance.values()
+        for agent in report["agents"]
+        for run in agent["failed_runs"] + agent["slowest"]
+    }
     return {
         "generated_at": overview["generated_at"],
         "controls": overview["controls"],
         "agents": overview["agents"],
         "needs_you": overview["needs_you"],
         "details": {row["id"]: plugin_api.agent(row["id"]) for row in overview["agents"]["agents"]},
+        "performance": performance,
+        "runs": {ref: plugin_api.run_detail(ref) for ref in sorted(refs)},
     }
 
 

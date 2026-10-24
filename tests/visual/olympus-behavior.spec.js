@@ -199,6 +199,42 @@ test.describe("Olympus behaviour", () => {
     await expect(inspector.locator(".olympus-queue-item")).toHaveCount(3);
   });
 
+  test("performance ranks agents by success and drills into one run", async ({ page }) => {
+    await openPage(page, { state: "noisy" });
+    await expect(page.locator('tr[data-agent="profile:coder"] .olympus-rate')).toHaveText("96%");
+    await expect(page.locator(".olympus-census")).toContainText("97% of runs succeeded this week");
+    await page.getByRole("button", { name: "Performance" }).click();
+    expect(new URL(page.url()).searchParams.get("view")).toBe("performance");
+
+    const perf = page.locator(".olympus-performance");
+    await expect(perf.locator(".olympus-census")).toContainText("77 runs · 97% succeeded");
+    const names = await perf.locator(".olympus-perf-table .olympus-agent-name strong").allTextContents();
+    expect(names.slice(0, 2)).toEqual(["Researcher", "Coder"]); // worst success first
+
+    await perf.locator('tr[data-agent="profile:coder"]').click();
+    const panel = page.getByRole("complementary", { name: "Performance of Coder" });
+    await expect(panel.locator(".olympus-facts")).toContainText("96% of 25");
+    const terminal = panel.locator(".olympus-table tbody tr").filter({ hasText: "terminal" });
+    await expect(terminal.locator("td")).toHaveText(["terminal", "12", "8", "67%"]);
+
+    await panel.locator(".olympus-work-row").filter({ hasText: "Retry the flaky test until green" }).first().getByRole("button", { name: "Inspect run" }).click();
+    const run = page.getByRole("complementary", { name: "Run detail" });
+    await expect(run.locator("h2")).toHaveText("Retry the flaky test until green");
+    await expect(run.locator(".olympus-run-outcome")).toContainText("Failed");
+    await expect(run.locator(".olympus-step-error")).toHaveCount(9); // 8 failed terminal calls and the agent error
+    expect(new URL(page.url()).searchParams.get("run")).toBe("c-loop");
+
+    await run.getByRole("button", { name: /Back to Coder/ }).click();
+    await expect(panel).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(panel).toHaveCount(0);
+
+    await perf.getByRole("button", { name: "30 days" }).click();
+    await expect(perf.getByRole("button", { name: "30 days" })).toHaveAttribute("aria-pressed", "true");
+    expect(new URL(page.url()).searchParams.get("days")).toBe("30");
+    await expect(perf.locator(".olympus-token-day")).toHaveCount(30);
+  });
+
   test("the roster says which tool a working agent is using", async ({ page }) => {
     await openPage(page, { state: "noisy" });
     await expect(page.locator('tr[data-agent="profile:default"] .olympus-now small')).toContainText(/^using web_extract \d+ (s|min) ago · for \d+ min$/);

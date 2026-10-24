@@ -245,6 +245,12 @@
             needs_you: data.needs_you.filter((item) => item.agent && item.agent.id === detail.agent.id)
           });
         }
+        if (path === "/api/plugins/olympus/performance") {
+          return agentData.performance[query(url).get("days")] || { error: "days must be one of 7, 30" };
+        }
+        if (path === "/api/plugins/olympus/run") {
+          return agentData.runs[query(url).get("ref")] || { found: false };
+        }
         if (path === "/api/plugins/olympus/resolve") {
           if (!data.controls) return { allowed: false, reason: "Controls are off (dashboard.olympus.controls is false in config.yaml)." };
           const q = query(url);
