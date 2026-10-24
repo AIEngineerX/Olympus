@@ -17,6 +17,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Metrics Spine reads stale workers and auxiliary routes from the fields their
   producers actually emit.
 
+### Fixed
+
+- Error text (cron, session handoff, Kanban worker and board errors) is
+  returned only as a failure class by default; quoted multi-word secret values
+  are redacted whole.
+- Log-tail scans read only the last bytes of each log, and routes no longer
+  block the dashboard event loop.
+- Token totals and context pressure follow Hermes' usage buckets (cache read
+  and cache write are part of the prompt; reasoning is not added twice).
+- Session freshness and ordering use `last_activity_at`, so long-running
+  active sessions are no longer flagged stale.
+- Cost coverage counts each session once and reports `partial` whenever
+  token-bearing sessions carry no cost.
+
 ## [1.0.3] - 2026-06-08
 
 ### Fixed

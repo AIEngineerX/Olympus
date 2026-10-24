@@ -191,5 +191,98 @@ class MetricsSpineTest(unittest.TestCase):
         self.assertEqual(spine["work"]["stale_workers"], 2)
 
 
+    def test_usage_rollup_counts_cached_prompt_tokens_like_hermes(self):
+        # Hermes CanonicalUsage: prompt = input + cache_read + cache_write,
+        # total = prompt + output; reasoning is part of output, not added.
+        now = time.time()
+        self._write_state_db(self.home, [
+            ("s1", "cli", now - 60, now - 10, "completed", 4, 3, 2, 1000, 1000, 500, 99000, 0, 0.5, None, "t"),
+        ])
+        profiles = [{"label": "Default", "_public_name": "default", "_path": str(self.home)}]
+
+        rollup = plugin_api.collect_usage_rollup(profiles, days=30)
+
+        self.assertEqual(rollup["total_tokens"], 101000)
+
+    def test_usage_rollup_counts_each_costed_session_once(self):
+        now = time.time()
+        self._write_state_db(self.home, [
+            ("s1", "cli", now - 60, now - 10, "completed", 4, 3, 2, 1000, 200, 0, 0, 0, 0.04, 0.05, "both costs"),
+            ("s2", "cli", now - 60, now - 10, "completed", 4, 3, 2, 1000, 200, 0, 0, 0, 0.03, None, "estimate only"),
+        ])
+        profiles = [{"label": "Default", "_public_name": "default", "_path": str(self.home)}]
+
+        rollup = plugin_api.collect_usage_rollup(profiles, days=30)
+
+        self.assertEqual(rollup["costed_sessions"], 2)
+        self.assertEqual(rollup["actual_costed_sessions"], 1)
+        self.assertEqual(rollup["estimated_costed_sessions"], 1)
+        self.assertEqual(rollup["cost_confidence"], "estimated")
+
+    def test_one_actual_cost_session_does_not_hide_uncosted_token_sessions(self):
+        now = time.time()
+        self._write_state_db(self.home, [
+            ("s1", "cli", now - 60, now - 10, "completed", 4, 3, 2, 1000, 200, 0, 0, 0, None, 0.05, "actual"),
+            ("s2", "cli", now - 60, now - 10, "completed", 4, 3, 2, 1000, 200, 0, 0, 0, None, None, "no cost"),
+        ])
+        profiles = [{"label": "Default", "_public_name": "default", "_path": str(self.home)}]
+
+        rollup = plugin_api.collect_usage_rollup(profiles, days=30)
+
+        self.assertEqual(rollup["costed_sessions"], 1)
+        self.assertEqual(rollup["cost_confidence"], "partial")
+        self.assertEqual(rollup["state"], "warning")
+
+    def test_all_actual_cost_coverage_reports_actual(self):
+        now = time.time()
+        self._write_state_db(self.home, [
+            ("s1", "cli", now - 60, now - 10, "completed", 4, 3, 2, 1000, 200, 0, 0, 0, None, 0.05, "actual"),
+        ])
+        profiles = [{"label": "Default", "_public_name": "default", "_path": str(self.home)}]
+
+        self.assertEqual(plugin_api.collect_usage_rollup(profiles, days=30)["cost_confidence"], "actual")
+
+    def _write_live_sessions(self, rows):
+        con = sqlite3.connect(self.home / "state.db")
+        con.executescript(
+            """
+            CREATE TABLE sessions (
+              id TEXT, source TEXT, started_at REAL, ended_at REAL, last_activity_at REAL,
+              message_count INTEGER, tool_call_count INTEGER, api_call_count INTEGER,
+              input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER,
+              cache_read_tokens INTEGER, cache_write_tokens INTEGER, title TEXT
+            );
+            """
+        )
+        con.executemany("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        con.commit()
+        con.close()
+
+    def test_session_tokens_and_context_pressure_include_cache_buckets(self):
+        now = time.time()
+        self._write_live_sessions([
+            ("s1", "cli", now - 600, now - 10, now - 10, 4, 3, 2, 1000, 1000, 500, 99000, 0, "t"),
+        ])
+
+        session = plugin_api.collect_sessions()[0]
+
+        self.assertEqual(session["prompt_tokens"], 100000)
+        self.assertEqual(session["total_tokens"], 101000)
+        self.assertEqual(session["avg_input_tokens"], 50000)
+
+    def test_long_running_session_with_recent_activity_is_active_and_sorted_first(self):
+        now = time.time()
+        self._write_live_sessions([
+            ("newer-idle", "cli", now - 3 * 3600, now - 3 * 3600 + 30, now - 3 * 3600 + 30, 1, 0, 1, 10, 10, 0, 0, 0, "idle"),
+            ("long-running", "cli", now - 5 * 86400, None, now - 30, 50, 20, 30, 10, 10, 0, 0, 0, "busy"),
+        ])
+
+        sessions = plugin_api.collect_sessions()
+
+        self.assertEqual(sessions[0]["session_ref"], plugin_api.safe_id("long-running", "session"))
+        self.assertEqual(sessions[0]["state"], "active")
+        self.assertEqual(sessions[1]["state"], "completed")
+
+
 if __name__ == "__main__":
     unittest.main()
