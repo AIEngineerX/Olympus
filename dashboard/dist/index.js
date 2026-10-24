@@ -675,6 +675,55 @@
     );
   }
 
+  function CostAttribution({ attribution }) {
+    const data = attribution || {};
+    const cron = data.cron || {};
+    const background = data.background || {};
+    const jobs = asList(cron.jobs);
+    const tasks = asList(background.tasks);
+    if (!Number(data.window_cost_usd || 0) && !jobs.length && !tasks.length) return null;
+    const days = data.window_days || 7;
+    const facts = [
+      ["Session spend", formatMoney(data.window_cost_usd)],
+      ["Scheduled (cron)", formatMoney(cron.total_cost_usd)],
+      ["Background tasks", formatMoney(background.total_cost_usd)],
+    ];
+    return el("section", { className: "olympus-section olympus-cost" },
+      el("div", { className: "olympus-section-head" },
+        el("div", null,
+          el("h2", null, "Where spend goes"),
+          el("p", null, "Last " + days + " days. Hermes Analytics has the full ledger; this shows which scheduled jobs and background tasks drive it.")
+        ),
+        el("a", { className: "olympus-link", href: routeLink(data.recommended_view || "/analytics") }, "Open Analytics")
+      ),
+      el("dl", { className: "olympus-hero-facts olympus-cost-facts" },
+        facts.map((fact) => el("div", { key: fact[0] }, el("dt", null, fact[0]), el("dd", null, fact[1])))
+      ),
+      jobs.length ? el("div", { className: "olympus-cost-table", role: "table", "aria-label": "Cron jobs by estimated cost" },
+        el("div", { className: "olympus-cost-row olympus-cost-row-head", role: "row" },
+          ["Cron job", "Runs", "Tokens", "Avg run", "Errors", "\u2248 Cost"].map((label) => el("span", { key: label, role: "columnheader" }, label))
+        ),
+        jobs.map((job) => el("div", { key: job.job_ref, className: "olympus-cost-row", role: "row" },
+          el("span", { role: "cell" }, el("strong", null, job.label), el("small", null, [job.profile, job.schedule].filter(Boolean).join(" · "))),
+          el("span", { role: "cell" }, formatCount(job.fires)),
+          el("span", { role: "cell" }, formatCount(job.tokens)),
+          el("span", { role: "cell" }, formatDuration(job.avg_duration_seconds)),
+          el("span", { role: "cell" }, job.errors ? el(StatePill, { state: "warning", label: String(job.errors) }) : "0"),
+          el("span", { role: "cell" }, formatMoney(job.est_cost_usd))
+        ))
+      ) : null,
+      tasks.length ? el("div", { className: "olympus-cost-tasks" },
+        el("h3", null, "Background tasks"),
+        tasks.map((task) => el("div", { key: task.task, className: "olympus-cost-task" },
+          el("span", null, task.task.replaceAll("_", " ")),
+          el("small", null, formatCount(task.calls) + " calls \u00b7 " + formatCount(task.tokens) + " tokens"),
+          el("strong", null, formatMoney(task.cost_usd))
+        ))
+      ) : null,
+      cron.allocation && jobs.length ? el("small", { className: "olympus-muted olympus-cost-note" }, cron.allocation) : null
+    );
+  }
+
   function PerformanceTracking({ performance }) {
     const data = performance || {};
     const summary = data.summary || {};
@@ -1534,6 +1583,7 @@
         el(AgentHQ, { hq: tuning.agent_hq })
       ),
       el(ModePanel, { id: "agents", activeMode },
+        el(CostAttribution, { attribution: data && data.cost_attribution }),
         el(PerformanceTracking, { performance: data && data.performance }),
         el(ProfileFitness, { fitness: data && data.profile_fitness }),
         el(PartyView, { party: data && data.party, events: data && data.activity_events })
