@@ -81,7 +81,7 @@ class BriefDataTest(unittest.TestCase):
         items = plugin_api.detect_friction(sessions, {})
 
         looping = next(item for item in items if item["title"] == "An agent is looping or tool-thrashing")
-        self.assertEqual(looping["targets"], [{"kind": "session", "ref": plugin_api.safe_id("looper", "session"), "label": "cli"}])
+        self.assertEqual(looping["targets"], [{"kind": "session", "ref": plugin_api.safe_id("looper", "session"), "label": "cli", "agent": "profile:default"}])
         self.assertNotIn("looper", json.dumps(looping))
 
     def test_open_session_resolves_a_hashed_ref_across_profiles(self):
