@@ -47,6 +47,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Operational evals score only checks with observed evidence; unobserved checks
   show as unknown (`n/a`) instead of passing, and an empty Hermes home no longer
   scores 100.
+- Profiles served by the default gateway's multiplexer (no `gateway.pid` of
+  their own) read as running, and gateway liveness inside Hermes uses
+  `gateway.status.live_gateway_pid_for_home`, so launch-service gateways
+  without a pid file are detected.
 - The dashboard polls one request at a time, so a backend slower than the
   poll interval no longer discards every response.
 - Links keep the reverse-proxy base path (`__HERMES_BASE_PATH__`) and the

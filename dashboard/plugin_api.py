@@ -1415,17 +1415,36 @@ def _process_cmdline(pid: int) -> Optional[str]:
 
 
 def gateway_process_state(profile_home: Path) -> str:
-    """Gateway liveness for a profile using Hermes' `gateway.pid` contract."""
-    pid_path = profile_home / "gateway.pid"
+    """Gateway liveness for a profile home.
+
+    Inside Hermes this is ``gateway.status.live_gateway_pid_for_home``: pid file
+    and runtime lock first, then the runtime record, so a launch-service
+    gateway whose ``gateway.pid`` was unlinked still reads as running. Outside
+    Hermes (unit tests) the ``gateway.pid`` record is checked directly.
+    """
+    try:
+        from gateway.status import live_gateway_pid_for_home  # type: ignore
+    except ImportError:
+        return _pid_file_gateway_state(profile_home / "gateway.pid")
+    return "running" if live_gateway_pid_for_home(profile_home) else "stopped"
+
+
+def multiplexed_profile_names(root: Path, root_gateway_state: str) -> set[str]:
+    """Named profiles the live default gateway serves as a multiplexer.
+
+    Such profiles have no gateway of their own; the default gateway records
+    them as ``served_profiles`` in its ``gateway_state.json`` (Hermes #97120).
+    """
+    if root_gateway_state != "running":
+        return set()
+    record = read_json(root / "gateway_state.json")
+    served = record.get("served_profiles") if isinstance(record, dict) else None
+    return {str(name) for name in as_list(served) if name and name != "default"}
+
+
+def _pid_file_gateway_state(pid_path: Path) -> str:
     if not pid_path.exists():
         return "stopped"
-    try:
-        from gateway.status import get_running_pid  # type: ignore
-
-        return "running" if get_running_pid(pid_path, cleanup_stale=False) else "stopped"
-    except Exception:
-        pass
-
     record = read_json(pid_path)
     pid: Optional[int] = None
     kind: Optional[str] = None
@@ -1499,8 +1518,11 @@ def profile_stores(profiles: Optional[List[Dict[str, Any]]]) -> List[tuple[str, 
 def collect_profiles() -> List[Dict[str, Any]]:
     base = get_hermes_home().resolve()
     profiles: List[Dict[str, Any]] = []
+    homes = profile_homes()
+    root_gateway = gateway_process_state(homes[0][1])
+    multiplexed = multiplexed_profile_names(homes[0][1], root_gateway)
 
-    for name, home in profile_homes():
+    for name, home in homes:
         cfg = profile_config(home)
         model = summarize_model(cfg)
         model_name = model.get("model")
@@ -1514,7 +1536,11 @@ def collect_profiles() -> List[Dict[str, Any]]:
                 skill_count = sum(1 for p in skills_dir.rglob("SKILL.md") if p.is_file())
             except Exception:
                 skill_count = 0
-        gstate = gateway_process_state(home)
+        gstate = root_gateway if name == "default" else gateway_process_state(home)
+        gateway_mode = "own" if gstate == "running" else None
+        if gstate != "running" and name in multiplexed:
+            gstate = "running"
+            gateway_mode = "multiplexed"
         trust = "primary" if name == "default" else "isolated"
         profile_number = len(profiles)
         public_name = name if (EXPOSE_LOCAL_LABELS or name == "default") else f"profile_{profile_number}"
@@ -1534,6 +1560,7 @@ def collect_profiles() -> List[Dict[str, Any]]:
             "has_soul": soul_exists,
             "skill_count": skill_count,
             "gateway_state": gstate,
+            "gateway_mode": gateway_mode,
             "dashboard_home": home.resolve() == base,
         })
     return profiles
