@@ -156,13 +156,18 @@ Olympus uses bordered tonal layering with hard offset shadows on dense cards. So
 Navigation is inherited from the Hermes dashboard shell. Olympus does not clone Hermes admin navigation. Handoff links are short, explicit, and point to Hermes-owned routes.
 
 Inside Olympus, mode tabs divide work by intent. Brief is the default and owns
-hero status, score details, and Agent Monitor. Agents, Skills, Kanban, Policy,
+the hero facts (readiness, needs-you count, 24h spend, session window), the
+Needs you list, the readiness deductions, and Agent Monitor. Agents, Skills, Kanban, Policy,
 and Diagnostics hold deeper panels. Mobile tabs use short labels and a
 two-column layout.
 
-### Pantheon / Agent View
+### Live Work
 
-The Agent View uses trigger lanes, agent cards, a selected profile inspector, and an activity feed. It answers which profiles are active, idle, blocked, or risky without shrinking a graph. Mobile stacks the view rather than compressing the whole surface.
+Live Work uses profile cards in a responsive grid, a selected profile inspector, and an activity feed. It answers which profile is running what without a diagram and without repeating counts other panels own. Mobile stacks the view.
+
+### The Quiet Chip Rule
+
+Metric tiles and section heads show a state chip only for warning, critical, stale, or blocked values. Healthy, idle, and unknown values carry no chip, so a chip always means "look here".
 
 ## 6. Do's and Don'ts
 

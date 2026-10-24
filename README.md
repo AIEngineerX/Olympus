@@ -69,14 +69,24 @@ and the shared Kanban databases under the Hermes root.
 
 ## Dashboard Modes
 
-Olympus opens in Brief mode: hero status, score details, and Agent Monitor.
+Olympus opens in Brief mode, which answers "what needs me?" first:
+
+- the readiness score, how many findings need you, spend in the last 24 hours,
+  and the session window every signal covers (the last 7 days);
+- **Needs you**: ranked findings with their evidence, the Hermes page that owns
+  the fix, and buttons that open the sessions behind a finding in Hermes chat;
+- the readiness score's top deductions;
+- Agent Monitor tiles for the same window.
+
 Deeper inspection is split into purpose-built tabs:
 
-- Agents: Performance Tracking, Profile Fitness, and Pantheon.
+- Agents: Performance Tracking, Profile Fitness, and Live Work (who is running
+  what, and recent Kanban activity).
 - Skills: Skill Coverage and Skill Hygiene.
 - Kanban: Trace Spine and Kanban Intelligence.
 - Policy: Tool Policy & Aux Cost.
-- Diagnostics: Operational Evals, Metrics Spine, Production Diagnostics, and Evidence Sources.
+- Diagnostics: Operational Evals, with Metrics Spine, payload budgets and
+  Evidence Sources under "Debug details".
 
 ## Hermes Desktop
 
@@ -103,6 +113,7 @@ Hermes mounts the Olympus API at `/api/plugins/olympus/` once the plugin is enab
 | `GET /health` | Liveness and a coarse runtime status summary |
 | `GET /overview` | Full dashboard read model: health, tuning, profiles, gateways, cron, sessions, Kanban, performance, Trace Spine, Operational Evals, Metrics Spine, skill hygiene, config policy, and evidence sources |
 | `GET /tuning` | Tuning-focused read model with score breakdown, Kanban intelligence, Trace Spine, Operational Evals, Metrics Spine, skill hygiene, config policy, performance, and evidence sources |
+| `GET /open/session?ref=` | Resolves a hashed session ref to its Hermes chat URL (`/chat?resume=…&profile=…`), or `{"href": null}` when the session is gone. Raw session IDs leave the backend only through this click-time lookup. |
 
 Routes sit behind the Hermes dashboard session-token middleware. The frontend
 calls them through the plugin SDK's `fetchJSON`, which injects the token. If
@@ -204,8 +215,9 @@ set `OLYMPUS_SMOKE_RELINK=1` before running the smoke command.
   `dashboard.olympus.expose_local_labels` is explicitly enabled in `config.yaml`.
 - Brief mode hides deep panels by default; visual and live smoke tests click the
   tabs that own Agents, Skills, Kanban, Policy, and Diagnostics.
-- Pantheon uses HTML text and accessible profile buttons rather than SVG text or an
+- Live Work uses HTML text and accessible profile buttons rather than SVG text or an
   image-role wrapper.
+- Metric chips appear only for warning, critical, stale or blocked values.
 - The frontend polls `/overview` one request at a time; the next poll starts
   only after the previous response settles.
 - Attention items are sorted by severity before truncation.
