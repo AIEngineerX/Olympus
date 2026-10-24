@@ -56,7 +56,6 @@ class KanbanReaderTest(unittest.TestCase):
         kanban = plugin_api.collect_kanban(PROFILES)
 
         self.assertEqual(kanban["boards"][0]["state"], "missing")
-        self.assertEqual(plugin_api.kanban_store_state(kanban), "missing")
         evidence = plugin_api.build_evidence_sources(PROFILES, [], [], [], kanban)
         source = next(item for item in evidence["items"] if item["id"] == "hermes_kanban")
         self.assertFalse(source["present"])
@@ -70,7 +69,6 @@ class KanbanReaderTest(unittest.TestCase):
         board = kanban["boards"][0]
         self.assertEqual(board["state"], "error")
         self.assertTrue(board["error"])
-        self.assertEqual(plugin_api.kanban_store_state(kanban), "warning")
         self.assertTrue(any("Could not read Kanban board" in item["label"] for item in kanban["attention"]))
         evidence = plugin_api.build_evidence_sources(PROFILES, [], [], [], kanban)
         source = next(item for item in evidence["items"] if item["id"] == "hermes_kanban")

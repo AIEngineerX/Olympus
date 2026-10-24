@@ -52,10 +52,10 @@ test.describe("Olympus Desktop page", () => {
     expect(errors).toEqual([]);
   });
 
-  test("shows the brief: readiness, facts, findings, fixes, spend and backlog", async ({ page }) => {
+  test("shows the brief: facts, findings, fixes, spend and backlog", async ({ page }) => {
     const errors = await openHarness(page);
 
-    await expect(page.getByText("+9 in 7 days")).toBeVisible();
+    await expect(page.getByText(/Readiness/)).toHaveCount(0);
     await expect(page.getByText("$2.36 across 9 sessions")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Needs you (2)" })).toBeVisible();
     await expect(page.getByText("Create a repeatable browser QA skill")).toBeVisible();

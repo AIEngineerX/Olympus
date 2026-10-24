@@ -41,27 +41,27 @@ class HistoryStoreTest(unittest.TestCase):
 
     def test_snapshot_writes_are_throttled_within_a_day(self):
         now = 1_800_000_000.0
-        self.assertTrue(plugin_api.record_snapshot(self.con, values(score=70), now))
-        self.assertFalse(plugin_api.record_snapshot(self.con, values(score=60), now + 60))
-        self.assertTrue(plugin_api.record_snapshot(self.con, values(score=65), now + plugin_api.SNAPSHOT_MIN_INTERVAL_SECONDS + 1))
+        self.assertTrue(plugin_api.record_snapshot(self.con, values(spend_24h=7.0), now))
+        self.assertFalse(plugin_api.record_snapshot(self.con, values(spend_24h=6.0), now + 60))
+        self.assertTrue(plugin_api.record_snapshot(self.con, values(spend_24h=6.5), now + plugin_api.SNAPSHOT_MIN_INTERVAL_SECONDS + 1))
 
-        rows = self.con.execute("SELECT day, score FROM snapshots").fetchall()
-        self.assertEqual([(r["day"], r["score"]) for r in rows], [(rows[0]["day"], 65)])
+        rows = self.con.execute("SELECT day, spend_24h FROM snapshots").fetchall()
+        self.assertEqual([(r["day"], r["spend_24h"]) for r in rows], [(rows[0]["day"], 6.5)])
 
-    def test_trend_reports_the_score_change_over_seven_days(self):
+    def test_history_returns_recent_days_oldest_first(self):
         now = 1_800_000_000.0
-        for days_ago, score in ((8, 40), (7, 55), (3, 60), (0, 72)):
-            plugin_api.record_snapshot(self.con, values(score=score), now - days_ago * DAY)
+        for days_ago, spend in ((8, 4.0), (7, 5.5), (3, 6.0), (0, 7.2)):
+            plugin_api.record_snapshot(self.con, values(spend_24h=spend), now - days_ago * DAY)
 
         history = plugin_api.read_history(self.con, now)
 
-        self.assertEqual([d["score"] for d in history["days"]], [40, 55, 60, 72])
-        self.assertEqual(history["score_change_7d"], 72 - 55)
+        self.assertEqual([d["spend_24h"] for d in history["days"]], [4.0, 5.5, 6.0, 7.2])
+        self.assertEqual(history["recorded_days"], 4)
 
     def test_snapshots_older_than_retention_are_pruned(self):
         now = 1_800_000_000.0
-        plugin_api.record_snapshot(self.con, values(score=10), now - (plugin_api.HISTORY_RETENTION_DAYS + 5) * DAY)
-        plugin_api.record_snapshot(self.con, values(score=90), now)
+        plugin_api.record_snapshot(self.con, values(spend_24h=1.0), now - (plugin_api.HISTORY_RETENTION_DAYS + 5) * DAY)
+        plugin_api.record_snapshot(self.con, values(spend_24h=9.0), now)
 
         self.assertEqual(self.con.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0], 1)
 
@@ -114,7 +114,9 @@ class FixTrackingRouteTest(unittest.TestCase):
         payload = plugin_api.overview()
 
         self.assertEqual(self._state_hash(), before)
-        self.assertEqual(payload["history"]["recorded_days"], 1)
+        con = plugin_api.history_db()
+        self.assertEqual(plugin_api.read_history(con)["recorded_days"], 1)
+        con.close()
         self.assertEqual(payload["fixes"], [])
 
     def test_marking_a_finding_fixed_then_clearing_it(self):

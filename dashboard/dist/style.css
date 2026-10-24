@@ -115,7 +115,6 @@
   font-size: 12px;
 }
 
-.olympus-readiness,
 .olympus-view-switch {
   display: inline-flex;
   align-items: center;
@@ -131,23 +130,8 @@
   cursor: pointer;
 }
 
-.olympus-readiness:hover,
 .olympus-view-switch:hover {
   background: var(--color-accent);
-}
-
-.olympus-readiness span,
-.olympus-readiness small {
-  color: var(--olympus-muted);
-  font-size: 12px;
-}
-
-.olympus-readiness strong {
-  font-size: 14px;
-}
-
-.olympus-sparkline {
-  color: var(--olympus-muted);
 }
 
 .olympus-views,
@@ -1568,7 +1552,6 @@
   }
 
   .olympus-button,
-  .olympus-readiness,
   .olympus-view-switch {
     min-height: 40px;
   }
