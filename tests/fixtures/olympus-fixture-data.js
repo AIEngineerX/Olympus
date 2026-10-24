@@ -59,7 +59,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
   health: {
     status: "warning",
     status_label: "Needs review",
-    summary: "Fixture scan: routing, skill, worker, and context signals are intentionally mixed."
+    summary: "Log tail contains failure terms. Inspect logs."
   },
   tuning: {
     score: 68,
