@@ -1412,6 +1412,45 @@
     );
   }
 
+  const BACKLOG_STATE = { critical: "critical", warning: "warning", info: "info" };
+
+  function BacklogTriage({ backlog }) {
+    const data = backlog || {};
+    const summary = data.summary || {};
+    const groups = asList(data.groups);
+    if (!groups.length) return null;
+    return el("section", { className: "olympus-section olympus-backlog" },
+      el("div", { className: "olympus-section-head" },
+        el("div", null,
+          el("h2", null, "Backlog triage"),
+          el("p", null, formatCount(summary.tasks) + " stuck tasks in " + summary.groups + (summary.groups === 1 ? " group" : " groups") + ", sorted by who has to act. " + formatCount(summary.needs_you) + " need a person.")
+        ),
+        el("a", { className: "olympus-link", href: routeLink(data.recommended_view || "/kanban") }, "Open Kanban")
+      ),
+      el("div", { className: "olympus-backlog-grid" },
+        groups.map((group) => el("article", { key: group.kind, className: cx("olympus-backlog-group", "olympus-backlog-group-" + group.severity) },
+          el("div", { className: "olympus-item-head" },
+            el("div", null,
+              el("span", null, group.count + (group.count === 1 ? " task" : " tasks")),
+              el("h3", null, group.label)
+            ),
+            el(MetricPill, { state: BACKLOG_STATE[group.severity] })
+          ),
+          el("p", null, group.action),
+          el("small", null, [
+            group.oldest_days != null ? "oldest " + group.oldest_days + (group.oldest_days === 1 ? " day" : " days") : null,
+            group.stale ? group.stale + " older than 3 days" : null,
+            group.repeat_blocks ? group.repeat_blocks + " blocked more than once" : null,
+            asList(group.assignees).map((a) => a.assignee + " " + a.count).join(", "),
+          ].filter(Boolean).join(" \u00b7 ")),
+          asList(group.samples).length ? el("ul", { className: "olympus-backlog-samples" },
+            asList(group.samples).map((sample, idx) => el("li", { key: idx }, sample.title))
+          ) : null
+        ))
+      )
+    );
+  }
+
   function KanbanIntelligence({ kanban }) {
     const data = kanban || {};
     const totals = data.totals || {};
@@ -1598,6 +1637,7 @@
         el(SkillHygiene, { hygiene: data && data.skill_hygiene })
       ),
       el(ModePanel, { id: "kanban", activeMode },
+        el(BacklogTriage, { backlog: data && data.backlog }),
         el(TraceSpine, { trace: data && data.trace_spine }),
         el(KanbanIntelligence, { kanban: data && data.kanban })
       ),

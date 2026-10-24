@@ -1914,6 +1914,7 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "consecutive_failures", "last_failure_error", "worker_pid", "claim_expires",
                 "last_heartbeat_at", "current_run_id", "max_runtime_seconds", "session_id",
                 "goal_mode", "goal_max_turns", "workspace_kind", "tenant", "skills", "model_override",
+                "block_kind", "block_recurrences",
             ]
             task_select = [c for c in task_select if c in task_cols]
             task_rows = []
@@ -2021,6 +2022,9 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                     "max_runtime_seconds": row_value(t, "max_runtime_seconds"),
                     "consecutive_failures": failures,
                     "goal_mode": bool(row_value(t, "goal_mode", 0)),
+                    "block_kind": row_value(t, "block_kind"),
+                    "block_recurrences": safe_int(row_value(t, "block_recurrences")),
+                    "_created_ts": safe_float(created_at),
                     "goal_max_turns": row_value(t, "goal_max_turns"),
                     "_skills": forced_skills,
                     "forced_skill_count": len(forced_skills),
@@ -2316,6 +2320,113 @@ def group_gateways_by_profile(gateways: List[Dict[str, Any]]) -> Dict[str, List[
     for gateway in gateways:
         grouped.setdefault(str(gateway.get("profile") or ""), []).append(gateway)
     return grouped
+
+
+# Hermes' block kinds (hermes_cli/kanban_db.VALID_BLOCK_KINDS) say who has to
+# act. Olympus groups the backlog by them so a long blocked list becomes a few
+# decisions instead of a scroll.
+BACKLOG_GROUPS = [
+    ("needs_input", "Waiting on a human answer",
+     "These tasks are blocked on a decision or answer only a person can give. Answer them in Kanban, oldest first.", "critical"),
+    ("capability", "Missing a tool, skill or permission",
+     "The assignee could not do the work with what it has. Give it the tool, skill or permission, or reassign the task.", "warning"),
+    ("transient", "Temporary failures",
+     "Usually clears on the next attempt. Look at the ones blocked for more than a day.", "info"),
+    ("untyped", "Blocked without a reason kind",
+     "The agent blocked without saying why. Open each task to read the reason.", "warning"),
+    ("triage", "Sent to triage after repeat blocks",
+     "Hermes moved these to triage because they were unblocked and blocked again for the same reason.", "warning"),
+    ("dependency", "Waiting on parent tasks",
+     "Not actionable yet: these start when the tasks they depend on finish.", "info"),
+]
+BACKLOG_STALE_DAYS = 3
+BACKLOG_NEEDS_INPUT_WARNING = 3
+
+
+def backlog_group(task: Dict[str, Any]) -> Optional[str]:
+    status = task.get("status")
+    kind = task.get("block_kind")
+    if status == "triage":
+        return "triage"
+    if status == "todo" and kind == "dependency":
+        return "dependency"
+    if status != "blocked":
+        return None
+    return kind if kind in ("needs_input", "capability", "transient") else "untyped"
+
+
+def build_backlog_triage(kanban: Optional[Dict[str, Any]], now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    members: Dict[str, List[Dict[str, Any]]] = {}
+    for task in kanban_items(kanban, "_tasks"):
+        group = backlog_group(task)
+        if group:
+            members.setdefault(group, []).append(task)
+    groups: List[Dict[str, Any]] = []
+    for key, label, action, severity in BACKLOG_GROUPS:
+        tasks = members.get(key, [])
+        if not tasks:
+            continue
+        tasks.sort(key=lambda task: safe_float(task.get("_created_ts")) or now)
+        oldest = safe_float(tasks[0].get("_created_ts"))
+        assignees: Dict[str, int] = {}
+        for task in tasks:
+            assignees[str(task.get("assignee") or "unassigned")] = assignees.get(str(task.get("assignee") or "unassigned"), 0) + 1
+        groups.append({
+            "kind": key,
+            "label": label,
+            "action": action,
+            "severity": severity,
+            "count": len(tasks),
+            "oldest_days": int((now - oldest) // 86400) if oldest else None,
+            "stale": sum(1 for task in tasks if safe_float(task.get("_created_ts")) and now - safe_float(task.get("_created_ts")) > BACKLOG_STALE_DAYS * 86400),
+            "repeat_blocks": sum(1 for task in tasks if int(task.get("block_recurrences") or 0) > 1),
+            "assignees": [{"assignee": name, "count": count} for name, count in sorted(assignees.items(), key=lambda kv: -kv[1])[:3]],
+            "samples": [{"title": task.get("title"), "board": task.get("board")} for task in tasks[:3]],
+        })
+    return {
+        "summary": {
+            "groups": len(groups),
+            "tasks": sum(group["count"] for group in groups),
+            "needs_you": sum(group["count"] for group in groups if group["kind"] in ("needs_input", "capability", "untyped", "triage")),
+        },
+        "groups": groups,
+        "recommended_view": "/kanban",
+    }
+
+
+def backlog_findings(triage: Dict[str, Any]) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    for group in triage["groups"]:
+        if group["kind"] == "needs_input" and (group["count"] >= BACKLOG_NEEDS_INPUT_WARNING or (group["oldest_days"] or 0) >= BACKLOG_STALE_DAYS):
+            findings.append(_tuning_item(
+                "kanban",
+                "warning",
+                f"{group['count']} Kanban task{'s are' if group['count'] != 1 else ' is'} waiting on your answer",
+                "Agents blocked these on a question or decision only a person can give. Until someone answers, the work and anything depending on it stays stuck.",
+                f"oldest waiting {group['oldest_days']} day(s); " + ", ".join(f"{a['assignee']}: {a['count']}" for a in group["assignees"]),
+                "/kanban",
+                "Open Kanban",
+                "Olympus",
+                "Hermes records why a task blocked (block_kind needs_input).",
+                f">= {BACKLOG_NEEDS_INPUT_WARNING} needs-input tasks or one waiting >= {BACKLOG_STALE_DAYS} days",
+                count=group["count"],
+            ))
+        if group["kind"] == "capability" and group["count"]:
+            findings.append(_tuning_item(
+                "kanban",
+                "warning",
+                "Agents are blocked on missing tools or permissions",
+                "The assignee could not finish because it lacks a tool, skill or permission. Granting it, or routing the work elsewhere, unblocks every task in this group.",
+                ", ".join(f"{a['assignee']}: {a['count']}" for a in group["assignees"]),
+                "/kanban",
+                "Open Kanban",
+                "Olympus",
+                "Hermes records why a task blocked (block_kind capability).",
+                "any task blocked with kind capability",
+                count=group["count"],
+            ))
+    return findings
 
 
 def kanban_store_state(kanban: Optional[Dict[str, Any]]) -> str:
@@ -4657,9 +4768,11 @@ def scan_hermes() -> Dict[str, Any]:
     attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
     cost_attribution = collect_cost_attribution(profiles, cron, sessions, time.time() - SESSION_WINDOW_DAYS * 86400)
     fleet = build_fleet(profiles, sessions, cron, profile_fitness)
+    backlog = build_backlog_triage(kanban)
     tuning = build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)
-    add_findings(tuning, cost_findings(cost_attribution) + fleet_findings(fleet, kanban))
+    add_findings(tuning, cost_findings(cost_attribution) + fleet_findings(fleet, kanban) + backlog_findings(backlog))
     return {
+        "backlog": backlog,
         "fleet": fleet,
         "cost_attribution": cost_attribution,
         "profiles": profiles,
@@ -4883,6 +4996,7 @@ def overview_payload(scan: Dict[str, Any]) -> Dict[str, Any]:
         "tuning": strip_internal(scan["tuning"]),
         "cost_attribution": scan["cost_attribution"],
         "fleet": strip_internal(scan["fleet"]),
+        "backlog": strip_internal(scan["backlog"]),
         "history": history,
         "fixes": fixes,
         "profiles": [public_profile(p) for p in scan["profiles"]],

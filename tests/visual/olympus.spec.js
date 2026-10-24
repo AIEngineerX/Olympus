@@ -33,6 +33,7 @@ const stagedModeSections = {
     { selector: ".olympus-skill-hygiene", text: "Skill Hygiene", minHeight: 180 }
   ],
   Kanban: [
+    { selector: ".olympus-backlog", text: "Backlog triage", minHeight: 160 },
     { selector: ".olympus-trace-spine", text: "Trace Spine", minHeight: 160 },
     { selector: ".olympus-kanban", text: "Kanban Intelligence", minHeight: 180 }
   ],
