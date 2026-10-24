@@ -10,7 +10,13 @@ agent system is performing and links to the Hermes page that owns each fix.
 See [`OLYMPUS_GOAL.md`](OLYMPUS_GOAL.md) for the product boundary (what Olympus
 owns vs. what Hermes owns).
 
-![Olympus dashboard showing readiness score, mode tabs, and Agent Monitor](docs/assets/olympus-dashboard.jpg)
+![Olympus Brief: readiness with its 7-day trend, what needs you, spend in the last 24 hours, and ranked findings with buttons that open the sessions behind them](docs/assets/olympus-brief.png)
+
+| Where spend goes and the fleet | Backlog triage |
+| --- | --- |
+| ![Cost per cron job and per background task](docs/assets/olympus-agents.png) | ![Stuck Kanban tasks grouped by who has to act](docs/assets/olympus-kanban.png) |
+
+Screenshots use sample data.
 
 ## What It Does
 
@@ -180,7 +186,10 @@ See [`SECURITY.md`](SECURITY.md) for the full security and privacy posture.
 │   ├── docs/VIEWPORT_STRATEGY.md
 │   ├── docs/FRONTEND_SKILL_RESEARCH.md
 │   └── README.md                # package notes
-├── docs/assets/olympus-dashboard.jpg
+├── desktop/plugin.js            # Hermes Desktop page (same backend)
+├── alerts/olympus_alerts.py     # script for the opt-in no-agent alert cron job
+├── plugin.yaml / __init__.py    # catalog manifest and the `hermes olympus` command
+├── docs/assets/                 # README and catalog screenshots
 ├── scripts/install-dashboard-link.sh
 ├── scripts/olympus-live-smoke.mjs
 ├── scripts/olympus-performance-smoke.mjs
