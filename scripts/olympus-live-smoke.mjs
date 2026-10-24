@@ -35,7 +35,7 @@ const briefSections = [
 const modeSections = {
   Agents: [
     [".olympus-performance", "Performance Tracking"],
-    [".olympus-profile-fitness", "Profile Fitness"],
+    [".olympus-fleet", "Fleet"],
     [".olympus-pantheon", "Live Work"],
   ],
   Skills: [

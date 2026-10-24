@@ -123,22 +123,22 @@ test.describe("Olympus behaviour", () => {
   }
 
   for (const size of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 390, height: 844 }]) {
-    test(`Pantheon status badges fit their cells at ${size.width}px`, async ({ page }) => {
+    test(`Fleet and Live Work cells fit at ${size.width}px`, async ({ page }) => {
       await openPage(page, { state: "noisy" }, size);
       await page.getByRole("tab", { name: "Agents" }).click();
 
-      const overflowing = await page.locator(".olympus-viewport-stat, .olympus-fitness-reasons small").evaluateAll((cells) =>
+      const overflowing = await page.locator(".olympus-fleet-row > span, .olympus-fleet-issue small, .olympus-pantheon-node").evaluateAll((cells) =>
         cells.filter((cell) => cell.scrollWidth > cell.clientWidth + 1).map((cell) => cell.textContent)
       );
       expect(overflowing).toEqual([]);
     });
   }
 
-  test("profile fitness reasons show labelled points, not a bare score delta", async ({ page }) => {
+  test("fleet issue reasons show labelled points, not a bare score delta", async ({ page }) => {
     await openPage(page, { state: "noisy" });
     await page.getByRole("tab", { name: "Agents" }).click();
 
-    const reasons = await page.locator(".olympus-fitness-reasons small").allTextContents();
+    const reasons = await page.locator(".olympus-fleet-issue small").allTextContents();
     expect(reasons.length).toBeGreaterThan(0);
     for (const text of reasons) {
       expect(text).not.toMatch(/\/\s*-\d+\s*$/);

@@ -122,5 +122,22 @@ class KanbanReaderTest(unittest.TestCase):
         self.assertEqual(len(kanban["_runs"]), 1 + plugin_api.KANBAN_FINISHED_RUN_SAMPLE)
 
 
+    def test_minimal_schema_with_one_timestamp_column_still_reads(self):
+        # SQLite COALESCE needs two arguments; a schema with only created_at
+        # must not fail the whole board scan.
+        con = sqlite3.connect(self.home / "kanban.db")
+        con.executescript("CREATE TABLE tasks (id TEXT, title TEXT, status TEXT, assignee TEXT, created_at INTEGER);")
+        con.execute("INSERT INTO tasks VALUES ('t1', 'x', 'ready', 'default', 1)")
+        con.execute("INSERT INTO tasks VALUES ('t2', 'y', 'done', 'default', 2)")
+        con.commit()
+        con.close()
+
+        kanban = plugin_api.collect_kanban(PROFILES)
+
+        self.assertNotIn("error", kanban["boards"][0])
+        self.assertEqual(sorted(t["status"] for t in kanban["_tasks"]), ["done", "ready"])
+        self.assertEqual(kanban["assignee_load"][0]["open"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
