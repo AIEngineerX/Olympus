@@ -20,9 +20,13 @@
         --background-base: #e8f2fd;
       }
 
+      /* Exactly the --color-* set the live dashboard defines: Hermes builds
+         with Tailwind v4, which emits no --color-foreground or
+         --color-background, so neither exists here either. */
       :root {
-        --color-background: var(--background-base);
-        --color-foreground: var(--midground-base);
+        --color-midground: var(--midground-base);
+        --color-text-secondary: color-mix(in srgb, var(--midground-base) 80%, transparent);
+        --color-secondary: color-mix(in srgb, var(--midground-base) 6%, var(--background-base));
         --color-card: color-mix(in srgb, var(--midground-base) 4%, var(--background-base));
         --color-card-foreground: var(--midground-base);
         --color-primary: var(--midground-base);
@@ -50,8 +54,8 @@
       body {
         margin: 0;
         min-height: 100%;
-        background: var(--color-background);
-        color: var(--color-foreground);
+        background: var(--background-base);
+        color: var(--midground-base);
       }
 
       body {

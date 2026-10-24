@@ -7,6 +7,9 @@
  */
 
 .olympus-page {
+  /* Hermes defines --color-card-foreground (its text colour) but, built with
+     Tailwind v4, emits no --color-foreground or --color-background. */
+  --olympus-fg: var(--color-card-foreground);
   --olympus-hairline: var(--color-border);
   --olympus-muted: var(--color-muted-foreground);
   --olympus-radius: var(--radius);
@@ -15,7 +18,7 @@
   --olympus-wait-line: color-mix(in srgb, var(--color-warning) 38%, transparent);
   min-height: 100%;
   padding: 20px 24px 32px;
-  color: var(--color-foreground);
+  color: var(--olympus-fg);
   font-size: 14px;
   line-height: 1.45;
   font-variant-numeric: tabular-nums;
@@ -84,7 +87,7 @@
 
 .olympus-laurel {
   flex: none;
-  color: var(--color-foreground);
+  color: var(--olympus-fg);
 }
 
 .olympus-wordmark {
@@ -122,7 +125,7 @@
   border: 1px solid var(--olympus-hairline);
   border-radius: var(--olympus-radius-sm);
   background: transparent;
-  color: var(--color-foreground);
+  color: var(--olympus-fg);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -252,7 +255,7 @@
   flex: none;
   border-radius: 50%;
   background: color-mix(in oklch, oklch(0.72 0.1 var(--olympus-avatar-hue, 200)) 30%, var(--color-card));
-  color: var(--color-foreground);
+  color: var(--olympus-fg);
   font-size: 12px;
   font-weight: 600;
 }
@@ -293,7 +296,7 @@
   padding: 0 6px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-warning) 22%, transparent);
-  color: var(--color-foreground);
+  color: var(--olympus-fg);
   font-size: 12px;
   font-weight: 600;
   vertical-align: 1px;
@@ -323,7 +326,7 @@
   border: 1px solid var(--olympus-hairline);
   border-radius: var(--olympus-radius-sm);
   background: transparent;
-  color: var(--color-foreground);
+  color: var(--olympus-fg);
   font: inherit;
   font-size: 13px;
   font-weight: 500;
@@ -348,7 +351,7 @@
 }
 
 .olympus-button-primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-primary) 85%, var(--color-background));
+  background: color-mix(in srgb, var(--color-primary) 85%, var(--color-card));
 }
 
 .olympus-button-quiet {
@@ -361,7 +364,7 @@
   padding: 0;
   border: 0;
   background: none;
-  color: var(--color-foreground);
+  color: var(--olympus-fg);
   font: inherit;
   font-size: 13px;
   text-decoration: underline;
@@ -418,7 +421,7 @@
   gap: 10px;
   width: min(320px, 86vw);
   padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--color-foreground) 28%, transparent);
+  border: 1px solid color-mix(in srgb, var(--olympus-fg) 28%, transparent);
   border-radius: var(--olympus-radius);
   background: var(--color-popover);
   color: var(--color-popover-foreground);
@@ -443,8 +446,8 @@
   padding: 6px 8px;
   border: 1px solid var(--color-input);
   border-radius: var(--olympus-radius-sm);
-  background: var(--color-background);
-  color: var(--color-foreground);
+  background: var(--color-card);
+  color: var(--olympus-fg);
   font: inherit;
   font-size: 13px;
 }
@@ -607,7 +610,7 @@
 }
 
 .olympus-sort-active {
-  color: var(--color-foreground);
+  color: var(--olympus-fg);
 }
 
 .olympus-sort-active::after {
@@ -712,7 +715,7 @@
 }
 
 .olympus-activity-today {
-  background: var(--color-foreground);
+  background: var(--olympus-fg);
 }
 
 /* With the inspector open the roster keeps its decision columns. */
@@ -852,7 +855,7 @@
 
 .olympus-close:hover {
   border-color: var(--olympus-hairline);
-  color: var(--color-foreground);
+  color: var(--olympus-fg);
 }
 
 .olympus-inspector-section {
@@ -1009,11 +1012,11 @@
 }
 
 .olympus-series-input {
-  background: color-mix(in srgb, var(--color-foreground) 34%, transparent);
+  background: color-mix(in srgb, var(--olympus-fg) 34%, transparent);
 }
 
 .olympus-series-cache {
-  background: color-mix(in srgb, var(--color-foreground) 14%, transparent);
+  background: color-mix(in srgb, var(--olympus-fg) 14%, transparent);
 }
 
 .olympus-series-output {
@@ -1307,7 +1310,7 @@
   display: grid;
   gap: 8px;
   margin: 0 0 16px;
-  color: var(--color-foreground);
+  color: var(--olympus-fg);
 }
 
 .olympus-backend-off h2 {
@@ -1449,7 +1452,7 @@
     max-height: none;
     border: 0;
     border-radius: 0;
-    background: var(--color-background);
+    background: var(--color-card);
   }
 
   .olympus-back {
@@ -1460,7 +1463,7 @@
     padding: 0;
     border: 0;
     background: none;
-    color: var(--color-foreground);
+    color: var(--olympus-fg);
     font: inherit;
     font-size: 13px;
     cursor: pointer;

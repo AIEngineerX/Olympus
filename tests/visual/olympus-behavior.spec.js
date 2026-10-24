@@ -147,6 +147,20 @@ test.describe("Olympus behaviour", () => {
     });
   });
 
+  test("assigning unowned work logs it on the agent that received it", async ({ page }) => {
+    await openPage(page, { state: "noisy" });
+    await page.getByRole("button", { name: "+3 more" }).click();
+    await bannerItem(page, "has no agent").getByRole("button", { name: "Assign" }).click();
+    const popover = page.getByRole("dialog", { name: /^Assign:/ });
+    await popover.getByRole("combobox").selectOption({ label: "Analyst" });
+    await popover.getByRole("button", { name: "Confirm" }).click();
+
+    await expect(page.locator(".olympus-notice")).toContainText("Assigned: Summarise this week's support tickets");
+    const sent = await writes(page);
+    expect(sent[0].body).toEqual({ profile: "analyst", reclaim_first: false, reason: "Reassigned from Olympus" });
+    expect(new URLSearchParams(sent[1].query).get("agent")).toBe("profile:analyst");
+  });
+
   test("when Hermes refuses, the popover shows why and offers a retry", async ({ page }) => {
     await openPage(page, { state: "noisy", fail: "reclaim" });
     await bannerItem(page, "Worker stalled").getByRole("button", { name: "Reclaim" }).click();
