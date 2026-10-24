@@ -22,6 +22,9 @@ except Exception:
         def get(self, *_args, **_kwargs):
             return lambda fn: fn
 
+        post = get
+        delete = get
+
 try:
     from hermes_constants import get_hermes_home
 except Exception:
@@ -2229,8 +2232,15 @@ def session_targets(sessions: List[Dict[str, Any]], limit: int = 3) -> List[Dict
     ]
 
 
-def _tuning_item(kind: str, severity: str, title: str, detail: str, evidence: str, view: str, action: str, owner: str = "Olympus", basis: str = "", threshold: str = "", targets: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+def tuning_key(kind: str, title: str) -> str:
+    """Stable identity for a finding across scans, used by fix tracking."""
+    return re.sub(r"[^a-z0-9]+", "-", f"{kind} {title}".lower()).strip("-")
+
+
+def _tuning_item(kind: str, severity: str, title: str, detail: str, evidence: str, view: str, action: str, owner: str = "Olympus", basis: str = "", threshold: str = "", targets: Optional[List[Dict[str, Any]]] = None, count: Optional[int] = None) -> Dict[str, Any]:
     return {
+        "key": tuning_key(kind, title),
+        "count": count,
         "targets": targets or [],
         "kind": kind,
         "severity": severity,
@@ -2714,6 +2724,7 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
             "Hermes records tool calls per session; runaway tool use without termination is a known failure signature.",
             f">= {RUNAWAY_TOOLS_THRESHOLD} tool calls in one run",
             session_targets(looping),
+            count=len(looping),
         ))
     if expensive:
         total = sum(_session_cost(s) for s in expensive)
@@ -2729,6 +2740,7 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
             "Hermes records each session's estimated or actual cost; cost concentration is a routing signal.",
             f"single-run cost >= ${EXPENSIVE_RUN_USD:.2f}",
             session_targets(expensive),
+            count=len(expensive),
         ))
     if context_pressure:
         findings.append(_tuning_item(
@@ -2743,6 +2755,7 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
             "Hermes records prompt tokens and model calls per session; their ratio is the average context sent per call.",
             f">= {CONTEXT_PRESSURE_TOKENS:,} average input tokens per API call",
             session_targets(context_pressure),
+            count=len(context_pressure),
         ))
     return findings
 
@@ -2832,6 +2845,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Hermes records tool calls per session. Use traces, tool counts, outcomes, and repeatable evidence before changing routes.",
             f">= {TOOL_HEAVY_THRESHOLD} tool calls in a session",
             session_targets(tool_heavy),
+            count=len(tool_heavy),
         ))
     if message_heavy:
         tuning_items.append(_tuning_item(
@@ -2845,6 +2859,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Mnemosyne",
             "Hermes records messages per session. Long threads can hide context drift.",
             f">= {LONG_THREAD_THRESHOLD} messages in a session",
+            count=len(message_heavy),
         ))
     if overloaded:
         tuning_items.append(_tuning_item(
@@ -2858,6 +2873,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Hermes",
             "Kanban assignee load shows route concentration.",
             f">= {OVERLOADED_OPEN_THRESHOLD} open or >= {OVERLOADED_RUNNING_THRESHOLD} running tasks",
+            count=len(overloaded),
         ))
     if blocked_tasks:
         tuning_items.append(_tuning_item(
@@ -2871,6 +2887,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Olympus",
             "Kanban blocked status is first-party orchestration evidence.",
             "task status = blocked",
+            count=len(blocked_tasks),
         ))
     if ready_unassigned:
         tuning_items.append(_tuning_item(
@@ -2884,6 +2901,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Hermes",
             "Kanban ready tasks need an assignee before worker routing can run.",
             "task status = ready and assignee is empty/unassigned",
+            count=len(ready_unassigned),
         ))
     if failed_runs:
         tuning_items.append(_tuning_item(
@@ -2897,6 +2915,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Olympus",
             "Kanban task_runs record worker failures, crashes, and timeouts.",
             "task_run status/outcome indicates failure",
+            count=len(failed_runs),
         ))
     if missing_models:
         tuning_items.append(_tuning_item(
@@ -2910,6 +2929,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Olympus",
             "Profile route metadata makes behavior changes auditable.",
             "profile route metadata is unset",
+            count=len(missing_models),
         ))
     if zero_skill_profiles:
         tuning_items.append(_tuning_item(
@@ -2923,6 +2943,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Apollo",
             "Hermes skills are reusable operating instructions.",
             "profile skill_count = 0",
+            count=len(zero_skill_profiles),
         ))
     if stale_sessions:
         tuning_items.append(_tuning_item(
@@ -2937,6 +2958,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Hermes sessions without an end time and recent activity are stale.",
             "session has no end time and is older than the freshness window",
             session_targets(stale_sessions),
+            count=len(stale_sessions),
         ))
     metrics = build_metrics(sessions, kanban)
     tuning_items = detect_friction(sessions, kanban) + tuning_items
@@ -4330,69 +4352,261 @@ def open_session(ref: str) -> Dict[str, Any]:
     return {"href": f"/chat?{query}"}
 
 
-@router.get("/overview")
-def overview() -> Dict[str, Any]:
-    refresh_expose_local_labels()
-    started_at = time.perf_counter()
+def scan_hermes() -> Dict[str, Any]:
+    """One read of local Hermes state plus every Olympus synthesis built on it."""
     profiles = collect_profiles()
     cron = collect_cron(profiles)
     sessions = collect_sessions(SESSION_SCAN_LIMIT, profiles, since=time.time() - SESSION_WINDOW_DAYS * 86400)
     gateways = collect_gateways(profiles)
     kanban = collect_kanban(profiles)
     orchestration = build_orchestration(kanban)
-    party = build_party(profiles, gateways, cron, sessions, kanban, orchestration)
-    activity_events = build_activity_events(sessions, cron, gateways, kanban)
     skill_coverage = build_skill_coverage(profiles, sessions, kanban)
     skill_metadata = collect_skill_metadata(profiles)
     skill_hygiene = build_skill_hygiene(skill_metadata, skill_coverage, kanban)
     profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
     performance = build_performance_tracking(sessions, kanban)
-    trace_spine = build_trace_spine(sessions, kanban)
-    evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
     config_policy = collect_config_policy(profiles, sessions, kanban)
     ops_evals = build_ops_evals(sessions, kanban, skill_coverage, skill_hygiene, config_policy)
-    usage_rollup = collect_usage_rollup(profiles)
-    metrics_spine = build_metrics_spine(
-        profiles,
-        sessions,
-        kanban,
-        skill_metadata,
-        skill_coverage,
-        skill_hygiene,
-        profile_fitness,
-        performance,
-        ops_evals,
-        config_policy,
-        usage_rollup,
-        orchestration=orchestration,
-    )
     health = collect_health(profiles, cron)
     attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
-    tuning = build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)
-    payload = {
-        "generated_at": now_iso(),
+    return {
+        "profiles": profiles,
+        "cron": cron,
+        "sessions": sessions,
+        "gateways": gateways,
+        "kanban": kanban,
+        "orchestration": orchestration,
+        "party": build_party(profiles, gateways, cron, sessions, kanban, orchestration),
+        "activity_events": build_activity_events(sessions, cron, gateways, kanban),
+        "skill_coverage": skill_coverage,
+        "skill_metadata": skill_metadata,
+        "skill_hygiene": skill_hygiene,
+        "profile_fitness": profile_fitness,
+        "performance": performance,
+        "trace_spine": build_trace_spine(sessions, kanban),
+        "evidence_sources": build_evidence_sources(profiles, sessions, cron, gateways, kanban),
+        "config_policy": config_policy,
+        "ops_evals": ops_evals,
+        "metrics_spine": build_metrics_spine(
+            profiles,
+            sessions,
+            kanban,
+            skill_metadata,
+            skill_coverage,
+            skill_hygiene,
+            profile_fitness,
+            performance,
+            ops_evals,
+            config_policy,
+            collect_usage_rollup(profiles),
+            orchestration=orchestration,
+        ),
         "health": health,
         "attention": attention,
-        "tuning": strip_internal(tuning),
-        "profiles": [public_profile(p) for p in profiles],
-        "gateways": gateways,
-        "cron": strip_internal(cron),
-        "sessions": strip_internal(sessions[:SESSION_DISPLAY_LIMIT]),
-        "kanban": strip_internal(kanban),
-        "orchestration": strip_internal(orchestration),
-        "party": strip_internal(party),
-        "activity_events": strip_internal(activity_events),
-        "skill_coverage": strip_internal(skill_coverage),
-        "skill_hygiene": strip_internal(skill_hygiene),
-        "profile_fitness": strip_internal(profile_fitness),
-        "performance": strip_internal(performance),
-        "trace_spine": strip_internal(trace_spine),
-        "ops_evals": strip_internal(ops_evals),
-        "metrics_spine": strip_internal(metrics_spine),
-        "evidence_sources": strip_internal(evidence_sources),
-        "config_policy": strip_internal(config_policy),
+        "tuning": build_tuning(profiles, gateways, cron, sessions, health, attention, kanban),
     }
-    payload["diagnostics"] = runtime_diagnostics("/overview", started_at, payload, profiles, sessions, kanban)
+
+
+# ---------------------------------------------------------------------------
+# Olympus' own storage: daily snapshots and fix tracking.
+#
+# Olympus never writes Hermes state. It keeps its history in the per-plugin
+# data directory Hermes provides (<hermes home>/plugin-data/olympus/).
+# ---------------------------------------------------------------------------
+
+HISTORY_DB = "history.db"
+HISTORY_RETENTION_DAYS = 90
+HISTORY_TREND_DAYS = 14
+SNAPSHOT_MIN_INTERVAL_SECONDS = 300
+SNAPSHOT_FIELDS = (
+    "score", "needs_you", "looping", "context_pressure", "failed_runs", "blocked",
+    "stale_workers", "spend_24h", "sessions", "tool_calls", "median_run",
+)
+
+
+def olympus_data_dir() -> Path:
+    try:
+        from plugins.plugin_storage import plugin_data_dir  # type: ignore
+    except ImportError:
+        # Outside Hermes (unit tests): the same layout Hermes uses.
+        path = get_hermes_home() / "plugin-data" / "olympus"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    return plugin_data_dir("olympus")
+
+
+def history_db() -> sqlite3.Connection:
+    try:
+        from plugins.plugin_storage import plugin_db  # type: ignore
+    except ImportError:
+        con = sqlite3.connect(olympus_data_dir() / HISTORY_DB, timeout=2.0, check_same_thread=False)
+    else:
+        con = plugin_db("olympus", HISTORY_DB)
+    con.row_factory = sqlite3.Row
+    con.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS snapshots (
+            day TEXT PRIMARY KEY,
+            taken_at REAL NOT NULL,
+            score INTEGER, needs_you INTEGER, looping INTEGER, context_pressure INTEGER,
+            failed_runs INTEGER, blocked INTEGER, stale_workers INTEGER, spend_24h REAL,
+            sessions INTEGER, tool_calls INTEGER, median_run REAL
+        );
+        CREATE TABLE IF NOT EXISTS fixes (
+            key TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            baseline INTEGER,
+            marked_at REAL NOT NULL
+        );
+        """
+    )
+    return con
+
+
+def snapshot_values(scan: Dict[str, Any]) -> Dict[str, Any]:
+    tuning = scan["tuning"]
+    hq = tuning.get("agent_hq") or {}
+    metrics = hq.get("metrics") or {}
+    orch_summary = (scan["orchestration"].get("summary") or {}) if isinstance(scan["orchestration"], dict) else {}
+    totals = scan["kanban"].get("totals") if isinstance(scan["kanban"].get("totals"), dict) else {}
+    return {
+        "score": int(tuning.get("score") or 0),
+        "needs_you": sum(1 for item in as_list(hq.get("recommendations")) if item.get("severity") in ("critical", "warning")),
+        "looping": int(metrics.get("looping_sessions") or 0),
+        "context_pressure": int(metrics.get("context_pressure_sessions") or 0),
+        "failed_runs": int(metrics.get("failed_kanban_runs") or 0),
+        "blocked": int(totals.get("blocked") or 0),
+        "stale_workers": int(orch_summary.get("stale_workers") or 0),
+        "spend_24h": float(metrics.get("spend_24h_usd") or 0.0),
+        "sessions": int((metrics.get("window") or {}).get("sessions") or 0),
+        "tool_calls": int(metrics.get("total_tool_calls") or 0),
+        "median_run": metrics.get("median_duration_seconds"),
+    }
+
+
+def record_snapshot(con: sqlite3.Connection, values: Dict[str, Any], now: Optional[float] = None) -> bool:
+    """Upsert today's snapshot (UTC day); at most one write per SNAPSHOT_MIN_INTERVAL."""
+    now = time.time() if now is None else now
+    day = datetime.fromtimestamp(now, tz=timezone.utc).date().isoformat()
+    row = con.execute("SELECT taken_at FROM snapshots WHERE day = ?", (day,)).fetchone()
+    if row is not None and now - float(row["taken_at"]) < SNAPSHOT_MIN_INTERVAL_SECONDS:
+        return False
+    columns = ("day", "taken_at") + SNAPSHOT_FIELDS
+    con.execute(
+        f"INSERT OR REPLACE INTO snapshots ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+        (day, now) + tuple(values[name] for name in SNAPSHOT_FIELDS),
+    )
+    cutoff = datetime.fromtimestamp(now - HISTORY_RETENTION_DAYS * 86400, tz=timezone.utc).date().isoformat()
+    con.execute("DELETE FROM snapshots WHERE day < ?", (cutoff,))
+    con.commit()
+    return True
+
+
+def read_history(con: sqlite3.Connection, now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    since = datetime.fromtimestamp(now - (HISTORY_TREND_DAYS - 1) * 86400, tz=timezone.utc).date().isoformat()
+    days = [
+        {key: row[key] for key in ("day",) + SNAPSHOT_FIELDS}
+        for row in con.execute("SELECT * FROM snapshots WHERE day >= ? ORDER BY day", (since,))
+    ]
+    week_ago = datetime.fromtimestamp(now - 7 * 86400, tz=timezone.utc).date().isoformat()
+    baseline = next((day for day in days if day["day"] >= week_ago), None)
+    latest = days[-1] if days else None
+    score_change = (
+        int(latest["score"]) - int(baseline["score"])
+        if latest and baseline and latest["day"] != baseline["day"] else None
+    )
+    return {
+        "days": days,
+        "recorded_days": len(days),
+        "score_change_7d": score_change,
+        "storage": "Olympus plugin data (never Hermes state)",
+    }
+
+
+def mark_fix(con: sqlite3.Connection, item: Dict[str, Any], now: Optional[float] = None) -> None:
+    con.execute(
+        "INSERT OR REPLACE INTO fixes (key, title, kind, baseline, marked_at) VALUES (?, ?, ?, ?, ?)",
+        (item["key"], str(item.get("title") or item["key"]), str(item.get("kind") or "finding"), item.get("count"), time.time() if now is None else now),
+    )
+    con.commit()
+
+
+def build_fix_tracking(con: sqlite3.Connection, tuning: Dict[str, Any], now: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Compare each finding the operator marked fixed with the current scan."""
+    now = time.time() if now is None else now
+    current = {item.get("key"): item for item in as_list((tuning.get("agent_hq") or {}).get("recommendations"))}
+    out: List[Dict[str, Any]] = []
+    for row in con.execute("SELECT * FROM fixes ORDER BY marked_at DESC"):
+        item = current.get(row["key"])
+        baseline = row["baseline"]
+        now_count = item.get("count") if item else 0
+        if item is None:
+            verdict = "cleared"
+        elif baseline is None or now_count is None:
+            verdict = "still present"
+        elif now_count < baseline:
+            verdict = "improved"
+        elif now_count > baseline:
+            verdict = "worse"
+        else:
+            verdict = "unchanged"
+        out.append({
+            "key": row["key"],
+            "title": row["title"],
+            "kind": row["kind"],
+            "baseline": baseline,
+            "current": now_count,
+            "verdict": verdict,
+            "marked_at": ts_to_iso(row["marked_at"]),
+            "days_tracked": int((now - float(row["marked_at"])) // 86400),
+        })
+    return out
+
+
+def overview_payload(scan: Dict[str, Any]) -> Dict[str, Any]:
+    con = history_db()
+    try:
+        record_snapshot(con, snapshot_values(scan))
+        history = read_history(con)
+        fixes = build_fix_tracking(con, scan["tuning"])
+    finally:
+        con.close()
+    return {
+        "generated_at": now_iso(),
+        "health": scan["health"],
+        "attention": scan["attention"],
+        "tuning": strip_internal(scan["tuning"]),
+        "history": history,
+        "fixes": fixes,
+        "profiles": [public_profile(p) for p in scan["profiles"]],
+        "gateways": scan["gateways"],
+        "cron": strip_internal(scan["cron"]),
+        "sessions": strip_internal(scan["sessions"][:SESSION_DISPLAY_LIMIT]),
+        "kanban": strip_internal(scan["kanban"]),
+        "orchestration": strip_internal(scan["orchestration"]),
+        "party": strip_internal(scan["party"]),
+        "activity_events": strip_internal(scan["activity_events"]),
+        "skill_coverage": strip_internal(scan["skill_coverage"]),
+        "skill_hygiene": strip_internal(scan["skill_hygiene"]),
+        "profile_fitness": strip_internal(scan["profile_fitness"]),
+        "performance": strip_internal(scan["performance"]),
+        "trace_spine": strip_internal(scan["trace_spine"]),
+        "ops_evals": strip_internal(scan["ops_evals"]),
+        "metrics_spine": strip_internal(scan["metrics_spine"]),
+        "evidence_sources": strip_internal(scan["evidence_sources"]),
+        "config_policy": strip_internal(scan["config_policy"]),
+    }
+
+
+@router.get("/overview")
+def overview() -> Dict[str, Any]:
+    refresh_expose_local_labels()
+    started_at = time.perf_counter()
+    scan = scan_hermes()
+    payload = overview_payload(scan)
+    payload["diagnostics"] = runtime_diagnostics("/overview", started_at, payload, scan["profiles"], scan["sessions"], scan["kanban"])
     return payload
 
 
@@ -4400,58 +4614,40 @@ def overview() -> Dict[str, Any]:
 def tuning() -> Dict[str, Any]:
     refresh_expose_local_labels()
     started_at = time.perf_counter()
-    profiles = collect_profiles()
-    cron = collect_cron(profiles)
-    sessions = collect_sessions(SESSION_SCAN_LIMIT, profiles, since=time.time() - SESSION_WINDOW_DAYS * 86400)
-    gateways = collect_gateways(profiles)
-    kanban = collect_kanban(profiles)
-    orchestration = build_orchestration(kanban)
-    party = build_party(profiles, gateways, cron, sessions, kanban, orchestration)
-    activity_events = build_activity_events(sessions, cron, gateways, kanban)
-    skill_coverage = build_skill_coverage(profiles, sessions, kanban)
-    skill_metadata = collect_skill_metadata(profiles)
-    skill_hygiene = build_skill_hygiene(skill_metadata, skill_coverage, kanban)
-    profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
-    performance = build_performance_tracking(sessions, kanban)
-    trace_spine = build_trace_spine(sessions, kanban)
-    evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
-    config_policy = collect_config_policy(profiles, sessions, kanban)
-    ops_evals = build_ops_evals(sessions, kanban, skill_coverage, skill_hygiene, config_policy)
-    usage_rollup = collect_usage_rollup(profiles)
-    metrics_spine = build_metrics_spine(
-        profiles,
-        sessions,
-        kanban,
-        skill_metadata,
-        skill_coverage,
-        skill_hygiene,
-        profile_fitness,
-        performance,
-        ops_evals,
-        config_policy,
-        usage_rollup,
-        orchestration=orchestration,
-    )
-    health = collect_health(profiles, cron)
-    attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
-    payload = {
-        "generated_at": now_iso(),
-        "health": health,
-        "attention": attention,
-        "kanban": strip_internal(kanban),
-        "orchestration": strip_internal(orchestration),
-        "party": strip_internal(party),
-        "activity_events": strip_internal(activity_events),
-        "skill_coverage": strip_internal(skill_coverage),
-        "skill_hygiene": strip_internal(skill_hygiene),
-        "profile_fitness": strip_internal(profile_fitness),
-        "performance": strip_internal(performance),
-        "trace_spine": strip_internal(trace_spine),
-        "ops_evals": strip_internal(ops_evals),
-        "metrics_spine": strip_internal(metrics_spine),
-        "evidence_sources": strip_internal(evidence_sources),
-        "config_policy": strip_internal(config_policy),
-        "tuning": strip_internal(build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)),
-    }
-    payload["diagnostics"] = runtime_diagnostics("/tuning", started_at, payload, profiles, sessions, kanban)
+    scan = scan_hermes()
+    payload = overview_payload(scan)
+    for key in ("profiles", "gateways", "cron", "sessions"):
+        payload.pop(key)
+    payload["diagnostics"] = runtime_diagnostics("/tuning", started_at, payload, scan["profiles"], scan["sessions"], scan["kanban"])
     return payload
+
+
+@router.post("/fixes")
+def track_fix(key: str) -> Dict[str, Any]:
+    """Start tracking a current finding the operator says they fixed.
+
+    The finding's title and count come from a fresh scan, never the request.
+    """
+    refresh_expose_local_labels()
+    scan = scan_hermes()
+    item = next((i for i in as_list((scan["tuning"].get("agent_hq") or {}).get("recommendations")) if i.get("key") == key), None)
+    if item is None:
+        return {"tracked": False, "reason": "finding not in the current scan"}
+    con = history_db()
+    try:
+        mark_fix(con, item)
+        fixes = build_fix_tracking(con, scan["tuning"])
+    finally:
+        con.close()
+    return {"tracked": True, "fixes": fixes}
+
+
+@router.delete("/fixes")
+def untrack_fix(key: str) -> Dict[str, Any]:
+    con = history_db()
+    try:
+        con.execute("DELETE FROM fixes WHERE key = ?", (key,))
+        con.commit()
+    finally:
+        con.close()
+    return {"tracked": False}
