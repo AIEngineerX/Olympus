@@ -1481,6 +1481,92 @@
   }
 }
 
+.olympus-cost-facts {
+  margin: 0 0 12px;
+}
+
+.olympus-cost-table {
+  display: grid;
+  border: 1px solid rgba(246, 240, 223, 0.1);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.olympus-cost-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2.4fr) repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(246, 240, 223, 0.08);
+  font-variant-numeric: tabular-nums;
+}
+
+.olympus-cost-row-head {
+  border-top: 0;
+  background: rgba(6, 9, 14, 0.42);
+  color: rgba(246, 240, 223, 0.58);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.olympus-cost-row small {
+  display: block;
+  color: rgba(246, 240, 223, 0.58);
+  font-size: 12px;
+}
+
+.olympus-cost-tasks {
+  margin-top: 12px;
+}
+
+.olympus-cost-tasks h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.olympus-cost-task {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 12px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(246, 240, 223, 0.08);
+}
+
+.olympus-cost-task small {
+  grid-column: 1;
+  color: rgba(246, 240, 223, 0.58);
+  font-size: 12px;
+}
+
+.olympus-cost-task strong {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.olympus-cost-note {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .olympus-cost-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .olympus-cost-row-head {
+    display: none;
+  }
+
+  .olympus-cost-row > span:not(:first-child):not(:last-child) {
+    display: none;
+  }
+}
+
 .olympus-debug {
   margin-top: 16px;
 }

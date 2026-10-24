@@ -1,5 +1,26 @@
 window.__OLYMPUS_FIXTURE_DATA__ = {
   generated_at: "2026-06-06T12:00:00Z",
+  cost_attribution: {
+    window_days: 7,
+    window_cost_usd: 7.42,
+    cron: {
+      total_cost_usd: 3.1,
+      jobs: [
+        { job_ref: "cron:1d4f2a9b3c", label: "cron:1d4f2a9b3c", profile: "default", schedule: "every 30m", fires: 14, tokens: 412000, avg_duration_seconds: 48, errors: 2, silent_runs: 3, est_cost_usd: 2.48 },
+        { job_ref: "cron:7e0b5c1d22", label: "cron:7e0b5c1d22", profile: "profile_1", schedule: "0 * * * *", fires: 28, tokens: 103000, avg_duration_seconds: 9, errors: 0, silent_runs: 21, est_cost_usd: 0.62 }
+      ],
+      allocation: "Each profile's cron-session cost is shared across its jobs by token share from cron/usage_audit.jsonl."
+    },
+    background: {
+      total_cost_usd: 1.04,
+      tasks: [
+        { task: "background_review", calls: 38, tokens: 91000, cost_usd: 0.88 },
+        { task: "title_generation", calls: 52, tokens: 26000, cost_usd: 0.16 }
+      ],
+      note: "Background task cost is part of the session cost it ran in."
+    },
+    recommended_view: "/analytics"
+  },
   history: {
     days: [52, 54, 51, 55, 58, 57, 60, 59, 61, 63, 62, 64, 66, 68].map((score, idx) => ({ day: "2026-05-" + String(24 + idx).padStart(2, "0"), score })),
     recorded_days: 14,

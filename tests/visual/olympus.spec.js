@@ -23,6 +23,7 @@ const deepSections = [
 ];
 const stagedModeSections = {
   Agents: [
+    { selector: ".olympus-cost", text: "Where spend goes", minHeight: 180 },
     { selector: ".olympus-performance", text: "Performance Tracking", minHeight: 180 },
     { selector: ".olympus-profile-fitness", text: "Profile Fitness", minHeight: 180 },
     { selector: ".olympus-pantheon", text: "Live Work", minHeight: 240 }

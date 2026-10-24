@@ -2525,6 +2525,199 @@ def collect_usage_rollup(profiles: Optional[List[Dict[str, Any]]] = None, days: 
     }
 
 
+CRON_AUDIT_TAIL_BYTES = 2_000_000
+COST_FINDING_FLOOR_USD = 1.0
+CRON_CONCENTRATION_SHARE = 0.5
+BACKGROUND_SHARE_WARNING = 0.3
+
+
+def parse_iso_ts(value: Any) -> Optional[float]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def cron_audit_fires(path: Path, since: float) -> Dict[str, Dict[str, Any]]:
+    """Per-job totals from Hermes' cron/usage_audit.jsonl (one line per fire)."""
+    if not path.exists():
+        return {}
+    text = read_text(path, CRON_AUDIT_TAIL_BYTES)
+    lines = text.splitlines()
+    if path.stat().st_size > CRON_AUDIT_TAIL_BYTES and lines:
+        lines = lines[1:]  # the first line of a tail read is usually cut
+    fires: Dict[str, Dict[str, Any]] = {}
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict) or not record.get("job_id"):
+            continue
+        ts = parse_iso_ts(record.get("ts"))
+        if ts is None or ts < since:
+            continue
+        job = fires.setdefault(str(record["job_id"]), {"fires": 0, "tokens": 0, "duration_ms": 0, "errors": 0, "silent": 0})
+        job["fires"] += 1
+        job["tokens"] += safe_int(record.get("total_tokens")) or safe_int(record.get("prompt_tokens")) + safe_int(record.get("completion_tokens"))
+        job["duration_ms"] += safe_int(record.get("duration_ms"))
+        job["errors"] += 1 if record.get("error") else 0
+        job["silent"] += 1 if record.get("response_silent") else 0
+    return fires
+
+
+def _store_cost_breakdown(db: Path, since: float) -> Dict[str, Any]:
+    """Cron-session cost and per-task background usage from one state.db."""
+    out: Dict[str, Any] = {"cron_cost": 0.0, "cron_sessions": 0, "tasks": {}}
+    if not db.exists():
+        return out
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        cols = table_columns(con, "sessions")
+        recency = [c for c in ("last_activity_at", "ended_at", "started_at") if c in cols]
+        cost_cols = [c for c in ("actual_cost_usd", "estimated_cost_usd") if c in cols]
+        if "source" in cols and recency and cost_cols:
+            row = con.execute(
+                f"SELECT COALESCE(SUM(COALESCE({', '.join(cost_cols)}, 0)), 0) AS cost, COUNT(*) AS n "
+                f"FROM sessions WHERE source = 'cron' AND COALESCE({', '.join(recency)}) >= ?",
+                (since,),
+            ).fetchone()
+            out["cron_cost"] = float(row["cost"] or 0.0)
+            out["cron_sessions"] = int(row["n"] or 0)
+        usage_cols = table_columns(con, "session_model_usage")
+        if {"task", "api_call_count", "actual_cost_usd", "estimated_cost_usd"}.issubset(usage_cols):
+            seen = "COALESCE(last_seen, first_seen, 0)" if {"last_seen", "first_seen"}.issubset(usage_cols) else "0"
+            token_cols = [c for c in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens") if c in usage_cols]
+            tokens = " + ".join(token_cols) or "0"
+            for row in con.execute(
+                f"SELECT task, SUM(api_call_count) AS calls, SUM({tokens}) AS tokens, "
+                "SUM(CASE WHEN actual_cost_usd > 0 THEN actual_cost_usd ELSE estimated_cost_usd END) AS cost "
+                f"FROM session_model_usage WHERE task != '' AND {seen} >= ? GROUP BY task",
+                (since,),
+            ):
+                out["tasks"][str(row["task"])] = {
+                    "calls": int(row["calls"] or 0),
+                    "tokens": int(row["tokens"] or 0),
+                    "cost": float(row["cost"] or 0.0),
+                }
+    except sqlite3.Error as exc:
+        log_read_warning("cost breakdown scan failed", exc)
+    finally:
+        con.close()
+    return out
+
+
+def collect_cost_attribution(
+    profiles: List[Dict[str, Any]],
+    cron: List[Dict[str, Any]],
+    sessions: List[Dict[str, Any]],
+    since: float,
+) -> Dict[str, Any]:
+    """Where scheduled and background spend goes, per cron job and per task.
+
+    Hermes records cost per session, not per cron fire, so each profile's cron
+    session cost is shared across its jobs by token share from
+    cron/usage_audit.jsonl. Background tasks come from session_model_usage.
+    """
+    rows_by_job = {(job.get("_profile"), job.get("id")): job for job in cron}
+    jobs: List[Dict[str, Any]] = []
+    tasks: Dict[str, Dict[str, Any]] = {}
+    cron_total = 0.0
+    for raw_profile, home in profile_stores(profiles):
+        breakdown = _store_cost_breakdown(home / "state.db", since)
+        fires = cron_audit_fires(home / "cron" / "usage_audit.jsonl", since)
+        cron_total += breakdown["cron_cost"]
+        token_total = sum(job["tokens"] for job in fires.values())
+        for job_id, stats in fires.items():
+            row = rows_by_job.get((raw_profile, public_ref(job_id, "cron")), {})
+            share = stats["tokens"] / token_total if token_total else 0.0
+            jobs.append({
+                "job_ref": row.get("id") or public_ref(job_id, "cron"),
+                "label": row.get("label") or public_label(None, public_ref(job_id, "cron") or "cron job", "cron"),
+                "profile": row.get("profile") or public_profile_label(raw_profile, profile_public_map(profiles)),
+                "schedule": row.get("schedule"),
+                "fires": stats["fires"],
+                "tokens": stats["tokens"],
+                "avg_duration_seconds": round(stats["duration_ms"] / stats["fires"] / 1000, 1) if stats["fires"] else 0,
+                "errors": stats["errors"],
+                "silent_runs": stats["silent"],
+                "est_cost_usd": round(breakdown["cron_cost"] * share, 4),
+            })
+        for task, usage in breakdown["tasks"].items():
+            merged = tasks.setdefault(task, {"task": task, "calls": 0, "tokens": 0, "cost_usd": 0.0})
+            merged["calls"] += usage["calls"]
+            merged["tokens"] += usage["tokens"]
+            merged["cost_usd"] += usage["cost"]
+    jobs.sort(key=lambda job: (job["est_cost_usd"], job["tokens"]), reverse=True)
+    task_rows = sorted(tasks.values(), key=lambda task: task["cost_usd"], reverse=True)
+    for task in task_rows:
+        task["cost_usd"] = round(task["cost_usd"], 4)
+    window_total = round(sum(_session_cost(s) for s in sessions), 4)
+    background_total = round(sum(task["cost_usd"] for task in task_rows), 4)
+    return {
+        "window_days": SESSION_WINDOW_DAYS,
+        "window_cost_usd": window_total,
+        "cron": {
+            "total_cost_usd": round(cron_total, 4),
+            "jobs": jobs[:12],
+            "allocation": "Each profile's cron-session cost is shared across its jobs by token share from cron/usage_audit.jsonl.",
+        },
+        "background": {
+            "total_cost_usd": background_total,
+            "tasks": task_rows[:8],
+            "note": "Background task cost is part of the session cost it ran in.",
+        },
+        "recommended_view": "/analytics",
+    }
+
+
+def cost_findings(attribution: Dict[str, Any]) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    cron_block = attribution["cron"]
+    jobs = cron_block["jobs"]
+    cron_total = float(cron_block["total_cost_usd"])
+    if jobs and cron_total >= COST_FINDING_FLOOR_USD:
+        top = jobs[0]
+        share = top["est_cost_usd"] / cron_total if cron_total else 0.0
+        if share >= CRON_CONCENTRATION_SHARE:
+            findings.append(_tuning_item(
+                "cost",
+                "warning",
+                "One scheduled job drives most cron spend",
+                f"{top['label']} accounts for about {share:.0%} of scheduled spend over {attribution['window_days']} days. "
+                "Check its schedule, model and prompt size, or whether it needs an agent at all (a no-agent script costs nothing).",
+                f"{top['label']}: ~${top['est_cost_usd']:.2f} of ${cron_total:.2f} across {top['fires']} runs",
+                "/cron",
+                "Open Cron",
+                "Olympus",
+                "Cron run tokens from Hermes' usage audit, priced with the cost Hermes recorded for cron sessions.",
+                f"one job >= {CRON_CONCENTRATION_SHARE:.0%} of cron spend and cron spend >= ${COST_FINDING_FLOOR_USD:.2f}",
+                count=1,
+            ))
+    background_total = float(attribution["background"]["total_cost_usd"])
+    window_total = float(attribution["window_cost_usd"])
+    if background_total >= COST_FINDING_FLOOR_USD and window_total and background_total / window_total >= BACKGROUND_SHARE_WARNING:
+        top_task = attribution["background"]["tasks"][0]
+        findings.append(_tuning_item(
+            "cost",
+            "info",
+            "Background tasks are a large share of spend",
+            f"Background model calls cost ${background_total:.2f} of ${window_total:.2f} over {attribution['window_days']} days. "
+            f"The largest is {top_task['task']}. Review whether it needs this model or this frequency.",
+            f"{top_task['task']}: ${top_task['cost_usd']:.2f} across {top_task['calls']} calls",
+            "/config",
+            "Open Config",
+            "Olympus",
+            "Hermes records model usage per background task in session_model_usage.",
+            f"background spend >= {BACKGROUND_SHARE_WARNING:.0%} of session spend and >= ${COST_FINDING_FLOOR_USD:.2f}",
+            count=len(attribution["background"]["tasks"]),
+        ))
+    return findings
+
+
 def session_window_label(count: int) -> str:
     if count >= SESSION_SCAN_LIMIT:
         return f"last {SESSION_WINDOW_DAYS} days, most recent {SESSION_SCAN_LIMIT} sessions"
@@ -4369,7 +4562,11 @@ def scan_hermes() -> Dict[str, Any]:
     ops_evals = build_ops_evals(sessions, kanban, skill_coverage, skill_hygiene, config_policy)
     health = collect_health(profiles, cron)
     attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
+    cost_attribution = collect_cost_attribution(profiles, cron, sessions, time.time() - SESSION_WINDOW_DAYS * 86400)
+    tuning = build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)
+    add_findings(tuning, cost_findings(cost_attribution))
     return {
+        "cost_attribution": cost_attribution,
         "profiles": profiles,
         "cron": cron,
         "sessions": sessions,
@@ -4403,8 +4600,19 @@ def scan_hermes() -> Dict[str, Any]:
         ),
         "health": health,
         "attention": attention,
-        "tuning": build_tuning(profiles, gateways, cron, sessions, health, attention, kanban),
+        "tuning": tuning,
     }
+
+
+def add_findings(tuning: Dict[str, Any], findings: List[Dict[str, Any]]) -> None:
+    """Merge extra findings into the ranked tuning queue."""
+    if not findings:
+        return
+    hq = tuning.setdefault("agent_hq", {})
+    items = [item for item in as_list(hq.get("recommendations")) if item.get("severity") != "ok"] + findings
+    items.sort(key=lambda item: _severity_rank(str(item.get("severity"))))
+    hq["recommendations"] = items[:8]
+    hq.setdefault("summary", {})["recommendations"] = len(items)
 
 
 # ---------------------------------------------------------------------------
@@ -4578,6 +4786,7 @@ def overview_payload(scan: Dict[str, Any]) -> Dict[str, Any]:
         "health": scan["health"],
         "attention": scan["attention"],
         "tuning": strip_internal(scan["tuning"]),
+        "cost_attribution": scan["cost_attribution"],
         "history": history,
         "fixes": fixes,
         "profiles": [public_profile(p) for p in scan["profiles"]],
