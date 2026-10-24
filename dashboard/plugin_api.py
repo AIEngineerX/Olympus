@@ -4746,7 +4746,9 @@ def open_session(ref: str) -> Dict[str, Any]:
     if found is None:
         return {"href": None}
     query = f"resume={quote(found['session_id'], safe='')}&profile={quote(found['profile'], safe='')}"
-    return {"href": f"/chat?{query}"}
+    # Desktop opens sessions natively (host.openSession) and needs the id and
+    # profile; the web dashboard follows href. Both exist only at click time.
+    return {"href": f"/chat?{query}", "session_id": found["session_id"], "profile": found["profile"]}
 
 
 def scan_hermes() -> Dict[str, Any]:
