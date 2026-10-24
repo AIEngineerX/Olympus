@@ -412,6 +412,9 @@
       { label: "Outcome Risks", value: failedRuns || 0, state: failedRuns ? "warning" : "ok" },
       { label: "Cost Risks", value: costRisks, state: costRisks ? "warning" : "ok" },
     ];
+    // The first screen shows six tiles; the rest stay one click away.
+    const primaryTiles = tiles.slice(0, 6);
+    const secondaryTiles = tiles.slice(6);
     const primaryTuningItems = tuningItems.slice(0, 2);
     const backlogTuningItems = tuningItems.slice(2);
 
@@ -438,12 +441,22 @@
         )
       ),
       el("div", { className: "olympus-hq-tiles" },
-        tiles.map((item) => el("div", { key: item.label, className: "olympus-hq-tile" },
+        primaryTiles.map((item) => el("div", { key: item.label, className: "olympus-hq-tile" },
           el("span", null, item.label),
           el("strong", null, String(item.value)),
           el(StatePill, { state: item.state })
         ))
       ),
+      secondaryTiles.length ? el("details", { className: "olympus-details olympus-backlog-details olympus-metric-backlog" },
+        el("summary", null, "More monitor signals (" + secondaryTiles.length + ")"),
+        el("div", { className: "olympus-hq-mini-grid" },
+          secondaryTiles.map((item) => el("div", { key: item.label, className: "olympus-hq-mini-tile" },
+            el("span", null, item.label),
+            el("strong", null, String(item.value)),
+            el(StatePill, { state: item.state })
+          ))
+        )
+      ) : null,
       el("div", { className: "olympus-hq-grid" },
         el("div", { className: "olympus-hq-pane olympus-hq-tuning-items" },
           el("h3", null, "Top Actions"),

@@ -6,7 +6,7 @@ const fixtureBaseUrl = pathToFileURL(path.join(__dirname, "../fixtures/olympus-f
 
 const briefSections = [
   { selector: ".olympus-hero", text: "Olympus", minHeight: 120 },
-  { selector: ".olympus-score-card", text: "What the Score Means", minHeight: 72 },
+  { selector: ".olympus-score-card", text: "Readiness Score", minHeight: 72 },
   { selector: ".olympus-agent-hq", text: "Agent Monitor", minHeight: 180 }
 ];
 const deepSections = [
@@ -317,10 +317,10 @@ test("static user-plugin mode falls back to Hermes dashboard APIs", async ({ pag
 
   expect(messages).toEqual([]);
   await expect(page.locator(".olympus-static-compatibility")).toBeVisible();
-  await expect(page.locator(".olympus-static-compatibility")).toContainText("Static User-Plugin Mode");
+  await expect(page.locator(".olympus-static-compatibility")).toContainText("Backend Unavailable");
   await expect(page.locator(".olympus-static-compatibility")).toContainText("/api/dashboard/plugins");
-  await expect(page.locator(".olympus-static-compatibility")).toContainText("Readiness scoring and score deductions");
-  await expect(page.locator(".olympus-agent-hq")).toContainText("Static user-plugin mode detected");
+  await expect(page.locator(".olympus-static-compatibility")).toContainText("Readiness scoring and deductions");
+  await expect(page.locator(".olympus-agent-hq")).toContainText("Backend unavailable");
   await selectMode(page, "Diagnostics");
   await expect(page.locator(".olympus-diagnostics")).toContainText("Evidence Sources");
   await expect(page.locator(".olympus-diagnostics")).toContainText("/api/status");
