@@ -106,8 +106,38 @@
 
       const fixtureParams = new URLSearchParams(window.location.search);
       const fixtureState = fixtureParams.get("state") || "noisy";
+      // ?delay=<ms> holds every response that long; ?base=<prefix> mimics a
+      // reverse-proxied dashboard. __OLYMPUS_FETCH_LOG__ records request
+      // start/end and the peak number of overlapping requests.
+      const fixtureDelay = Number(fixtureParams.get("delay") || 0);
+      if (fixtureParams.get("base")) window.__HERMES_BASE_PATH__ = fixtureParams.get("base");
+      const fetchLog = window.__OLYMPUS_FETCH_LOG__ = { started: 0, settled: 0, inFlight: 0, peak: 0 };
+      // ?profiles=<n> grows the Pantheon fleet to n distinct profiles.
+      const fixtureProfiles = Number(fixtureParams.get("profiles") || 0);
+      if (fixtureProfiles) {
+        const party = window.__OLYMPUS_FIXTURE_DATA__.party;
+        const template = party.members[0];
+        party.members = Array.from({ length: fixtureProfiles }, (_, idx) => Object.assign({}, template, {
+          id: "profile:fleet_" + idx,
+          label: "Profile " + idx
+        }));
+        party.summary = Object.assign({}, party.summary, { members: fixtureProfiles });
+      }
 
       async function fixtureFetchJSON(url) {
+        fetchLog.started += 1;
+        fetchLog.inFlight += 1;
+        fetchLog.peak = Math.max(fetchLog.peak, fetchLog.inFlight);
+        try {
+          if (fixtureDelay) await new Promise((resolve) => setTimeout(resolve, fixtureDelay));
+          return await fixtureResponse(url);
+        } finally {
+          fetchLog.inFlight -= 1;
+          fetchLog.settled += 1;
+        }
+      }
+
+      async function fixtureResponse(url) {
         if (fixtureState !== "static-user-plugin") return window.__OLYMPUS_FIXTURE_DATA__;
         if (String(url).startsWith("/api/plugins/olympus/overview")) {
           throw new Error("404 /api/plugins/olympus/overview");

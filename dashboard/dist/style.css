@@ -267,8 +267,8 @@
 
 .olympus-viewport-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.85fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
   align-items: start;
   margin-bottom: 12px;
 }
@@ -452,6 +452,25 @@
   display: grid;
   gap: 6px;
   align-content: start;
+}
+
+.olympus-pantheon-map-grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 118px repeat(auto-fill, minmax(178px, 1fr));
+  gap: 10px;
+}
+
+.olympus-pantheon-map-grid::before,
+.olympus-pantheon-map-grid::after {
+  display: none;
+}
+
+.olympus-pantheon-map-grid .olympus-pantheon-score,
+.olympus-pantheon-map-grid .olympus-pantheon-node {
+  position: static;
+  width: auto;
+  transform: none;
 }
 
 .olympus-pantheon-node:hover,
@@ -1881,6 +1900,13 @@
   border-radius: 4px;
   background: rgba(6, 9, 14, 0.5);
   overflow-wrap: anywhere;
+}
+
+.olympus-reason-points {
+  margin-right: 8px;
+  color: #ef6b5a;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .olympus-link {

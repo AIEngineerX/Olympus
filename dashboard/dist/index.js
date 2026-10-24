@@ -9,6 +9,7 @@
   const Button = C.Button || "button";
 
   const API = "/api/plugins/olympus";
+  const POLL_INTERVAL_MS = 10000;
   const STATIC_BACKEND_REQUIRED = [
     "Readiness scoring and deductions",
     "Kanban, Trace Spine, and worker synthesis",
@@ -51,10 +52,25 @@
 
   const SAFE_ROUTES = new Set(["/analytics", "/config", "/cron", "/kanban", "/logs", "/profiles", "/sessions", "/skills"]);
 
+  // Hermes serves the dashboard at the host root or under a reverse-proxy
+  // prefix it injects as window.__HERMES_BASE_PATH__; page links must carry
+  // that prefix (SDK.fetchJSON already adds it to API calls). A ?profile=
+  // scope on the current page is kept so links open the same profile.
+  function basePath() {
+    const raw = window.__HERMES_BASE_PATH__ || "";
+    if (!raw) return "";
+    return (raw.startsWith("/") ? raw : "/" + raw).replace(/\/+$/, "");
+  }
+
+  function profileQuery() {
+    const profile = new URLSearchParams(window.location.search).get("profile");
+    return profile ? "?profile=" + encodeURIComponent(profile) : "";
+  }
+
   function routeLink(path) {
     if (!path) return "#";
     const route = path.startsWith("/") ? path : "/" + path;
-    return SAFE_ROUTES.has(route) ? route : "#";
+    return SAFE_ROUTES.has(route) ? basePath() + route + profileQuery() : "#";
   }
 
   function routeLabel(path) {
@@ -327,15 +343,29 @@
     );
   }
 
+  // WAI-ARIA tabs pattern: only the selected tab is in the Tab order; arrow
+  // keys, Home and End move between tabs and select them.
   function ModeTabs({ activeMode, onChange }) {
+    function onKeyDown(event) {
+      const index = OLYMPUS_MODES.findIndex((mode) => mode.id === activeMode);
+      const last = OLYMPUS_MODES.length - 1;
+      const targets = { ArrowRight: index === last ? 0 : index + 1, ArrowLeft: index === 0 ? last : index - 1, Home: 0, End: last };
+      if (!(event.key in targets)) return;
+      event.preventDefault();
+      const next = OLYMPUS_MODES[targets[event.key]].id;
+      onChange(next);
+      document.getElementById("olympus-mode-tab-" + next).focus();
+    }
+
     return el("div", { className: "olympus-mode-shell" },
-      el("div", { className: "olympus-mode-tabs", role: "tablist", "aria-label": "Olympus dashboard modes" },
+      el("div", { className: "olympus-mode-tabs", role: "tablist", "aria-label": "Olympus dashboard modes", onKeyDown },
         OLYMPUS_MODES.map((mode) => el("button", {
           key: mode.id,
           id: "olympus-mode-tab-" + mode.id,
           className: cx("olympus-mode-tab", activeMode === mode.id && "olympus-mode-tab-active"),
           type: "button",
           role: "tab",
+          tabIndex: activeMode === mode.id ? 0 : -1,
           "aria-label": mode.label,
           "aria-selected": activeMode === mode.id ? "true" : "false",
           "aria-controls": "olympus-mode-panel-" + mode.id,
@@ -810,7 +840,7 @@
         ),
         el("div", { className: "olympus-section-actions" },
           el(StatePill, { state: summary.state || "unknown" }),
-          el("a", { className: "olympus-link", href: "/config" }, "Open Config")
+          el("a", { className: "olympus-link", href: routeLink("/config") }, "Open Config")
         )
       ),
       el("div", { className: "olympus-policy-tiles" },
@@ -874,7 +904,7 @@
           el("h2", null, "Skill Coverage"),
           el("p", null, "Skill signals from repeated tool use, loops, long context, and profiles without skill coverage.")
         ),
-        el("a", { className: "olympus-link", href: "/skills" }, "Open Skills")
+        el("a", { className: "olympus-link", href: routeLink("/skills") }, "Open Skills")
       ),
       el("div", { className: "olympus-skill-tiles" },
         tiles.map((item) => el("div", { key: item.label, className: "olympus-skill-tile" },
@@ -946,7 +976,7 @@
         ),
         el("div", { className: "olympus-section-actions" },
           el(StatePill, { state: summary.state || "unknown" }),
-          el("a", { className: "olympus-link", href: "/skills" }, "Open Skills")
+          el("a", { className: "olympus-link", href: routeLink("/skills") }, "Open Skills")
         )
       ),
       el("div", { className: "olympus-skill-hygiene-tiles" },
@@ -1019,7 +1049,7 @@
           el("h2", null, "Profile Fitness"),
           el("p", null, "Which Hermes profiles are ready for work, overloaded, missing setup, or carrying risky tasks.")
         ),
-        el("a", { className: "olympus-link", href: "/profiles" }, "Open Profiles")
+        el("a", { className: "olympus-link", href: routeLink("/profiles") }, "Open Profiles")
       ),
       el("div", { className: "olympus-fitness-tiles" },
         tiles.map((item) => el("div", { key: item.label, className: "olympus-fitness-tile" },
@@ -1052,7 +1082,8 @@
             el("p", null, profile.top_issue || "No current profile issue."),
             reasons.length ? el("div", { className: "olympus-fitness-reasons" },
               reasons.map((reason, idx) => el("small", { key: idx },
-                [reason.label, reason.detail, reason.points ? "-" + String(reason.points) : null].filter(Boolean).join(" / ")
+                reason.points ? el("span", { className: "olympus-reason-points" }, "\u2212" + String(reason.points) + " pts") : null,
+                [reason.label !== profile.top_issue ? reason.label : null, reason.detail].filter(Boolean).join(": ")
               ))
             ) : null,
             profile.recommended_view ? el("a", { className: "olympus-link", href: routeLink(profile.recommended_view) }, routeLabel(profile.recommended_view)) : null
@@ -1099,10 +1130,14 @@
       { label: "Blocked", value: summary.blocked || orchSummary.blocked || 0, state: (summary.blocked || orchSummary.blocked) ? "warning" : "ok" },
       { label: "Stale", value: orchSummary.stale_workers || 0, state: orchSummary.stale_workers ? "warning" : "ok" },
     ];
+    // Hand-placed ring slots around the readiness core. Larger fleets switch
+    // the map to a flowing grid so every profile keeps its own card and
+    // click target instead of reusing a slot.
     const nodePositions = [
       ["18%", "28%"], ["50%", "14%"], ["80%", "30%"], ["70%", "72%"],
-      ["32%", "74%"], ["12%", "60%"], ["88%", "60%"], ["50%", "52%"],
+      ["32%", "74%"], ["12%", "60%"], ["88%", "60%"],
     ];
+    const ringLayout = members.length <= nodePositions.length;
 
     return el("section", { className: "olympus-section olympus-party olympus-pantheon" },
       el("div", { className: "olympus-section-head" },
@@ -1110,21 +1145,21 @@
           el("h2", null, "Pantheon"),
           el("p", null, "Clickable profile map for workload, trigger lanes, and current operational risk.")
         ),
-        el("a", { className: "olympus-link", href: "/kanban" }, "Open Kanban")
+        el("a", { className: "olympus-link", href: routeLink("/kanban") }, "Open Kanban")
       ),
       el("div", { className: "olympus-command-viewport" },
         el("div", { className: "olympus-viewport-main", role: "group", "aria-label": "Pantheon showing trigger lanes, profile workload, and current operational risk." },
-          members.length ? el("div", { className: "olympus-pantheon-map", role: "group", "aria-label": "Clickable Pantheon profile map." },
+          members.length ? el("div", { className: cx("olympus-pantheon-map", !ringLayout && "olympus-pantheon-map-grid"), role: "group", "aria-label": "Clickable Pantheon profile map." },
             el("div", { className: "olympus-pantheon-score", "aria-hidden": "true" },
               el("span", null, "Readiness"),
               el("strong", null, String(score || 0))
             ),
             members.map((member, idx) => {
-              const pos = nodePositions[idx % nodePositions.length];
+              const pos = ringLayout ? nodePositions[idx] : null;
               return el("button", {
                 key: member.id,
                 type: "button",
-                style: { "--x": pos[0], "--y": pos[1] },
+                style: pos ? { "--x": pos[0], "--y": pos[1] } : undefined,
                 "aria-pressed": selected.id === member.id,
                 "aria-label": "Select profile " + (member.label || "Agent"),
                 className: cx(
@@ -1245,7 +1280,7 @@
           el("h2", null, "Kanban Intelligence"),
           el("p", null, "Board pressure, blocked work, worker activity, and assignee load.")
         ),
-        el("a", { className: "olympus-link", href: "/kanban" }, "Open Kanban")
+        el("a", { className: "olympus-link", href: routeLink("/kanban") }, "Open Kanban")
       ),
       el("div", { className: "olympus-kanban-summary" },
         summary.map((item) => el("div", { key: item.label, className: "olympus-kanban-tile" },
@@ -1298,22 +1333,37 @@
     const [loading, setLoading] = useState(true);
     const [clientDiagnostics, setClientDiagnostics] = useState(null);
     const [activeMode, setActiveMode] = useState("brief");
-    const requestSeq = useRef(0);
+    // One request at a time: the next poll is scheduled only after the
+    // previous /overview settles. A fixed interval let a slow backend (any
+    // response slower than the interval) discard every result it produced.
+    const inFlight = useRef(false);
+    const mounted = useRef(true);
+    const pollTimer = useRef(null);
+
+    function now() {
+      return window.performance && performance.now ? performance.now() : Date.now();
+    }
+
+    function scheduleNextPoll() {
+      window.clearTimeout(pollTimer.current);
+      if (mounted.current) pollTimer.current = window.setTimeout(load, POLL_INTERVAL_MS);
+    }
 
     function load() {
-      const requestId = requestSeq.current + 1;
-      requestSeq.current = requestId;
+      if (inFlight.current) return;
+      inFlight.current = true;
+      window.clearTimeout(pollTimer.current);
       setLoading(true);
-      const started = window.performance && performance.now ? performance.now() : Date.now();
+      const started = now();
       SDK.fetchJSON(API + "/overview?ts=" + encodeURIComponent(String(Date.now())))
         .then((next) => {
-          if (requestId !== requestSeq.current) return;
-          const received = window.performance && performance.now ? performance.now() : Date.now();
+          if (!mounted.current) return;
+          const received = now();
           setData(next);
           setError(null);
           window.requestAnimationFrame(() => {
-            if (requestId !== requestSeq.current) return;
-            const rendered = window.performance && performance.now ? performance.now() : Date.now();
+            if (!mounted.current) return;
+            const rendered = now();
             const budgets = next && next.diagnostics && next.diagnostics.budgets || {};
             const renderBudget = Number(budgets.client_render_ms || 150);
             setClientDiagnostics({
@@ -1328,8 +1378,8 @@
         .catch((err) => {
           const message = toErrorMessage(err);
           return loadStaticCompatibility(message).then((fallback) => {
-            if (requestId !== requestSeq.current) return;
-            const received = window.performance && performance.now ? performance.now() : Date.now();
+            if (!mounted.current) return;
+            const received = now();
             setData(fallback);
             setError(null);
             setClientDiagnostics({
@@ -1340,18 +1390,24 @@
               total_ms: Math.round(received - started)
             });
           }).catch((fallbackErr) => {
-            if (requestId === requestSeq.current) setError(toErrorMessage(fallbackErr));
+            if (mounted.current) setError(toErrorMessage(fallbackErr));
           });
         })
         .finally(() => {
-          if (requestId === requestSeq.current) setLoading(false);
+          inFlight.current = false;
+          if (!mounted.current) return;
+          setLoading(false);
+          scheduleNextPoll();
         });
     }
 
     useEffect(() => {
+      mounted.current = true;
       load();
-      const id = setInterval(load, 10000);
-      return () => clearInterval(id);
+      return () => {
+        mounted.current = false;
+        window.clearTimeout(pollTimer.current);
+      };
     }, []);
 
     const health = (data && data.health) || {};
