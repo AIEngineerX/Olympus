@@ -1,0 +1,12 @@
+manifest_version: 1
+name: olympus
+label: Olympus
+version: "1.0.3"
+description: "Read-only operator console for Hermes Agent: what broke, what it cost, and what to fix next across every profile, Kanban board, cron job, and gateway."
+author: AIEngineerX
+license: MIT
+homepage: https://github.com/AIEngineerX/Olympus
+kind: standalone
+# Earliest Hermes SemVer release; it already gates user dashboard plugin APIs
+# on plugins.enabled and hot-mounts them after install.
+requires_hermes: ">=0.21.6"
