@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 try:
     from fastapi import APIRouter
@@ -50,6 +51,12 @@ RUNAWAY_TOOLS_THRESHOLD = 40
 EXPENSIVE_RUN_USD = 1.0
 MAX_TURNS_REVIEW_THRESHOLD = 80
 KANBAN_CLOSED_TASK_SAMPLE = 100
+# Session signals cover a fixed time window so every count means "in the last
+# week", capped so a very busy fleet keeps the scan inside its response budget.
+SESSION_WINDOW_DAYS = 7
+SESSION_SCAN_LIMIT = 200
+SESSION_DISPLAY_LIMIT = 60
+SPEND_WINDOW_SECONDS = 60 * 60 * 24
 KANBAN_FINISHED_RUN_SAMPLE = 100
 KANBAN_DISPLAY_SAMPLE = 16
 API_RESPONSE_BUDGET_MS = 750.0
@@ -1237,7 +1244,7 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
             "tool_loop_guardrails.non_interactive_hard_stop_enabled is off, so gateway and cron sessions only warn on tool loops while a high turn limit lets them run long. Nobody is present to stop them.",
             f"max_turns {max_turns} / unattended hard stop off",
             "/config",
-            "Hermes agent.max_turns plus tool_loop_guardrails",
+            "Turn limit and loop guardrail settings",
             f"max_turns >= {MAX_TURNS_REVIEW_THRESHOLD} and non_interactive_hard_stop_enabled false",
         )
     elif high_turn_limit and not interactive_hard_stop:
@@ -1248,7 +1255,7 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
             "Gateway and cron sessions hard-stop on loops, but CLI, TUI and Desktop sessions only warn (Hermes' default). Enable hard_stop_enabled if long attended runs keep looping.",
             f"max_turns {max_turns} / interactive hard stop off",
             "/config",
-            "Hermes agent.max_turns plus tool_loop_guardrails",
+            "Turn limit and loop guardrail settings",
             f"max_turns >= {MAX_TURNS_REVIEW_THRESHOLD} and hard_stop_enabled false",
         )
     if browser_private_urls:
@@ -1630,13 +1637,20 @@ def _cron_rows(jobs: List[Any], raw_profile: str, profile_public_names: Dict[str
     return out
 
 
-def collect_sessions(limit: int = 12, profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
-    """Most recently active sessions across every profile's state store."""
+def collect_sessions(
+    limit: int = 12,
+    profiles: Optional[List[Dict[str, Any]]] = None,
+    since: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """Most recently active sessions across every profile's state store.
+
+    ``since`` (epoch seconds) keeps only sessions active at or after it.
+    """
     profile_public_names = profile_public_map(as_list(profiles))
     rows: List[Dict[str, Any]] = []
     for raw_profile, home in profile_stores(profiles):
         public_name = public_profile_label(raw_profile, profile_public_names) or "default"
-        for session in _store_sessions(home / "state.db", limit):
+        for session in _store_sessions(home / "state.db", limit, since):
             session["profile"] = public_name
             session["_profile"] = raw_profile
             rows.append(session)
@@ -1644,7 +1658,7 @@ def collect_sessions(limit: int = 12, profiles: Optional[List[Dict[str, Any]]] =
     return rows[:limit]
 
 
-def _store_sessions(db: Path, limit: int) -> List[Dict[str, Any]]:
+def _store_sessions(db: Path, limit: int, since: Optional[float] = None) -> List[Dict[str, Any]]:
     if not db.exists():
         return []
     con: Optional[sqlite3.Connection] = None
@@ -1671,9 +1685,14 @@ def _store_sessions(db: Path, limit: int) -> List[Dict[str, Any]]:
             order = recency[0]
         else:
             order = "id"
+        where = ""
+        params: tuple[Any, ...] = (limit,)
+        if since is not None and recency:
+            where = f" WHERE {order} >= ?"
+            params = (since, limit)
         rows = con.execute(
-            f"SELECT {', '.join(select)} FROM sessions ORDER BY {order} DESC LIMIT ?",
-            (limit,),
+            f"SELECT {', '.join(select)} FROM sessions{where} ORDER BY {order} DESC LIMIT ?",
+            params,
         ).fetchall()
     except Exception as exc:
         log_read_warning("session scan failed", exc)
@@ -2201,8 +2220,18 @@ def _recommendation(severity: str, title: str, detail: str, evidence: str, view:
     }
 
 
-def _tuning_item(kind: str, severity: str, title: str, detail: str, evidence: str, view: str, action: str, owner: str = "Olympus", basis: str = "", threshold: str = "") -> Dict[str, Any]:
+def session_targets(sessions: List[Dict[str, Any]], limit: int = 3) -> List[Dict[str, Any]]:
+    """Sessions a tuning item points at, openable through ``/open/session``."""
+    return [
+        {"kind": "session", "ref": s.get("session_ref"), "label": s.get("label")}
+        for s in sessions[:limit]
+        if s.get("session_ref")
+    ]
+
+
+def _tuning_item(kind: str, severity: str, title: str, detail: str, evidence: str, view: str, action: str, owner: str = "Olympus", basis: str = "", threshold: str = "", targets: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     return {
+        "targets": targets or [],
         "kind": kind,
         "severity": severity,
         "title": title,
@@ -2486,6 +2515,12 @@ def collect_usage_rollup(profiles: Optional[List[Dict[str, Any]]] = None, days: 
     }
 
 
+def session_window_label(count: int) -> str:
+    if count >= SESSION_SCAN_LIMIT:
+        return f"last {SESSION_WINDOW_DAYS} days, most recent {SESSION_SCAN_LIMIT} sessions"
+    return f"last {SESSION_WINDOW_DAYS} days, {count} session{'s' if count != 1 else ''}"
+
+
 def build_metrics(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Window rollup of the performance signals Hermes already records."""
     kanban = kanban or {}
@@ -2497,7 +2532,19 @@ def build_metrics(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any
     total_tokens = sum(int(s.get("total_tokens") or 0) for s in sessions)
     total_api_calls = sum(int(s.get("api_call_count") or 0) for s in sessions)
     failed_runs = [r for r in kanban_items(kanban, "_runs") if is_failed_run(r)]
+    # Spend is attributed to the day a session was last active; Hermes
+    # Analytics owns the exact per-call ledger.
+    spend_cutoff = time.time() - SPEND_WINDOW_SECONDS
+    recent = [s for s in sessions if safe_float(s.get("_last_ts")) >= spend_cutoff]
     return {
+        "window": {
+            "days": SESSION_WINDOW_DAYS,
+            "sessions": len(sessions),
+            "capped": len(sessions) >= SESSION_SCAN_LIMIT,
+            "label": session_window_label(len(sessions)),
+        },
+        "spend_24h_usd": round(sum(_session_cost(s) for s in recent), 4),
+        "sessions_24h": len(recent),
         "window_sessions": len(sessions),
         "total_cost_usd": round(sum(_session_cost(s) for s in sessions), 4),
         "total_tokens": total_tokens,
@@ -2552,7 +2599,7 @@ def build_performance_tracking(sessions: List[Dict[str, Any]], kanban: Optional[
             "unit": "seconds",
             "state": speed_state,
             "detail": f"median {int(median_duration or 0)}s / p90 {int(p90_duration or 0)}s" if sessions else "no session duration data",
-            "source": "Hermes sessions duration_seconds",
+            "source": "Session durations",
             "recommended_view": "/sessions",
         },
         {
@@ -2561,7 +2608,7 @@ def build_performance_tracking(sessions: List[Dict[str, Any]], kanban: Optional[
             "value": metrics.get("total_tool_calls"),
             "state": tool_state,
             "detail": f"{len(looping)} looping / {len(tool_heavy)} tool-heavy",
-            "source": "Hermes sessions tool_call_count",
+            "source": "Session tool-call counts",
             "recommended_view": "/sessions",
         },
         {
@@ -2570,7 +2617,7 @@ def build_performance_tracking(sessions: List[Dict[str, Any]], kanban: Optional[
             "value": metrics.get("avg_tokens_per_call"),
             "state": context_state,
             "detail": f"{len(context_pressure)} pressure session(s)",
-            "source": "Hermes sessions input_tokens/api_call_count",
+            "source": "Prompt tokens per model call",
             "recommended_view": "/sessions",
         },
         {
@@ -2579,7 +2626,7 @@ def build_performance_tracking(sessions: List[Dict[str, Any]], kanban: Optional[
             "value": len(failed_runs) + len(stale_sessions) + len(errored_sessions),
             "state": reliability_state,
             "detail": f"{len(failed_runs)} failed runs / {len(stale_sessions)} stale / {len(errored_sessions)} errored",
-            "source": "Hermes task_runs and sessions",
+            "source": "Kanban worker runs and sessions",
             "recommended_view": "/kanban" if failed_runs else "/sessions",
         },
         {
@@ -2664,8 +2711,9 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
             "/sessions",
             "Open Sessions",
             "Olympus",
-            "Hermes records tool_call_count per session; runaway tool use without termination is a known failure signature.",
+            "Hermes records tool calls per session; runaway tool use without termination is a known failure signature.",
             f">= {RUNAWAY_TOOLS_THRESHOLD} tool calls in one run",
+            session_targets(looping),
         ))
     if expensive:
         total = sum(_session_cost(s) for s in expensive)
@@ -2678,8 +2726,9 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
             "/analytics",
             "Open Analytics",
             "Olympus",
-            "Hermes records per-session token cost (estimated/actual_cost_usd); cost concentration is a routing signal.",
+            "Hermes records each session's estimated or actual cost; cost concentration is a routing signal.",
             f"single-run cost >= ${EXPENSIVE_RUN_USD:.2f}",
+            session_targets(expensive),
         ))
     if context_pressure:
         findings.append(_tuning_item(
@@ -2691,8 +2740,9 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
             "/sessions",
             "Open Sessions",
             "Mnemosyne",
-            "Hermes records cumulative input_tokens and api_call_count per session; their ratio estimates the per-call context size.",
+            "Hermes records prompt tokens and model calls per session; their ratio is the average context sent per call.",
             f">= {CONTEXT_PRESSURE_TOKENS:,} average input tokens per API call",
+            session_targets(context_pressure),
         ))
     return findings
 
@@ -2779,8 +2829,9 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "/skills",
             "Open Skills",
             "Olympus",
-            "Hermes records tool_call_count. Use traces, tool counts, outcomes, and repeatable evidence before changing routes.",
+            "Hermes records tool calls per session. Use traces, tool counts, outcomes, and repeatable evidence before changing routes.",
             f">= {TOOL_HEAVY_THRESHOLD} tool calls in a session",
+            session_targets(tool_heavy),
         ))
     if message_heavy:
         tuning_items.append(_tuning_item(
@@ -2792,7 +2843,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "/sessions",
             "Open Sessions",
             "Mnemosyne",
-            "Hermes records message_count. Long threads can hide context drift.",
+            "Hermes records messages per session. Long threads can hide context drift.",
             f">= {LONG_THREAD_THRESHOLD} messages in a session",
         ))
     if overloaded:
@@ -2885,6 +2936,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Chronos",
             "Hermes sessions without an end time and recent activity are stale.",
             "session has no end time and is older than the freshness window",
+            session_targets(stale_sessions),
         ))
     metrics = build_metrics(sessions, kanban)
     tuning_items = detect_friction(sessions, kanban) + tuning_items
@@ -2992,7 +3044,7 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
             "/skills",
             "Open Skills",
             "Olympus",
-            "Hermes session tool_call_count is first-party trace evidence.",
+            "Tool-call counts come straight from Hermes' own session records.",
             f">= {RUNAWAY_TOOLS_THRESHOLD} tool calls in one session",
         ))
     if tool_heavy:
@@ -3018,7 +3070,7 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
             "/skills",
             "Open Skills",
             "Mnemosyne",
-            "Hermes records message_count and average input tokens per API call.",
+            "Hermes records messages per session and the prompt size of each model call.",
             f">= {LONG_THREAD_THRESHOLD} messages or >= {CONTEXT_PRESSURE_TOKENS:,} avg input tokens/call",
         ))
     if zero_skill_profiles:
@@ -3559,7 +3611,7 @@ def build_trace_spine(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str,
             "detail": signal["detail"],
             "recommended_view": signal["recommended_view"],
             "action_label": _action_label_for_view(str(signal["recommended_view"])),
-            "basis": "Hermes sessions, Kanban tasks, task_runs, and task_events",
+            "basis": "Sessions, Kanban tasks, worker runs and task events",
         }
         items.append(item)
 
@@ -3661,7 +3713,7 @@ def build_ops_evals(
             "score": 100 - min(60, len(failed_runs) * 30 + len(stale_sessions) * 10 + len(errored_sessions) * 12),
             "detail": "Worker and session health from recent Hermes evidence.",
             "evidence": f"{len(failed_runs)} failed run(s), {len(stale_sessions)} stale session(s), {len(errored_sessions)} errored session(s)",
-            "basis": "Hermes task_runs and session state",
+            "basis": "Kanban worker runs and session state",
             "signals": [
                 f"failed runs: {len(failed_runs)}",
                 f"stale sessions: {len(stale_sessions)}",
@@ -4142,14 +4194,14 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
     deduct("Cron failures", min(25, len(failed_cron) * 8), "Scheduled agent work is failing.", f"{len(failed_cron)} failed job(s)", "Hermes cron jobs")
     deduct("Handoff failures", min(20, len(errored_sessions) * 6), "Recent sessions contain handoff errors.", f"{len(errored_sessions)} session(s)", "Hermes sessions")
     deduct("Stale sessions", min(15, len(stale_sessions) * 3), "Open-ended stale sessions make performance review noisy.", f"{len(stale_sessions)} stale session(s)", "Hermes sessions")
-    deduct("Looping/tool thrash", min(20, len(looping_sessions) * 3), "Runaway tool use wastes time and tokens.", f"{len(looping_sessions)} session(s)", "Hermes sessions tool_call_count")
-    deduct("Context pressure", min(12, len(context_pressure) * 6), "Large repeated context increases latency, cost, and drift risk.", f"{len(context_pressure)} session(s)", "Hermes sessions input_tokens/api_call_count")
-    deduct("Tool-heavy work", min(10, len(tool_heavy) * 2), "Repeated tool work may need a skill, narrower prompt, or task split.", f"{len(tool_heavy)} session(s)", "Hermes sessions tool_call_count")
-    deduct("Long threads", min(8, len(message_heavy)), "Long conversations need recap, memory, or task split discipline.", f"{len(message_heavy)} session(s)", "Hermes sessions message_count")
+    deduct("Looping/tool thrash", min(20, len(looping_sessions) * 3), "Runaway tool use wastes time and tokens.", f"{len(looping_sessions)} session(s)", "Session tool-call counts")
+    deduct("Context pressure", min(12, len(context_pressure) * 6), "Large repeated context increases latency, cost, and drift risk.", f"{len(context_pressure)} session(s)", "Prompt tokens per model call")
+    deduct("Tool-heavy work", min(10, len(tool_heavy) * 2), "Repeated tool work may need a skill, narrower prompt, or task split.", f"{len(tool_heavy)} session(s)", "Session tool-call counts")
+    deduct("Long threads", min(8, len(message_heavy)), "Long conversations need recap, memory, or task split discipline.", f"{len(message_heavy)} session(s)", "Session message counts")
     deduct("Unset profile routes", min(15, len(missing_models) * 4), "Implicit routing makes tuning harder to audit.", f"{len(missing_models)} profile(s)", "Hermes profile config")
-    deduct("Kanban attention", min(20, len(kanban_attention) * 4), "Kanban has blocked, stale, failed, or unassigned work.", f"{len(kanban_attention)} attention item(s)", "Hermes Kanban tasks/task_runs")
+    deduct("Kanban attention", min(20, len(kanban_attention) * 4), "Kanban has blocked, stale, failed, or unassigned work.", f"{len(kanban_attention)} attention item(s)", "Kanban tasks and worker runs")
     deduct("Blocked Kanban work", min(12, kanban_blocked * 3), "Blocked work usually needs a human decision, dependency, or clearer acceptance criteria.", f"{kanban_blocked} blocked task(s)", "Hermes Kanban tasks")
-    deduct("Worker failures", min(20, int(metrics.get("failed_kanban_runs") or 0) * 6), "Kanban worker failures show reliability risk.", f"{metrics.get('failed_kanban_runs') or 0} failed run(s)", "Hermes Kanban task_runs")
+    deduct("Worker failures", min(20, int(metrics.get("failed_kanban_runs") or 0) * 6), "Kanban worker failures show reliability risk.", f"{metrics.get('failed_kanban_runs') or 0} failed run(s)", "Kanban worker runs")
     if health.get("status") == "error":
         score = min(score, 54)
     elif health.get("status") == "warning":
@@ -4190,7 +4242,11 @@ def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]],
             "score": score,
             "label": score_label,
             "deductions": deductions,
-            "explanation": "A transparent heuristic readiness score. It prioritizes current operational risks, not absolute agent intelligence.",
+            "window": session_window_label(len(sessions)),
+            "explanation": (
+                f"Starts at 100 and loses points for current risks: session signals from the "
+                f"{session_window_label(len(sessions))}, plus live Kanban, cron and gateway state."
+            ),
         },
         "methodology": {
             "thresholds": [
@@ -4228,13 +4284,59 @@ def health() -> Dict[str, Any]:
     return {"ok": h.get("status") != "error", "generated_at": now_iso(), **h}
 
 
+SESSION_RESOLVE_SCAN = 5000
+
+
+def resolve_session_ref(ref: str) -> Optional[Dict[str, str]]:
+    """Find the session behind a public ``session_ref`` across every profile.
+
+    Payloads carry hashed refs so raw session IDs never appear on screen; the
+    raw ID is looked up only when the operator clicks through to the session.
+    """
+    for raw_profile, home in profile_stores(collect_profiles()):
+        db = home / "state.db"
+        if not db.exists():
+            continue
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+        except sqlite3.Error as exc:
+            log_read_warning("session resolve open failed", exc)
+            continue
+        con.row_factory = sqlite3.Row
+        try:
+            cols = table_columns(con, "sessions")
+            recency = [c for c in ("last_activity_at", "ended_at", "started_at") if c in cols]
+            order = f"COALESCE({', '.join(recency)})" if len(recency) > 1 else (recency[0] if recency else "rowid")
+            ids = [row["id"] for row in con.execute(f"SELECT id FROM sessions ORDER BY {order} DESC LIMIT ?", (SESSION_RESOLVE_SCAN,))]
+        except sqlite3.Error as exc:
+            log_read_warning("session resolve scan failed", exc)
+            continue
+        finally:
+            con.close()
+        for session_id in ids:
+            if ref in (safe_id(session_id, "session"), str(session_id) if EXPOSE_LOCAL_LABELS else None):
+                return {"session_id": str(session_id), "profile": raw_profile}
+    return None
+
+
+@router.get("/open/session")
+def open_session(ref: str) -> Dict[str, Any]:
+    """Hermes chat URL for a session ref, or ``href: null`` when it is gone."""
+    refresh_expose_local_labels()
+    found = resolve_session_ref(ref)
+    if found is None:
+        return {"href": None}
+    query = f"resume={quote(found['session_id'], safe='')}&profile={quote(found['profile'], safe='')}"
+    return {"href": f"/chat?{query}"}
+
+
 @router.get("/overview")
 def overview() -> Dict[str, Any]:
     refresh_expose_local_labels()
     started_at = time.perf_counter()
     profiles = collect_profiles()
     cron = collect_cron(profiles)
-    sessions = collect_sessions(60, profiles)
+    sessions = collect_sessions(SESSION_SCAN_LIMIT, profiles, since=time.time() - SESSION_WINDOW_DAYS * 86400)
     gateways = collect_gateways(profiles)
     kanban = collect_kanban(profiles)
     orchestration = build_orchestration(kanban)
@@ -4275,7 +4377,7 @@ def overview() -> Dict[str, Any]:
         "profiles": [public_profile(p) for p in profiles],
         "gateways": gateways,
         "cron": strip_internal(cron),
-        "sessions": strip_internal(sessions),
+        "sessions": strip_internal(sessions[:SESSION_DISPLAY_LIMIT]),
         "kanban": strip_internal(kanban),
         "orchestration": strip_internal(orchestration),
         "party": strip_internal(party),
@@ -4300,7 +4402,7 @@ def tuning() -> Dict[str, Any]:
     started_at = time.perf_counter()
     profiles = collect_profiles()
     cron = collect_cron(profiles)
-    sessions = collect_sessions(60, profiles)
+    sessions = collect_sessions(SESSION_SCAN_LIMIT, profiles, since=time.time() - SESSION_WINDOW_DAYS * 86400)
     gateways = collect_gateways(profiles)
     kanban = collect_kanban(profiles)
     orchestration = build_orchestration(kanban)
