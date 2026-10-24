@@ -29,7 +29,7 @@ const viewports = [
 const modeTabLabels = ["Brief", "Agents", "Skills", "Kanban", "Policy", "Diagnostics"];
 const briefSections = [
   [".olympus-hero", "Olympus"],
-  [".olympus-score-card", "What the Score Means"],
+  [".olympus-score-card", "Readiness Score"],
   [".olympus-agent-hq", "Agent Monitor"],
 ];
 const modeSections = {
