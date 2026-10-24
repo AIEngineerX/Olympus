@@ -40,7 +40,7 @@ const leakPatterns = [
   { name: "secret assignment", pattern: /(api[_-]?key|secret|password|passwd)\s*[:=]/i },
   { name: "bearer token", pattern: /bearer\s+[a-z0-9._~+/=-]+/i },
 ];
-const traceSpineBlockedKeys = new Set([
+const rawFieldKeys = new Set([
   "current_run_id",
   "event_id",
   "handoff_error",
@@ -186,28 +186,27 @@ function assertPayload(payload) {
   if (!payload.evidence_sources) failures.push("missing evidence_sources");
   if (!payload.skill_hygiene) failures.push("missing skill_hygiene");
   if (!payload.config_policy) failures.push("missing config_policy");
-  if (!payload.trace_spine) failures.push("missing trace_spine");
   if (!payload.ops_evals) failures.push("missing ops_evals");
   const serialized = JSON.stringify(payload);
   for (const item of leakPatterns) {
     const match = serialized.match(item.pattern);
     if (match) failures.push(`${item.name}: ${match[0]}`);
   }
-  const traceKeyLeaks = [];
-  function scanTrace(value, pathName) {
+  const rawFieldLeaks = [];
+  function scanRawFields(value, pathName) {
     if (Array.isArray(value)) {
-      value.forEach((item, idx) => scanTrace(item, `${pathName}[${idx}]`));
+      value.forEach((item, idx) => scanRawFields(item, `${pathName}[${idx}]`));
       return;
     }
     if (!value || typeof value !== "object") return;
     for (const [key, item] of Object.entries(value)) {
       const nextPath = `${pathName}.${key}`;
-      if (traceSpineBlockedKeys.has(key)) traceKeyLeaks.push(nextPath);
-      scanTrace(item, nextPath);
+      if (rawFieldKeys.has(key)) rawFieldLeaks.push(nextPath);
+      scanRawFields(item, nextPath);
     }
   }
-  scanTrace(payload.trace_spine, "trace_spine");
-  traceKeyLeaks.forEach((item) => failures.push(`trace_spine raw field: ${item}`));
+  scanRawFields(payload, "overview");
+  rawFieldLeaks.forEach((item) => failures.push(`raw field: ${item}`));
   const privacy = payload.evidence_sources &&
     payload.evidence_sources.summary &&
     payload.evidence_sources.summary.privacy;
