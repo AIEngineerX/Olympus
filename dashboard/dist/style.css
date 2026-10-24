@@ -824,6 +824,46 @@
   font-size: 13px;
 }
 
+.olympus-inspector-title .olympus-setup {
+  font-size: 12px;
+}
+
+.olympus-tool-mix,
+.olympus-kanban-summary {
+  font-size: 13px;
+}
+
+.olympus-signals {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.olympus-signals li {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 0;
+  border-top: 1px solid var(--olympus-hairline);
+}
+
+.olympus-signals li:first-child {
+  border-top: 0;
+}
+
+.olympus-signals li > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.olympus-signals small {
+  color: var(--olympus-muted);
+  font-size: 12px;
+}
+
 .olympus-inspector-status {
   display: flex;
   flex-wrap: wrap;

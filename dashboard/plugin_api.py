@@ -2299,8 +2299,9 @@ def tuning_key(kind: str, title: str) -> str:
 
 def _tuning_item(kind: str, severity: str, title: str, detail: str, evidence: str, view: str, action: str, owner: str = "Olympus", basis: str = "", threshold: str = "", targets: Optional[List[Dict[str, Any]]] = None, count: Optional[int] = None, scope: str = "fleet") -> Dict[str, Any]:
     # scope "entity": the Needs-you queue already lists each task behind this
-    # finding with its own action, so the queue skips the summary; Checks
-    # still shows it.
+    # finding with its own action; scope "agent": the queue lists it per
+    # agent from that agent's own sessions. Either way the queue skips the
+    # fleet summary and Checks still shows it.
     return {
         "key": tuning_key(kind, title),
         "count": count,
@@ -3091,6 +3092,7 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
             f">= {RUNAWAY_TOOLS_THRESHOLD} tool calls in one run",
             session_targets(looping),
             count=len(looping),
+            scope="agent",
         ))
     if expensive:
         total = sum(_session_cost(s) for s in expensive)
@@ -3107,6 +3109,7 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
             f"single-run cost >= ${EXPENSIVE_RUN_USD:.2f}",
             session_targets(expensive),
             count=len(expensive),
+            scope="agent",
         ))
     if context_pressure:
         findings.append(_tuning_item(
@@ -3122,6 +3125,7 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
             f">= {CONTEXT_PRESSURE_TOKENS:,} average input tokens per API call",
             session_targets(context_pressure),
             count=len(context_pressure),
+            scope="agent",
         ))
     return findings
 
@@ -3212,6 +3216,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             f">= {TOOL_HEAVY_THRESHOLD} tool calls in a session",
             session_targets(tool_heavy),
             count=len(tool_heavy),
+            scope="agent",
         ))
     if message_heavy:
         tuning_items.append(_tuning_item(
@@ -3328,6 +3333,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "session has no end time and is older than the freshness window",
             session_targets(stale_sessions),
             count=len(stale_sessions),
+            scope="agent",
         ))
     metrics = build_metrics(sessions, kanban)
     tuning_items = detect_friction(sessions, kanban) + tuning_items
@@ -4816,9 +4822,9 @@ def scan_hermes() -> Dict[str, Any]:
     tuning = build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)
     add_findings(tuning, cost_findings(cost_attribution) + fleet_findings(fleet, kanban) + backlog_findings(backlog))
     agent_activity = collect_agent_activity(profiles)
-    needs_you = build_needs_you(profiles, cron, kanban, tuning)
+    needs_you = build_needs_you(profiles, cron, kanban, tuning, sessions)
     return {
-        "agents": build_agents(profiles, sessions, cron, kanban, agent_activity, needs_you),
+        "agents": build_agents(profiles, sessions, cron, kanban, agent_activity, needs_you, gateways),
         "needs_you": needs_you,
         "agent_activity": agent_activity,
         "backlog": backlog,
@@ -4893,7 +4899,7 @@ AGENT_STATUS_LABELS = {
 AGENT_STATUS_ORDER = list(AGENT_STATUS_LABELS)
 AGENT_ACTIVITY_DAYS = 7
 FAILING_TASK_ATTEMPTS = 2
-QUEUE_KIND_ORDER = ("answer", "stalled", "cron_failed", "failing", "blocked", "offline", "cron_overdue", "unassigned", "finding")
+QUEUE_KIND_ORDER = ("answer", "stalled", "cron_failed", "failing", "blocked", "offline", "cron_overdue", "unassigned", "behaviour", "finding")
 ACTION_LABELS = {
     "answer": "Answer",
     "retry": "Retry",
@@ -4910,7 +4916,7 @@ CLOSED_KANBAN_STATUSES = {"done", "archived"}
 AGENT_TIMELINE_LIMIT = 40
 AGENT_TIMELINE_SESSIONS = 8
 AGENT_TIMELINE_TOOLS = 60
-AGENT_TASK_LIMIT = 20
+AGENT_TOP_TOOLS = 5
 TASK_EVENT_TEXT = {
     "created": "Task created",
     "claimed": "Claimed",
@@ -5025,22 +5031,80 @@ def cron_actions(job: Dict[str, Any], who: str) -> List[Dict[str, Any]]:
     return [_action("run_now", target, f"Run {label} for {who} once, now. Its schedule does not change."), toggle]
 
 
+# How an agent's own sessions behave: what Kanban cannot show. Each signal
+# reads the sessions Olympus scanned for that agent; warnings join the
+# Needs-you queue on that agent, notes stay in its inspector.
+BEHAVIOUR_SIGNALS = (
+    ("looping", "warning", "/sessions", "Looping or tool-thrashing",
+     f"Runs passed {RUNAWAY_TOOLS_THRESHOLD} tool calls. Add a checklist skill, lower max turns, or split the task.",
+     lambda s: int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD),
+    ("expensive", "warning", "/analytics", "Expensive runs",
+     f"Each cost over ${EXPENSIVE_RUN_USD:.2f}. A cheaper model, a tighter prompt or a task split usually helps.",
+     lambda s: _session_cost(s) >= EXPENSIVE_RUN_USD),
+    ("context", "info", "/sessions", "Very large context per call",
+     f"Runs averaged over {CONTEXT_PRESSURE_TOKENS:,} prompt tokens per model call. A recap or a task split keeps it down.",
+     lambda s: int(s.get("avg_input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS),
+    ("tool_heavy", "info", "/skills", "Tool-heavy runs",
+     f"{TOOL_HEAVY_THRESHOLD} to {RUNAWAY_TOOLS_THRESHOLD - 1} tool calls in a run. A skill for the repeated steps would shorten them.",
+     lambda s: TOOL_HEAVY_THRESHOLD <= int(s.get("tool_call_count") or 0) < RUNAWAY_TOOLS_THRESHOLD),
+    ("long_thread", "info", "/sessions", "Long conversations",
+     f"{LONG_THREAD_THRESHOLD}+ messages in a session. Recaps or memory keep follow-ups accurate.",
+     lambda s: int(s.get("message_count") or 0) >= LONG_THREAD_THRESHOLD),
+    ("stale", "info", "/sessions", "Sessions left open",
+     "Open with no activity for over a day. Close or resume them so this view stays accurate.",
+     lambda s: s.get("state") == "stale"),
+)
+
+
+def agent_behaviour(sessions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Behaviour signals for one agent's sessions, warnings first."""
+    signals: List[Dict[str, Any]] = []
+    for kind, severity, view, label, detail, matches in BEHAVIOUR_SIGNALS:
+        hits = [s for s in sessions if matches(s)]
+        if hits:
+            signals.append({
+                "kind": kind,
+                "severity": severity,
+                "label": label,
+                "detail": detail,
+                "count": len(hits),
+                "cost_usd": round(sum(_session_cost(s) for s in hits), 2),
+                "sessions": session_targets(hits),
+                "link": view,
+            })
+    return signals
+
+
 def build_needs_you(
     profiles: List[Dict[str, Any]],
     cron: List[Dict[str, Any]],
     kanban: Dict[str, Any],
     tuning: Dict[str, Any],
+    sessions: List[Dict[str, Any]],
     now: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Everything that needs a person, once, with the action that resolves it.
 
-    Tasks and cron jobs become one item each; Olympus' fleet-level findings
-    join them unless the per-task items already cover them (scope "entity").
+    Tasks and cron jobs become one item each and session behaviour one item
+    per agent; Olympus' fleet-level findings join them unless those items
+    already cover them (scope "entity" or "agent").
     """
     now = time.time() if now is None else now
     agents = {str(p["name"]): agent_ref(p) for p in profiles}
     offline = {str(p["name"]) for p in profiles if p.get("gateway_state") != "running"}
     queue: List[Dict[str, Any]] = []
+
+    for profile in profiles:
+        own = [s for s in sessions if session_matches_profile(s, str(profile["name"]))]
+        for signal in agent_behaviour(own):
+            if signal["severity"] != "warning":
+                continue
+            runs = f"{signal['count']} session{'s' if signal['count'] != 1 else ''}"
+            queue.append(_queue_item(
+                f"behaviour:{signal['kind']}:{profile['id']}", "behaviour", "warning", agent_ref(profile),
+                f"{signal['label']} in {runs}" + (f" (${signal['cost_usd']:.2f})" if signal["kind"] == "expensive" else ""),
+                signal["detail"], None, [], signal["link"], signal["sessions"],
+            ))
 
     for task in kanban_items(kanban, "_tasks"):
         status = task.get("status")
@@ -5142,7 +5206,7 @@ def build_needs_you(
 
     agent_ids = {a["id"]: a for a in agents.values()}
     for finding in as_list((tuning.get("agent_hq") or {}).get("recommendations")):
-        if finding.get("severity") not in ("critical", "warning") or finding.get("scope") == "entity":
+        if finding.get("severity") not in ("critical", "warning") or finding.get("scope") in ("entity", "agent"):
             continue
         owners = {t.get("agent") for t in as_list(finding.get("targets")) if t.get("agent")}
         agent = agent_ids.get(next(iter(owners))) if len(owners) == 1 else None
@@ -5162,9 +5226,9 @@ def build_needs_you(
     return queue
 
 
-def _store_daily_activity(db: Path, since: float) -> Dict[str, Any]:
+def _store_daily_activity(db: Path, since: float, now: float) -> Dict[str, Any]:
     """Sessions, tokens and cost per UTC day (by session start) from one state.db."""
-    out: Dict[str, Any] = {"days": {}, "last_active_ts": None}
+    out: Dict[str, Any] = {"days": {}, "last_active_ts": None, "live_tool": None}
     if not db.exists():
         return out
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
@@ -5197,11 +5261,30 @@ def _store_daily_activity(db: Path, since: float) -> Dict[str, Any]:
         recency = [c for c in ("last_activity_at", "ended_at", "started_at") if c in cols]
         row = con.execute(f"SELECT MAX({recency_expr(recency)}) AS ts FROM sessions").fetchone()
         out["last_active_ts"] = safe_float(row["ts"]) or None
+        out["live_tool"] = _live_tool(con, cols, now)
     except sqlite3.Error as exc:
         log_read_warning("agent activity scan failed", exc)
     finally:
         con.close()
     return out
+
+
+def _live_tool(con: sqlite3.Connection, session_cols: set[str], now: float) -> Optional[Dict[str, Any]]:
+    """The last tool any still-open, recently active session called."""
+    message_cols = table_columns(con, "messages")
+    if not {"session_id", "tool_name", "timestamp"}.issubset(message_cols) or not {"id", "ended_at"}.issubset(session_cols):
+        return None
+    activity = recency_expr([f"s.{c}" for c in ("last_activity_at", "started_at") if c in session_cols], "0")
+    role = " AND m.role = 'tool'" if "role" in message_cols else ""
+    row = con.execute(
+        f"SELECT m.tool_name, m.timestamp FROM sessions s JOIN messages m ON m.session_id = s.id "
+        f"WHERE s.ended_at IS NULL AND {activity} >= ?{role} "
+        "AND m.tool_name IS NOT NULL AND m.tool_name != '' ORDER BY m.timestamp DESC LIMIT 1",
+        (now - ACTIVE_SECONDS,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"tool": redact_text(row["tool_name"], 60), "at": ts_to_iso(row["timestamp"])}
 
 
 def activity_days(now: float) -> List[str]:
@@ -5218,11 +5301,12 @@ def collect_agent_activity(profiles: List[Dict[str, Any]], now: Optional[float] 
     since = datetime.fromisoformat(days[0]).replace(tzinfo=timezone.utc).timestamp()
     out: Dict[str, Dict[str, Any]] = {}
     for raw_profile, home in profile_stores(profiles):
-        store = _store_daily_activity(home / "state.db", since)
+        store = _store_daily_activity(home / "state.db", since, now)
         empty = {"sessions": 0, "input_tokens": 0, "cache_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
         out[raw_profile] = {
             "days": [{"day": day, **store["days"].get(day, empty)} for day in days],
             "last_active_ts": store["last_active_ts"],
+            "live_tool": store["live_tool"],
         }
     return out
 
@@ -5239,6 +5323,29 @@ def agent_status(kinds: set[str], live: bool) -> str:
     return "working" if live else "idle"
 
 
+LOOP_STOP_TEXT = {(True, True): "all sessions", (False, True): "unattended only", (False, False): "off"}
+
+
+def agent_setup(profile: Dict[str, Any], gateways: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """How the agent is set up: route, skills, gateway, platforms, loop limits."""
+    config = profile_config(Path(str(profile["_path"])))
+    guard = _loop_guardrail_policy(config)
+    public_name = profile.get("_public_name") or profile.get("name")
+    if profile.get("gateway_mode") == "multiplexed":
+        gateway = "shared"
+    else:
+        gateway = "own" if profile.get("gateway_state") == "running" else "stopped"
+    return {
+        "route": "configured" if profile.get("model") or profile.get("provider") else "inherited",
+        "model": profile.get("model") if EXPOSE_LOCAL_LABELS else None,
+        "skills": int(profile.get("skill_count") or 0),
+        "gateway": gateway,
+        "platforms": sorted({str(g["label"]) for g in gateways if g.get("profile") == public_name}),
+        "max_turns": _cfg_int(_cfg_value(config, "agent", "max_turns")),
+        "loop_stop": LOOP_STOP_TEXT[(guard["interactive"], guard["unattended"])],
+    }
+
+
 def build_agents(
     profiles: List[Dict[str, Any]],
     sessions: List[Dict[str, Any]],
@@ -5246,6 +5353,7 @@ def build_agents(
     kanban: Dict[str, Any],
     activity: Dict[str, Dict[str, Any]],
     queue: List[Dict[str, Any]],
+    gateways: List[Dict[str, Any]],
     now: Optional[float] = None,
 ) -> Dict[str, Any]:
     """One roster row per agent: status, current work, helpers and issues."""
@@ -5276,6 +5384,9 @@ def build_agents(
             current = {"kind": "waiting", "label": display_name(waiting["title"], waiting["id"], "Task"), "since": waiting.get("blocked_at") or waiting.get("created_at")}
         else:
             current = None
+        tool = activity.get(raw, {}).get("live_tool")
+        if current and current["kind"] != "waiting" and tool:
+            current.update({"tool": tool["tool"], "tool_at": tool["at"]})
         stamps = [
             safe_float(activity.get(raw, {}).get("last_active_ts")),
             *(parse_iso_ts(t.get("last_heartbeat_at")) or 0.0 for t in tasks if t.get("_assignee") == raw),
@@ -5303,6 +5414,7 @@ def build_agents(
             "last_active_at": ts_to_iso(last_active) if last_active else None,
             "activity_7d": [day["sessions"] for day in activity.get(raw, {}).get("days", [])],
             "issues": len(own_items),
+            "setup": agent_setup(profile, gateways),
             "gateway_state": profile.get("gateway_state"),
             "gateway_mode": profile.get("gateway_mode"),
             "dashboard_home": bool(profile.get("dashboard_home")),
@@ -5394,6 +5506,33 @@ def _store_timeline(db: Path, now: float) -> List[Dict[str, Any]]:
     return events
 
 
+def _store_top_tools(db: Path, since: float) -> List[Dict[str, Any]]:
+    """The tools this agent called most in sessions started since ``since``."""
+    if not db.exists():
+        return []
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        message_cols = table_columns(con, "messages")
+        if not {"session_id", "tool_name"}.issubset(message_cols) or not {"id", "started_at"}.issubset(table_columns(con, "sessions")):
+            return []
+        role = " AND m.role = 'tool'" if "role" in message_cols else ""
+        return [
+            {"tool": redact_text(row["tool_name"], 60), "calls": int(row["calls"])}
+            for row in con.execute(
+                "SELECT m.tool_name, COUNT(*) AS calls FROM sessions s JOIN messages m ON m.session_id = s.id "
+                f"WHERE s.started_at >= ?{role} AND m.tool_name IS NOT NULL AND m.tool_name != '' "
+                "GROUP BY m.tool_name ORDER BY calls DESC, m.tool_name LIMIT ?",
+                (since, AGENT_TOP_TOOLS),
+            )
+        ]
+    except sqlite3.Error as exc:
+        log_read_warning("agent tool mix scan failed", exc)
+        return []
+    finally:
+        con.close()
+
+
 def _kanban_timeline(raw_profile: str) -> List[Dict[str, Any]]:
     """Recent task events for tasks assigned to one profile, on every board."""
     events: List[Dict[str, Any]] = []
@@ -5456,18 +5595,38 @@ def build_agent_detail(scan: Dict[str, Any], agent_id: str, actions: List[Dict[s
         {**strip_internal(job), "label": display_name(job["label"], job["id"], "Job"), "actions": cron_actions(job, who)}
         for job in scan["cron"] if cron_profile(job) == raw
     ]
+    # Kanban owns the board; the inspector shows only what this agent is
+    # working on now plus counts, and items that need a person are already
+    # in its Needs-you list.
     own_tasks = [t for t in kanban_items(scan["kanban"], "_tasks") if t.get("_assignee") == raw]
-    own_tasks.sort(key=lambda t: (t.get("status") in CLOSED_KANBAN_STATUSES, -safe_float(t.get("_sort_ts"))))
-    tasks = [
+    week_ago = now - AGENT_ACTIVITY_DAYS * 86400
+    running = [
         {
             "id": t["id"], "board": t["board"], "title": display_name(t["title"], t["id"], "Task"), "status": t["status"],
-            "block_kind": t.get("block_kind"), "started_at": t.get("started_at"),
-            "blocked_at": t.get("blocked_at"), "completed_at": t.get("completed_at"),
-            "stale": task_stale_reason(t, now), "consecutive_failures": t.get("consecutive_failures"),
+            "started_at": t.get("started_at"), "stale": task_stale_reason(t, now),
             "actions": task_actions(t, who, now),
         }
-        for t in own_tasks[:AGENT_TASK_LIMIT]
+        for t in sorted(own_tasks, key=lambda t: parse_iso_ts(t.get("started_at")) or 0.0, reverse=True)
+        if t.get("status") == "running"
     ]
+    kanban = {
+        "running": running,
+        "open": sum(1 for t in own_tasks if t.get("status") in OPEN_KANBAN_STATUSES),
+        "blocked": sum(1 for t in own_tasks if t.get("status") == "blocked"),
+        "done_7d": sum(1 for t in own_tasks if t.get("status") == "done" and (parse_iso_ts(t.get("completed_at")) or 0.0) >= week_ago),
+    }
+    own_sessions = [s for s in scan["sessions"] if session_matches_profile(s, raw)]
+    metrics = build_metrics(own_sessions)
+    working = {
+        "window": session_window_label(len(own_sessions)),
+        "sessions": len(own_sessions),
+        "median_run_seconds": metrics["median_duration_seconds"],
+        "p90_run_seconds": metrics["p90_duration_seconds"],
+        "tools_per_session": metrics["avg_tools_per_session"],
+        "tokens_per_call": metrics["avg_tokens_per_call"],
+        "top_tools": _store_top_tools(Path(str(profile["_path"])) / "state.db", week_ago),
+        "signals": agent_behaviour(own_sessions),
+    }
     timeline = _store_timeline(Path(str(profile["_path"])) / "state.db", now) + _kanban_timeline(raw)
     for job in jobs:
         if job.get("last_run_at"):
@@ -5490,8 +5649,8 @@ def build_agent_detail(scan: Dict[str, Any], agent_id: str, actions: List[Dict[s
         "needs_you": [item for item in scan["needs_you"] if item["agent"] and item["agent"]["id"] == agent_id],
         "timeline": strip_internal(timeline[:AGENT_TIMELINE_LIMIT]),
         "cron": jobs,
-        "tasks": tasks,
-        "tasks_total": len(own_tasks),
+        "kanban": kanban,
+        "working": working,
         "usage": {
             "days": days,
             "tokens_7d": sum(d["input_tokens"] + d["cache_tokens"] + d["output_tokens"] for d in days),

@@ -48,8 +48,10 @@ class AgentsTest(unittest.TestCase):
             ("live-main", "cli", "Refactor the billing module", now - 300, now - 30, None),
             ("live-sub", "subagent", "Read the billing tests", now - 120, now - 20, "live-main"),
         ])
-        # Finished two days ago (outside today's activity), 10 minutes long.
-        con.execute("INSERT INTO sessions (id, source, title, started_at, ended_at, end_reason, last_activity_at) VALUES (?, 'cli', ?, ?, ?, 'completed', ?)",
+        # Finished two days ago (outside today's activity), 10 minutes long,
+        # with 45 tool calls and $1.50 of spend: it looped and it was costly.
+        con.execute("INSERT INTO sessions (id, source, title, started_at, ended_at, end_reason, last_activity_at, tool_call_count, actual_cost_usd) "
+                    "VALUES (?, 'cli', ?, ?, ?, 'completed', ?, 45, 1.5)",
                     ("done-1", "Write the summary", now - 2 * 86400, now - 2 * 86400 + 600, now - 2 * 86400 + 600))
         con.executemany("INSERT INTO messages (session_id, role, tool_name, timestamp) VALUES (?, 'tool', ?, ?)", [
             ("live-main", "terminal", now - 200),
@@ -151,7 +153,15 @@ class AgentsTest(unittest.TestCase):
         self.assertEqual(rows["Qa"]["helpers"]["workers"], 1)
         self.assertFalse(rows["Qa"]["live"])  # a stalled worker is not working
         self.assertEqual(rows["Coder"]["status_reason"], "Pick a database is waiting on your answer")
-        self.assertEqual(scan["agents"]["summary"], {"agents": 6, "working": 1, "need_you": 4, "queue": 5, "unattributed": 1})
+        self.assertEqual(scan["agents"]["summary"], {"agents": 6, "working": 1, "need_you": 5, "queue": 7, "unattributed": 1})
+        # The tool the live session called last is what the agent is doing now.
+        self.assertEqual(default["current"]["tool"], "web_search")
+        self.assertEqual(default["current"]["tool_at"], iso(self.now - 100))
+        self.assertEqual(default["setup"], {"route": "configured", "model": "test-model", "skills": 0, "gateway": "own",
+                                            "platforms": [], "max_turns": None, "loop_stop": "unattended only"})
+        self.assertEqual((rows["Coder"]["setup"]["gateway"], rows["Ops"]["setup"]["gateway"]), ("shared", "stopped"))
+        # Behaviour counts as an issue but does not change what the agent is doing.
+        self.assertEqual((default["status"], default["issues"]), ("working", 2))
 
     def test_the_queue_lists_each_thing_once_with_the_action_that_resolves_it(self):
         scan = self.labelled_scan()
@@ -159,9 +169,17 @@ class AgentsTest(unittest.TestCase):
         queue = scan["needs_you"]
         self.assertEqual(
             [(item["kind"], item["agent"]["label"] if item["agent"] else None) for item in queue],
-            [("answer", "Coder"), ("stalled", "Qa"), ("cron_failed", "Writer"), ("offline", "Ops"), ("unassigned", None)],
+            [("answer", "Coder"), ("stalled", "Qa"), ("cron_failed", "Writer"), ("offline", "Ops"), ("unassigned", None),
+             ("behaviour", "Default"), ("behaviour", "Default")],
         )
-        answer, stalled, cron_failed, offline, orphan = queue
+        answer, stalled, cron_failed, offline, orphan, looping, expensive = queue
+        # Session behaviour lands on the agent whose sessions it came from, with
+        # those sessions to open; the fleet-wide summaries stay in Checks.
+        self.assertEqual(looping["title"], "Looping or tool-thrashing in 1 session")
+        self.assertEqual(expensive["title"], "Expensive runs in 1 session ($1.50)")
+        self.assertEqual(looping["targets"], [{"kind": "session", "ref": "done-1", "label": "Write the summary", "agent": "profile:default"}])
+        self.assertNotIn("An agent is looping or tool-thrashing", [item["title"] for item in queue])
+        self.assertIn("An agent is looping or tool-thrashing", [item["title"] for item in scan["tuning"]["agent_hq"]["recommendations"]])
         self.assertEqual([a["id"] for a in answer["actions"]], ["answer"])
         self.assertEqual(answer["actions"][0]["target"], {"kind": "task", "ref": "t-answer", "board": "default", "status": "blocked", "name": "Pick a database"})
         self.assertEqual(answer["since"], iso(int(self.now) - 7200))  # when it blocked, not when it was created
@@ -213,11 +231,18 @@ class AgentsTest(unittest.TestCase):
         self.assertEqual(texts.index("Used web_search") < texts.index("Used terminal ×3"), True)
         today = default["usage"]["days"][-1]
         self.assertEqual((today["sessions"], today["input_tokens"], today["cache_tokens"], today["output_tokens"]), (2, 2000, 6000, 400))
-        self.assertEqual(default["usage"]["cost_7d_usd"], 0.8)
+        self.assertEqual(default["usage"]["cost_7d_usd"], 2.3)
+        working = default["working"]
+        self.assertEqual(working["top_tools"], [{"tool": "terminal", "calls": 3}, {"tool": "web_search", "calls": 1}])
+        self.assertEqual([(s["kind"], s["severity"], s["count"]) for s in working["signals"]], [("looping", "warning", 1), ("expensive", "warning", 1)])
+        self.assertEqual((working["sessions"], working["median_run_seconds"]), (3, 600.0))
 
         self.assertEqual([item["kind"] for item in coder["needs_you"]], ["answer"])
-        self.assertEqual({t["title"]: [a["id"] for a in t["actions"]] for t in coder["tasks"]},
-                         {"Pick a database": ["answer"], "Fetch the feed": ["retry", "reassign"]})
+        # Kanban owns the board: the inspector keeps current work and counts.
+        self.assertEqual(coder["kanban"], {"running": [], "open": 2, "blocked": 2, "done_7d": 0})
+        qa = plugin_api.agent("profile:qa")
+        self.assertEqual([(t["title"], [a["id"] for a in t["actions"]]) for t in qa["kanban"]["running"]],
+                         [("Run the regression suite", ["reclaim", "reassign"])])
         self.assertEqual(coder["success"]["rate"], 0.5)
         coder_texts = [event["text"] for event in coder["timeline"]]
         self.assertEqual(coder_texts[:3], ["Blocked: Pick a database", "Worker crashed: Pick a database", "Claimed: Pick a database"])

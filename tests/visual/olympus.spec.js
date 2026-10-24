@@ -39,8 +39,8 @@ const privateLabelPhrases = [
 const allowedHermesRoutes = ["/analytics", "/config", "/cron", "/kanban", "/logs", "/profiles", "/sessions", "/skills"];
 
 const scenarios = [
-  { name: "noisy", agents: 7, queue: 6 },
-  { name: "no-labels", agents: 7, queue: 6, privateLabelsHidden: true },
+  { name: "noisy", agents: 7, queue: 8 },
+  { name: "no-labels", agents: 7, queue: 8, privateLabelsHidden: true },
   { name: "empty", agents: 1, queue: 0 }
 ];
 

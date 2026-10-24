@@ -605,10 +605,11 @@
   function NowCell({ agent, now }) {
     const current = agent.current;
     if (!current) return el("span", { className: "olympus-muted" }, "Nothing running");
+    const when = current.since ? (current.kind === "waiting" ? "waiting " : "") + elapsed(current.since, now) : null;
     return el("span", { className: "olympus-now" },
       agent.live ? el("span", { className: "olympus-live-dot", "aria-hidden": "true" }) : null,
       el("span", { className: "olympus-now-label" }, current.label),
-      current.since ? el("small", null, current.kind === "waiting" ? "waiting " + elapsed(current.since, now) : elapsed(current.since, now)) : null
+      el("small", null, [current.tool ? "using " + current.tool + " " + ago(current.tool_at, now) : null, when].filter(Boolean).join(" · ") || null)
     );
   }
 
@@ -774,30 +775,66 @@
     );
   }
 
-  const TASK_STATUS_TEXT = { blocked: "Blocked", running: "Running", ready: "Ready", todo: "To do", triage: "Triage", review: "In review", scheduled: "Scheduled", done: "Done", archived: "Archived" };
-
-  function taskWhen(task, now) {
-    if (task.status === "blocked" && task.blocked_at) return "blocked " + elapsed(task.blocked_at, now);
-    if (task.status === "running" && task.started_at) return task.stale ? task.stale : "running " + elapsed(task.started_at, now);
-    if (task.completed_at) return "finished " + ago(task.completed_at, now);
-    return null;
-  }
-
-  function TaskRow({ task, ctx, agentId, now }) {
-    const problem = task.stale || (task.status === "blocked" && task.block_kind !== "transient" && task.block_kind !== "dependency");
+  // The Kanban task this agent is running now; the board itself stays in Kanban.
+  function RunningTask({ task, ctx, agentId, now }) {
     return el("li", { className: "olympus-work-row" },
       el("div", null,
         el("strong", null, task.title),
-        el("small", { className: problem ? "olympus-attention-text" : null }, [
-          TASK_STATUS_TEXT[task.status] || task.status,
-          task.block_kind ? task.block_kind.replace("_", " ") : null,
-          taskWhen(task, now),
-          Number(task.consecutive_failures || 0) > 1 ? task.consecutive_failures + " failed attempts" : null
-        ].filter(Boolean).join(" · "))
+        el("small", { className: task.stale ? "olympus-attention-text" : null },
+          task.stale ? "Worker " + task.stale : task.started_at ? "running " + elapsed(task.started_at, now) : "running")
       ),
       el("div", { className: "olympus-work-actions" },
-        asList(task.actions).map((action, idx) => el(ActionButton, { key: action.id, action, subject: task.title, agentId, agents: ctx.agents, controls: ctx.controls, onDone: ctx.onActionDone, primary: idx === 0 && action.id === "answer" }))
+        asList(task.actions).map((action) => el(ActionButton, { key: action.id, action, subject: task.title, agentId, agents: ctx.agents, controls: ctx.controls, onDone: ctx.onActionDone }))
       )
+    );
+  }
+
+  function KanbanSummary({ kanban }) {
+    const k = kanban || {};
+    return el("p", { className: "olympus-muted olympus-kanban-summary" },
+      [Number(k.open || 0) + " open", Number(k.blocked || 0) + " blocked", Number(k.done_7d || 0) + " done this week"].join(" · ") + ". ",
+      el("a", { className: "olympus-link", href: routeLink("/kanban") }, "Open Kanban")
+    );
+  }
+
+  // Route, skills, gateway, platforms and loop limits in one line.
+  function setupLine(setup) {
+    const s = setup || {};
+    const gateway = { own: "own gateway", shared: "shares the default gateway", stopped: "gateway stopped" }[s.gateway];
+    return [
+      s.route === "configured" ? (s.model ? "model " + s.model : "own model route") : "inherits the default model",
+      plural(Number(s.skills || 0), "skill"),
+      gateway,
+      asList(s.platforms).length ? "on " + s.platforms.join(", ") : null,
+      "loop hard stop " + (s.loop_stop || "unknown") + (s.max_turns ? ", max " + s.max_turns + " turns" : "")
+    ].filter(Boolean).join(" · ");
+  }
+
+  // How the agent's own sessions behave: what Kanban cannot show.
+  function WorkingSection({ working, usage }) {
+    const w = working || {};
+    const tools = asList(w.top_tools);
+    const signals = asList(w.signals);
+    return el(InspectorSection, { title: "How it's working" },
+      el("dl", { className: "olympus-facts" },
+        el("div", null, el("dt", null, "Typical run"), el("dd", null, w.median_run_seconds == null ? "No finished runs" : formatDuration(w.median_run_seconds) + (w.p90_run_seconds != null ? ", slow " + formatDuration(w.p90_run_seconds) : ""))),
+        el("div", null, el("dt", null, "Tools per run"), el("dd", null, String(w.tools_per_session || 0))),
+        el("div", null, el("dt", null, "Tokens per call"), el("dd", null, formatTokens(w.tokens_per_call))),
+        el("div", null, el("dt", null, "Cost this week"), el("dd", null, formatMoney(usage && usage.cost_7d_usd)))
+      ),
+      tools.length ? el("p", { className: "olympus-tool-mix" },
+        el("span", { className: "olympus-muted" }, "Most used tools this week: "),
+        tools.map((tool) => tool.tool + " " + formatCount(tool.calls)).join(" · ")
+      ) : null,
+      signals.length ? el("ul", { className: "olympus-signals" }, signals.map((signal) => el("li", { key: signal.kind },
+        el("span", { className: "olympus-severity olympus-severity-" + signal.severity }, SEVERITY_TEXT[signal.severity]),
+        el("div", null,
+          el("strong", null, signal.label + " in " + plural(signal.count, "session")),
+          el("small", null, signal.detail),
+          el(SessionLinks, { targets: signal.sessions })
+        )
+      ))) : el("p", { className: "olympus-muted" }, "No looping, cost or context problems in its sessions."),
+      el("small", { className: "olympus-muted" }, "From " + (w.window || "recent sessions") + ".")
     );
   }
 
@@ -850,6 +887,7 @@
         el("div", { className: "olympus-inspector-title" },
           el("h2", null, agent.label),
           el("p", null, agent.role || ROLE_TEXT[agent.role_state] || ""),
+          agent.setup ? el("p", { className: "olympus-setup" }, setupLine(agent.setup)) : null,
           el("div", { className: "olympus-inspector-status" },
             el(StatusPill, { status: agent.status, label: agent.status_label }),
             agent.last_active_at ? el("span", { className: "olympus-muted" }, "last active " + ago(agent.last_active_at, ctx.now)) : null
@@ -869,18 +907,18 @@
         el("ol", { className: "olympus-queue" }, detail.needs_you.map((item) => el(QueueItem, { key: item.key, item, ctx, own: true })))
       ) : null,
       detail ? el(InspectorSection, { title: "Now" }, el(Timeline, { events: detail.timeline, now: ctx.now })) : null,
+      detail ? el(WorkingSection, { working: detail.working, usage }) : null,
       detail && asList(detail.cron).length ? el(InspectorSection, { title: "Scheduled", count: detail.cron.length },
         el("ul", { className: "olympus-work" }, detail.cron.map((job) => el(CronRow, { key: job.id, job, ctx, agentId: agent.id, now: ctx.now })))
       ) : null,
-      detail && asList(detail.tasks).length ? el(InspectorSection, { title: "Kanban", count: detail.tasks_total },
-        el("ul", { className: "olympus-work" }, detail.tasks.map((task) => el(TaskRow, { key: task.board + ":" + task.id, task, ctx, agentId: agent.id, now: ctx.now }))),
-        detail.tasks_total > detail.tasks.length ? el("a", { className: "olympus-link", href: routeLink("/kanban") }, "All " + detail.tasks_total + " tasks in Kanban") : null
+      detail && (asList(detail.kanban.running).length || detail.kanban.open) ? el(InspectorSection, { title: "Kanban" },
+        asList(detail.kanban.running).length ? el("ul", { className: "olympus-work" }, detail.kanban.running.map((task) => el(RunningTask, { key: task.board + ":" + task.id, task, ctx, agentId: agent.id, now: ctx.now }))) : null,
+        el(KanbanSummary, { kanban: detail.kanban })
       ) : null,
       detail ? el("footer", { className: "olympus-inspector-foot" },
         el(TokenChart, { days: usage.days }),
         el("dl", { className: "olympus-facts" },
-          el("div", null, el("dt", null, "Cost this week"), el("dd", null, formatMoney(usage.cost_7d_usd))),
-          el("div", null, el("dt", null, "Worker runs"), el("dd", null,
+          el("div", null, el("dt", null, "Kanban worker runs"), el("dd", null,
             success.rate == null ? "None finished this week" : success.succeeded + " of " + (success.succeeded + success.failed) + " succeeded (" + Math.round(success.rate * 100) + "%)"))
         ),
         asList(detail.fixes).length ? el("div", { className: "olympus-fixes" },
