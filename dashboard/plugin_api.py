@@ -1529,16 +1529,20 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
         wanted = [
             "id", "source", "started_at", "ended_at", "end_reason", "message_count",
             "tool_call_count", "model", "title", "handoff_platform", "handoff_error",
-            "input_tokens", "output_tokens", "reasoning_tokens", "api_call_count",
-            "estimated_cost_usd", "actual_cost_usd",
+            "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+            "reasoning_tokens", "api_call_count", "estimated_cost_usd", "actual_cost_usd",
+            "last_activity_at",
         ]
         select = [c for c in wanted if c in cols]
         if "id" not in select:
             return []
-        if "ended_at" in cols and "started_at" in cols:
-            order = "COALESCE(ended_at, started_at)"
-        elif "started_at" in cols:
-            order = "started_at"
+        # Most recent activity first: a long-running session that is still
+        # working must not sort behind newer, idle ones.
+        recency = [c for c in ("last_activity_at", "ended_at", "started_at") if c in cols]
+        if len(recency) > 1:
+            order = f"COALESCE({', '.join(recency)})"
+        elif recency:
+            order = recency[0]
         else:
             order = "id"
         rows = con.execute(
@@ -1558,9 +1562,10 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
     for r in rows:
         ended = row_value(r, "ended_at")
         started = row_value(r, "started_at")
-        last_ts = ended or started
+        last_activity = row_value(r, "last_activity_at")
+        last_ts = last_activity or ended or started
         if ended is None:
-            state = "active" if age_state(started) in ("active", "recent") else "stale"
+            state = "active" if age_state(last_ts) in ("active", "recent") else "stale"
         else:
             state = "recent" if age_state(last_ts) in ("active", "recent") else "completed"
         handoff_error = row_value(r, "handoff_error")
@@ -1578,11 +1583,16 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
         tool_call_count = safe_int(row_value(r, "tool_call_count", 0))
         input_tokens = safe_int(row_value(r, "input_tokens", 0))
         output_tokens = safe_int(row_value(r, "output_tokens", 0))
-        reasoning_tokens = safe_int(row_value(r, "reasoning_tokens", 0))
+        cache_read_tokens = safe_int(row_value(r, "cache_read_tokens", 0))
+        cache_write_tokens = safe_int(row_value(r, "cache_write_tokens", 0))
         api_calls = safe_int(row_value(r, "api_call_count", 0))
-        # Average per API call is the context-pressure signal; cumulative tokens
-        # over-count chatty sessions.
-        avg_input_tokens = int(input_tokens / api_calls) if api_calls > 0 else 0
+        # Hermes' CanonicalUsage buckets: input_tokens is the uncached part of
+        # the prompt, so the prompt the model actually saw adds both cache
+        # buckets; reasoning is already inside output_tokens.
+        prompt_tokens = input_tokens + cache_read_tokens + cache_write_tokens
+        # Average prompt per API call is the context-pressure signal;
+        # cumulative tokens over-count chatty sessions.
+        avg_input_tokens = int(prompt_tokens / api_calls) if api_calls > 0 else 0
         actual_cost = row_value(r, "actual_cost_usd")
         estimated_cost = row_value(r, "estimated_cost_usd")
         cost_source = actual_cost if actual_cost not in (None, "") else estimated_cost
@@ -1604,9 +1614,13 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
             "message_count": message_count,
             "tool_call_count": tool_call_count,
             "duration_seconds": duration_seconds,
+            "last_activity_at": ts_to_iso(last_ts),
             "input_tokens": input_tokens,
+            "cache_read_tokens": cache_read_tokens,
+            "cache_write_tokens": cache_write_tokens,
+            "prompt_tokens": prompt_tokens,
             "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens + reasoning_tokens,
+            "total_tokens": prompt_tokens + output_tokens,
             "avg_input_tokens": avg_input_tokens,
             "api_call_count": api_calls,
             "cost_usd": round(cost_usd, 4),
@@ -2216,15 +2230,16 @@ def collect_usage_rollup(profiles: Optional[List[Dict[str, Any]]] = None, days: 
                 ("actual_cost_usd", "actual_cost_usd"),
             ]:
                 terms.append(sum_expr(col, alias) if col in cols else f"0 AS {alias}")
-            if "actual_cost_usd" in cols:
-                terms.append("SUM(CASE WHEN COALESCE(actual_cost_usd, 0) > 0 THEN 1 ELSE 0 END) AS actual_costed_sessions")
-            else:
-                terms.append("0 AS actual_costed_sessions")
-            if "estimated_cost_usd" in cols:
-                terms.append("SUM(CASE WHEN COALESCE(estimated_cost_usd, 0) > 0 THEN 1 ELSE 0 END) AS estimated_costed_sessions")
-            else:
-                terms.append("0 AS estimated_costed_sessions")
-            token_expr = " + ".join(f"COALESCE({c}, 0)" for c in ("input_tokens", "output_tokens", "reasoning_tokens") if c in cols) or "0"
+            # Each session counts once: actual cost wins, estimated-only
+            # sessions are the remainder, so the two buckets never overlap.
+            actual_expr = "COALESCE(actual_cost_usd, 0) > 0" if "actual_cost_usd" in cols else "0"
+            estimated_expr = "COALESCE(estimated_cost_usd, 0) > 0" if "estimated_cost_usd" in cols else "0"
+            terms.append(f"SUM(CASE WHEN {actual_expr} THEN 1 ELSE 0 END) AS actual_costed_sessions")
+            terms.append(f"SUM(CASE WHEN NOT ({actual_expr}) AND {estimated_expr} THEN 1 ELSE 0 END) AS estimated_costed_sessions")
+            # Hermes CanonicalUsage.total_tokens: uncached input + both cache
+            # buckets + output (reasoning is already part of output).
+            token_expr = " + ".join(f"COALESCE({c}, 0)" for c in ("input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens") if c in cols) or "0"
+            terms.append(f"COALESCE(SUM({token_expr}), 0) AS total_tokens")
             work_expr = " + ".join(f"COALESCE({c}, 0)" for c in ("message_count", "tool_call_count", "api_call_count") if c in cols) or "0"
             terms.append(f"SUM(CASE WHEN ({work_expr}) > 0 AND ({token_expr}) = 0 THEN 1 ELSE 0 END) AS zero_usage_suspect_sessions")
             cost_expr = " + ".join(f"COALESCE({c}, 0)" for c in ("actual_cost_usd", "estimated_cost_usd") if c in cols) or "0"
@@ -2248,7 +2263,7 @@ def collect_usage_rollup(profiles: Optional[List[Dict[str, Any]]] = None, days: 
             if row is None:
                 profile_rollups.append(roll)
                 continue
-            token_total = safe_int(row_value(row, "input_tokens")) + safe_int(row_value(row, "output_tokens")) + safe_int(row_value(row, "reasoning_tokens"))
+            token_total = safe_int(row_value(row, "total_tokens"))
             actual_costed = safe_int(row_value(row, "actual_costed_sessions"))
             estimated_costed = safe_int(row_value(row, "estimated_costed_sessions"))
             roll.update({
@@ -2283,15 +2298,15 @@ def collect_usage_rollup(profiles: Optional[List[Dict[str, Any]]] = None, days: 
                 except Exception:
                     pass
 
+    # Coverage gaps outrank cost quality: one actual-cost session must not
+    # hide token-bearing sessions that carry no cost at all.
     cost_confidence = "unknown"
-    if totals["actual_costed_sessions"]:
-        cost_confidence = "actual"
-    elif totals["estimated_costed_sessions"] and totals["zero_cost_token_sessions"]:
-        cost_confidence = "partial"
+    if totals["zero_cost_token_sessions"]:
+        cost_confidence = "partial" if totals["costed_sessions"] else "missing"
     elif totals["estimated_costed_sessions"]:
         cost_confidence = "estimated"
-    elif totals["total_tokens"]:
-        cost_confidence = "missing"
+    elif totals["actual_costed_sessions"]:
+        cost_confidence = "actual"
 
     return {
         "window_days": max(1, int(days)),
