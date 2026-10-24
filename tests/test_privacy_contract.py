@@ -271,15 +271,10 @@ class PrivacyContractTest(unittest.TestCase):
 
         self.assertEqual([p["schedule"] for p in payload], ["0 9 * * *", "every hour", None])
 
-    def test_error_fields_scrub_paths_urls_and_secrets_end_to_end(self):
-        # Free-text error columns (cron last_error, sessions.handoff_error,
-        # task_runs.error / tasks.last_failure_error) must not leak absolute
-        # paths, delivery URLs, or secret-like strings into the API payload.
-        secret = "api_key=SUPER-SECRET-VALUE"
-        local_path = "/home/alice/.hermes/profiles/default/work/run.py"
-        url = "https://hooks.example.com/T0/B0/abcdef"
-        leak = f"Worker crashed: {secret} at {local_path} posting to {url}"
-
+    def _seed_error_columns(self, leak):
+        # Free-text error columns: cron last_error, sessions.handoff_error,
+        # tasks.last_failure_error and task_runs.error.
+        now = int(time.time())
         cron_dir = self.home / "cron"
         cron_dir.mkdir(parents=True)
         (cron_dir / "jobs.json").write_text(json.dumps({
@@ -291,7 +286,6 @@ class PrivacyContractTest(unittest.TestCase):
 
         db = self.home / "state.db"
         con = sqlite3.connect(db)
-        now = int(time.time())
         con.executescript(
             """
             CREATE TABLE sessions (
@@ -345,21 +339,64 @@ class PrivacyContractTest(unittest.TestCase):
         con.commit()
         con.close()
 
+
+    def _error_payloads(self):
         cron_payload = json.dumps(plugin_api.collect_cron([]))
         sessions_payload = json.dumps(plugin_api.collect_sessions())
         kanban_payload = json.dumps(
             plugin_api.collect_kanban([{"name": "default", "_public_name": "default", "gateway_state": "running"}])
         )
+        return cron_payload, sessions_payload, kanban_payload
 
-        for blob in (cron_payload, sessions_payload, kanban_payload):
+    def test_error_fields_return_only_the_failure_class_by_default(self):
+        # Error text can quote prompts, task titles, or raw IDs that no pattern
+        # can scrub, so hidden-label mode returns only the failure class.
+        leak = (
+            "Worker crashed: api_key=SUPER-SECRET-VALUE at /home/alice/.hermes/run.py "
+            "posting to https://hooks.example.com/T0/B0/abcdef while answering 'summarise my private notes' "
+            "for session sess-raw-1234"
+        )
+        self._seed_error_columns(leak)
+
+        for blob in self._error_payloads():
+            for fragment in ("SUPER-SECRET-VALUE", "/home/alice", "hooks.example.com", "private notes", "sess-raw-1234"):
+                self.assertNotIn(fragment, blob)
+            self.assertIn("crash (details hidden)", blob)
+
+    def test_error_fields_scrub_paths_urls_and_secrets_when_labels_are_exposed(self):
+        leak = "Worker crashed: api_key=SUPER-SECRET-VALUE at /home/alice/.hermes/run.py posting to https://hooks.example.com/T0/B0/abcdef"
+        self._seed_error_columns(leak)
+        plugin_api.EXPOSE_LOCAL_LABELS = True
+
+        for blob in self._error_payloads():
             self.assertNotIn("SUPER-SECRET-VALUE", blob)
             self.assertNotIn("/home/alice", blob)
             self.assertNotIn("hooks.example.com", blob)
-        # Each error column actually surfaced (scrubbed, not silently dropped).
-        self.assertIn("[redacted", cron_payload)
-        self.assertIn("[redacted", sessions_payload)
-        self.assertIn("[redacted", kanban_payload)
+            # The error text surfaced (scrubbed), not silently dropped.
+            self.assertIn("Worker crashed", blob)
+            self.assertIn("[redacted", blob)
 
+    def test_redaction_removes_whole_quoted_secret_values(self):
+        cases = [
+            "login failed: password='alpha bravo charlie' for user",
+            'login failed: password="alpha bravo charlie" for user',
+            "login failed: password='alpha bravo charlie",  # truncated before the closing quote
+            'config {"token": "alpha bravo charlie", "safe": true}',
+        ]
+        for raw in cases:
+            redacted = plugin_api.redact_text(raw, limit=500)
+            for word in ("alpha", "bravo", "charlie"):
+                self.assertNotIn(word, redacted, raw)
+            self.assertIn("[redacted]", redacted, raw)
+
+    def test_error_category_classifies_common_failures(self):
+        self.assertEqual(plugin_api.error_category("Request timed out after 60s"), "timeout")
+        self.assertEqual(plugin_api.error_category("HTTP 429 Too Many Requests"), "rate limit")
+        self.assertEqual(plugin_api.error_category("401 Unauthorized"), "auth")
+        self.assertEqual(plugin_api.error_category("Connection refused"), "network")
+        self.assertEqual(plugin_api.error_category("Traceback (most recent call last)"), "crash")
+        self.assertEqual(plugin_api.error_category("something odd"), "error")
+        self.assertIsNone(plugin_api.public_error(""))
 
 if __name__ == "__main__":
     unittest.main()
