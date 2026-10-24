@@ -1,4 +1,41 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+// Hermes' own rule (hermes_constants._platform_default_hermes_home):
+// HERMES_HOME, else %LOCALAPPDATA%\hermes on Windows and ~/.hermes elsewhere.
+export function defaultHermesHome() {
+  if (process.env.HERMES_HOME) return process.env.HERMES_HOME;
+  const suffix = process.env.HERMES_DATA_DIR_SUFFIX || "";
+  if (process.platform === "win32") {
+    const localAppData = (process.env.LOCALAPPDATA || "").trim() || path.join(os.homedir(), "AppData", "Local");
+    return path.join(localAppData, "hermes" + suffix);
+  }
+  return path.join(os.homedir(), ".hermes" + suffix);
+}
+
+export function commandExists(command) {
+  const probe = process.platform === "win32"
+    ? spawnSync("where", [command], { encoding: "utf8" })
+    : spawnSync("sh", ["-lc", `command -v ${command}`], { encoding: "utf8" });
+  return probe.status === 0;
+}
+
+// Point Hermes' plugin dashboard at this checkout: a symlink, or a directory
+// junction on Windows (no admin rights needed). An existing different
+// dashboard is kept as a backup, and only when OLYMPUS_SMOKE_RELINK=1.
+export function ensureDashboardLink(sourceDir, targetDir) {
+  if (fs.existsSync(targetDir) && fs.realpathSync(targetDir) === fs.realpathSync(sourceDir)) return;
+  if (fs.existsSync(targetDir)) {
+    if (process.env.OLYMPUS_SMOKE_RELINK !== "1") {
+      throw new Error(`Hermes already has an Olympus dashboard at ${targetDir}. Set OLYMPUS_SMOKE_RELINK=1 to replace it for this smoke run.`);
+    }
+    fs.renameSync(targetDir, `${targetDir}.backup.${new Date().toISOString().replace(/[:.]/g, "-")}`);
+  }
+  fs.mkdirSync(path.dirname(targetDir), { recursive: true });
+  fs.symlinkSync(sourceDir, targetDir, process.platform === "win32" ? "junction" : "dir");
+}
 
 export const COMPATIBILITY_HINT = "Olympus backend routes are not mounted. Current Hermes refuses non-bundled dashboard plugin Python backends for user/project plugins; bundle Olympus into Hermes or add a trusted backend-plugin model. Run npm run test:compat for details.";
 
