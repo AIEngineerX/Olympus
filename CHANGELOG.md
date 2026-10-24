@@ -4,6 +4,43 @@ All notable changes to Olympus are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Olympus is now organised around your agents, and keeps only what traces to a
+problem Hermes operators have reported (see `PRODUCT.md`). The 1.1.0 entry
+below was never released; this supersedes its Brief, Fleet and readiness parts.
+
+### Added
+
+- Agents view: a roster with one row per agent (status in a word, current task
+  and live tool, helpers, last activity, a week of runs with the unsuccessful
+  ones marked), one Needs-you queue, and an inspector per agent.
+- Controls through Hermes' own APIs, each confirmed and logged: pause, resume
+  or run a cron job (and pause all of an agent's jobs); answer, retry, reclaim,
+  reassign or assign a Kanban task. `dashboard.olympus.controls: false` turns
+  them off.
+- Performance view: run success, run time, tool failures and cost per agent
+  over 7 or 30 days, and any run step by step. Outcomes follow Hermes' own
+  session status and tool-failure rules.
+- Routes: `GET /agent`, `GET /performance`, `GET /run`, `GET /resolve`,
+  `POST /actions`.
+
+### Changed
+
+- Olympus uses only the Hermes theme variables the Hermes page actually
+  defines, so text and borders resolve in every theme.
+- `/overview` carries only what a screen reads: 13 sections and 23 KB on the
+  test install, down from 30 sections and 95 KB.
+- The live smoke checks the Agents, Performance and Checks views; the
+  performance smoke measures `/overview` and `/performance`.
+
+### Removed
+
+- The readiness score, its trend and its breakdown.
+- Operational evals, Metrics Spine, Trace Spine, Pantheon, Fleet and profile
+  fitness, and the old performance lanes.
+- `GET /tuning`.
+
 ## [1.1.0] - 2026-10-24
 
 ### Added

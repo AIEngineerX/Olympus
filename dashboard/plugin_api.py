@@ -1,4 +1,4 @@
-"""Read-only backend for the Olympus Hermes dashboard plugin."""
+"""Backend for the Olympus Hermes dashboard plugin. Reads Hermes stores read-only; never writes them."""
 from __future__ import annotations
 
 import json

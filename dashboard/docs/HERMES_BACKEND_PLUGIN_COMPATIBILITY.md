@@ -1,6 +1,6 @@
 # Hermes Backend Plugin Compatibility
 
-Olympus is a dashboard tab (`dashboard/dist/*`) plus a read-only FastAPI router
+Olympus is a dashboard tab (`dashboard/dist/*`) plus a FastAPI router
 (`dashboard/plugin_api.py`) that Hermes mounts at `/api/plugins/olympus/`.
 
 ## When Hermes mounts the Olympus API

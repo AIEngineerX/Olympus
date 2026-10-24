@@ -2,7 +2,7 @@
 
 Installed into $HERMES_HOME/scripts/ by `hermes olympus install-alerts`. Hermes
 cron runs it on schedule and delivers whatever it prints; printing nothing makes
-the run silent. It loads the installed Olympus plugin's read-only backend and
+the run silent. It loads the installed Olympus plugin's backend and
 prints only alerts that were not already sent in the last six hours.
 """
 import importlib.util

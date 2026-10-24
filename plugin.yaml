@@ -2,7 +2,7 @@ manifest_version: 1
 name: olympus
 label: Olympus
 version: "1.1.0"
-description: "Read-only operator console for Hermes Agent: what broke, what it cost, and what to fix next across every profile, Kanban board, cron job, and gateway."
+description: "Manage your Hermes agents: every agent on one list, what needs you, and how reliably their runs succeed, with confirmed controls through Hermes' own APIs."
 author: AIEngineerX
 license: MIT
 homepage: https://github.com/AIEngineerX/Olympus

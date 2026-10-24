@@ -6,8 +6,17 @@ the public internet.
 
 ## Current posture
 
-- Read-only by default.
-- No mutation routes.
+- Olympus never writes Hermes files or databases; every Hermes store is opened
+  with a read-only SQLite connection or read as a file.
+- Controls (pause, resume or run a cron job; answer, retry, reclaim or reassign
+  a Kanban task) are executed by Hermes' own HTTP endpoints, called from the
+  browser through the Hermes plugin SDK with the dashboard session token. Each
+  one is confirmed by the operator first and recorded in Olympus' action log.
+- `dashboard.olympus.controls: false` in `config.yaml` turns every control off.
+  `GET /resolve`, which turns a hashed ref into the id Hermes needs, then
+  refuses, and the controls fail closed if the config cannot be read.
+- Olympus' own routes write only to `$HERMES_HOME/plugin-data/olympus/`
+  (`POST /actions` for the action log, `POST`/`DELETE /fixes` for fix tracking).
 - No credential reveal routes.
 - No direct shell execution from HTTP requests.
 - SQLite reads use read-only connections.
@@ -42,8 +51,8 @@ Before publishing or opening a PR:
 1. Run `npm run verify`.
 2. Run `npm run test:visual`.
 3. Run `npm run test:live` for live route, layout, or plugin mounting changes.
-4. Run `npm run test:performance` for live `/overview` and `/tuning` response
-   budget checks.
+4. Run `npm run test:performance` for live `/overview` and `/performance`
+   response budget checks.
 5. Run `npm run test:security` for payload, redaction, labels, config, skills,
    or evidence-source changes.
 6. Run `npm audit --audit-level=moderate`.
@@ -53,4 +62,5 @@ Before publishing or opening a PR:
    local database files are not staged.
 9. Confirm Olympus still uses Hermes dashboard auth and does not add direct
    unauthenticated routes.
-10. Confirm any new write action is gated, explicit, and documented.
+10. Confirm any new control goes through a Hermes endpoint, is confirmed,
+    logged and covered by `dashboard.olympus.controls`, and is documented here.
