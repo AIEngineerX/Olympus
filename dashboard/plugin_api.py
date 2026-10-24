@@ -1076,6 +1076,13 @@ def _cfg_value(config: Dict[str, Any], *keys: str) -> Any:
     return current
 
 
+def _cfg_flag(value: Any, default: bool) -> bool:
+    """A config boolean that falls back to Hermes' default when unset."""
+    if value in (None, ""):
+        return default
+    return _cfg_bool(value)
+
+
 def _cfg_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -1137,17 +1144,21 @@ def _config_max_turns(configs: List[Dict[str, Any]], kanban: Dict[str, Any]) -> 
     return values
 
 
-def _loop_guardrail_enabled(config: Dict[str, Any]) -> bool:
-    for path in (["tool_loop_guardrails"], ["tool_loop_guardrail"], ["agent", "tool_loop_guardrails"], ["agent", "loop_guardrails"]):
-        section = _cfg_value(config, *path)
-        if isinstance(section, dict):
-            if any(_cfg_bool(section.get(key)) for key in ("enabled", "hard_stop", "hard_stop_enabled", "stop_enabled")):
-                return True
-            if any(section.get(key) not in (None, "", 0, False) for key in ("max_repeats", "max_tool_repeats", "max_iterations", "max_tool_calls")):
-                return True
-        elif _cfg_bool(section):
-            return True
-    return False
+def _loop_guardrail_policy(config: Dict[str, Any]) -> Dict[str, bool]:
+    """Effective hard-stop coverage from Hermes' top-level ``tool_loop_guardrails``.
+
+    Mirrors agent/tool_guardrails.ToolCallGuardrailConfig: hard stops are off
+    for attended platforms (cli/tui/desktop) unless ``hard_stop_enabled``, and
+    on for unattended gateway/cron sessions unless
+    ``non_interactive_hard_stop_enabled`` is turned off. An absent section
+    means Hermes' defaults.
+    """
+    section = config.get("tool_loop_guardrails")
+    if not isinstance(section, dict):
+        section = {}
+    hard_stop = _cfg_flag(section.get("hard_stop_enabled"), False)
+    unattended = hard_stop or _cfg_flag(section.get("non_interactive_hard_stop_enabled"), True)
+    return {"interactive": hard_stop, "unattended": unattended}
 
 
 def _auxiliary_route_count(config: Dict[str, Any], env_names: set[str]) -> int:
@@ -1182,7 +1193,12 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
 
     max_turns_values = _config_max_turns(configs, kanban)
     max_turns = max(max_turns_values) if max_turns_values else 0
-    hard_loop_stop = any(_loop_guardrail_enabled(cfg) for cfg in configs)
+    # Each profile runs with its own config.yaml, so coverage holds only when
+    # every scanned config provides it.
+    loop_policies = [_loop_guardrail_policy(cfg) for cfg in configs]
+    hard_loop_stop = all(policy["unattended"] for policy in loop_policies)
+    interactive_hard_stop = all(policy["interactive"] for policy in loop_policies)
+    high_turn_limit = max_turns >= MAX_TURNS_REVIEW_THRESHOLD
     fallback_count = _cfg_any_count(root_config, [["fallback_providers"], ["model", "fallback_providers"], ["providers", "fallback"], ["providers", "fallback_providers"]])
     toolset_count = sum(_cfg_any_count(cfg, [["toolsets"], ["tools", "toolsets"], ["agent", "toolsets"]]) for cfg in configs)
     compression_enabled = any(_cfg_any_bool(cfg, [["compression", "enabled"], ["agent", "compression"], ["memory", "compression"]]) for cfg in configs)
@@ -1211,16 +1227,27 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
             "/config",
             "Hermes config.yaml presence",
         )
-    if max_turns >= MAX_TURNS_REVIEW_THRESHOLD and not hard_loop_stop:
+    if high_turn_limit and not hard_loop_stop:
         add(
             "policy",
             "warning",
-            "High turn limit lacks a visible loop stop",
-            "High agent turn limits need a visible hard loop guardrail so tool thrash stops before it burns time and tokens.",
-            f"max_turns {max_turns} / hard stop not visible",
+            "Unattended sessions have no loop hard stop",
+            "tool_loop_guardrails.non_interactive_hard_stop_enabled is off, so gateway and cron sessions only warn on tool loops while a high turn limit lets them run long. Nobody is present to stop them.",
+            f"max_turns {max_turns} / unattended hard stop off",
             "/config",
             "Hermes agent.max_turns plus tool_loop_guardrails",
-            f"max_turns >= {MAX_TURNS_REVIEW_THRESHOLD} and hard loop stop disabled or missing",
+            f"max_turns >= {MAX_TURNS_REVIEW_THRESHOLD} and non_interactive_hard_stop_enabled false",
+        )
+    elif high_turn_limit and not interactive_hard_stop:
+        add(
+            "policy",
+            "info",
+            "Interactive sessions only warn on tool loops",
+            "Gateway and cron sessions hard-stop on loops, but CLI, TUI and Desktop sessions only warn (Hermes' default). Enable hard_stop_enabled if long attended runs keep looping.",
+            f"max_turns {max_turns} / interactive hard stop off",
+            "/config",
+            "Hermes agent.max_turns plus tool_loop_guardrails",
+            f"max_turns >= {MAX_TURNS_REVIEW_THRESHOLD} and hard_stop_enabled false",
         )
     if browser_private_urls:
         add(
@@ -1278,7 +1305,7 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
             "id": "max_turns",
             "label": "Max Turns",
             "value": max_turns,
-            "state": "warning" if max_turns >= MAX_TURNS_REVIEW_THRESHOLD and not hard_loop_stop else ("active" if max_turns else "unknown"),
+            "state": "warning" if high_turn_limit and not hard_loop_stop else ("active" if max_turns else "unknown"),
             "detail": "Highest configured agent or goal turn limit.",
             "source": "agent.max_turns and Kanban goal_max_turns",
             "recommended_view": "/config",
@@ -1286,9 +1313,9 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
         {
             "id": "loop_guard",
             "label": "Loop Stop",
-            "value": "visible" if hard_loop_stop else "not visible",
-            "state": "ok" if hard_loop_stop else ("warning" if max_turns >= MAX_TURNS_REVIEW_THRESHOLD else "unknown"),
-            "detail": "Hard loop guardrail or repeated-tool stop evidence.",
+            "value": "all sessions" if interactive_hard_stop else ("unattended only" if hard_loop_stop else "off"),
+            "state": "ok" if hard_loop_stop else ("warning" if high_turn_limit else "unknown"),
+            "detail": "Sessions where repeated failing tool calls hard-stop instead of only warning.",
             "source": "tool_loop_guardrails",
             "recommended_view": "/config",
         },
@@ -1340,6 +1367,7 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
             "profile_configs": len(profile_configs),
             "max_turns": max_turns,
             "hard_loop_stop": hard_loop_stop,
+            "interactive_hard_stop": interactive_hard_stop,
             "fallback_providers": fallback_count,
             "toolsets": toolset_count,
             "compression_enabled": compression_enabled,
@@ -3653,7 +3681,7 @@ def build_ops_evals(
                 f"looping: {len(looping_sessions)}",
                 f"tool-heavy: {len(tool_heavy)}",
                 f"context pressure: {len(context_pressure)}",
-                f"loop stop visible: {'no' if high_turn_limit else 'yes'}",
+                f"unattended loop hard stop: {'off' if high_turn_limit else 'on'}",
             ],
             "recommended_view": "/sessions",
             "action_label": _action_label_for_view("/sessions"),

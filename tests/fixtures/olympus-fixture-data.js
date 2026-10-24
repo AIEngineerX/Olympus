@@ -454,7 +454,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         detail: "Tool pressure, context pressure, long threads, and visible loop guardrails.",
         evidence: "2 looping sessions, 4 tool-heavy sessions, 1 context-pressure session, 1 long thread",
         basis: "Hermes session counters plus safe config policy",
-        signals: ["looping: 2", "tool-heavy: 4", "context pressure: 1", "loop stop visible: no"],
+        signals: ["looping: 2", "tool-heavy: 4", "context pressure: 1", "unattended loop hard stop: off"],
         recommended_view: "/sessions",
         action_label: "Open Sessions"
       }
@@ -576,9 +576,9 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       {
         id: "loop_guard",
         label: "Loop Stop",
-        value: "not visible",
+        value: "off",
         state: "warning",
-        detail: "Hard loop guardrail or repeated-tool stop evidence.",
+        detail: "Sessions where repeated failing tool calls hard-stop instead of only warning.",
         source: "tool_loop_guardrails",
         recommended_view: "/config"
       },
@@ -606,10 +606,10 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       {
         kind: "policy",
         severity: "warning",
-        title: "High turn limit lacks a visible loop stop",
-        detail: "High agent turn limits need a visible hard loop guardrail so tool thrash stops before it burns time and tokens.",
-        evidence: "max_turns 120 / hard stop not visible",
-        threshold: "max_turns >= 80 and hard loop stop disabled or missing",
+        title: "Unattended sessions have no loop hard stop",
+        detail: "tool_loop_guardrails.non_interactive_hard_stop_enabled is off, so gateway and cron sessions only warn on tool loops while a high turn limit lets them run long. Nobody is present to stop them.",
+        evidence: "max_turns 120 / unattended hard stop off",
+        threshold: "max_turns >= 80 and non_interactive_hard_stop_enabled false",
         basis: "Hermes agent.max_turns plus tool_loop_guardrails",
         recommended_view: "/config",
         action_label: "Open Config"
@@ -888,7 +888,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         signals: item.id === "reliability" ? ["failed runs: 0", "stale sessions: 0", "errored sessions: 0"] :
           item.id === "routing" ? ["loaded assignees: 0", "unassigned ready: 0", "blocked tasks: 0"] :
           item.id === "skill_use" ? ["bare profiles: 0", "forced-skill tasks: 0", "metadata gaps: 0"] :
-          ["looping: 0", "tool-heavy: 0", "context pressure: 0", "loop stop visible: yes"]
+          ["looping: 0", "tool-heavy: 0", "context pressure: 0", "unattended loop hard stop: on"]
       }))
     };
     data.config_policy = {
@@ -922,9 +922,9 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         {
           id: "loop_guard",
           label: "Loop Stop",
-          value: "visible",
+          value: "unattended only",
           state: "ok",
-          detail: "Hard loop guardrail or repeated-tool stop evidence.",
+          detail: "Sessions where repeated failing tool calls hard-stop instead of only warning.",
           source: "tool_loop_guardrails",
           recommended_view: "/config"
         },
