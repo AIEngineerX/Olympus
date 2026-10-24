@@ -1631,6 +1631,50 @@
   }
 }
 
+.olympus-backlog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+}
+
+.olympus-backlog-group {
+  padding: 12px;
+  border: 1px solid rgba(246, 240, 223, 0.12);
+  border-radius: 6px;
+  background: rgba(6, 9, 14, 0.42);
+}
+
+.olympus-backlog-group-critical {
+  border-color: rgba(239, 107, 90, 0.5);
+}
+
+.olympus-backlog-group-warning {
+  border-color: rgba(239, 196, 92, 0.42);
+}
+
+.olympus-backlog-group h3 {
+  margin: 2px 0 0;
+  font-size: 16px;
+}
+
+.olympus-backlog-group > p {
+  margin: 8px 0;
+  color: rgba(246, 240, 223, 0.78);
+  font-size: 13px;
+}
+
+.olympus-backlog-group > small {
+  color: rgba(246, 240, 223, 0.6);
+  font-size: 12px;
+}
+
+.olympus-backlog-samples {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: rgba(246, 240, 223, 0.7);
+  font-size: 13px;
+}
+
 .olympus-debug {
   margin-top: 16px;
 }

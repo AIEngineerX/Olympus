@@ -1,5 +1,14 @@
 window.__OLYMPUS_FIXTURE_DATA__ = {
   generated_at: "2026-06-06T12:00:00Z",
+  backlog: {
+    summary: { groups: 3, tasks: 14, needs_you: 11 },
+    groups: [
+      { kind: "needs_input", label: "Waiting on a human answer", action: "These tasks are blocked on a decision or answer only a person can give. Answer them in Kanban, oldest first.", severity: "critical", count: 9, oldest_days: 6, stale: 4, repeat_blocks: 1, assignees: [{ assignee: "default", count: 7 }, { assignee: "profile_1", count: 2 }], samples: [{ title: "task:51c0aa93be", board: "default" }, { title: "task:0d2e7bb81f", board: "default" }] },
+      { kind: "capability", label: "Missing a tool, skill or permission", action: "The assignee could not do the work with what it has. Give it the tool, skill or permission, or reassign the task.", severity: "warning", count: 2, oldest_days: 1, stale: 0, repeat_blocks: 0, assignees: [{ assignee: "profile_1", count: 2 }], samples: [{ title: "task:77aa10c3e9", board: "default" }] },
+      { kind: "dependency", label: "Waiting on parent tasks", action: "Not actionable yet: these start when the tasks they depend on finish.", severity: "info", count: 3, oldest_days: 2, stale: 0, repeat_blocks: 0, assignees: [{ assignee: "default", count: 3 }], samples: [] }
+    ],
+    recommended_view: "/kanban"
+  },
   fleet: {
     summary: { profiles: 5, needs_review: 2, roles_missing: 1, roles_unreviewed: 1 },
     profiles: [
