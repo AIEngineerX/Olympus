@@ -34,7 +34,12 @@ const privateLabelPhrases = [
   "investor update",
   "Coordinates the team",
   "job-changelog",
-  "t-pricing"
+  "t-pricing",
+  "Retry the flaky test",
+  "competitor pricing",
+  "checkout test",
+  "403 forbidden",
+  "c-loop"
 ];
 const allowedHermesRoutes = ["/analytics", "/config", "/cron", "/kanban", "/logs", "/profiles", "/sessions", "/skills"];
 
@@ -174,6 +179,36 @@ for (const size of [DESKTOP, MOBILE]) {
     expectClean(await collectVisualMetrics(page, size === MOBILE ? 32 : 24), messages, { name: "checks" });
   });
 }
+
+for (const size of [DESKTOP, MOBILE]) {
+  test(`performance view at ${size.width}px is readable, with a run open`, async ({ page }, testInfo) => {
+    const messages = await openFixture(page, testInfo, size, { state: "noisy", view: "performance", agent: "profile:coder" });
+    await expect(page.locator(".olympus-perf-table tbody tr")).toHaveCount(7);
+    await expect(page.getByRole("complementary", { name: "Performance of Coder" })).toBeVisible();
+    expectClean(await collectVisualMetrics(page, size === MOBILE ? 32 : 24), messages, { name: "performance" });
+
+    await page.goto(fixtureUrl({ state: "noisy", view: "performance", agent: "profile:coder", run: "c-loop" }));
+    await expect(page.getByRole("complementary", { name: "Run detail" }).locator(".olympus-step")).toHaveCount(27);
+    await page.screenshot({ path: testInfo.outputPath(`olympus-run-${size.width}.png`) });
+    expectClean(await collectVisualMetrics(page, size === MOBILE ? 32 : 24), messages, { name: "run" });
+  });
+}
+
+test("performance hides titles and content when labels are hidden", async ({ page }, testInfo) => {
+  const messages = await openFixture(page, testInfo, DESKTOP, { state: "no-labels", view: "performance" });
+  await expect(page.locator(".olympus-perf-table tbody tr")).toHaveCount(7);
+  expect((await collectVisualMetrics(page, 24)).privateLabelLeaks).toEqual([]);
+
+  // The agent with a failed run: its panel, then that run step by step.
+  await page.locator(".olympus-perf-table tbody tr").nth(1).click();
+  const panel = page.locator(".olympus-inspector");
+  await panel.getByRole("button", { name: "Inspect run" }).first().click();
+  const run = page.getByRole("complementary", { name: "Run detail" });
+  await expect(run.locator(".olympus-step").first()).toBeVisible();
+  await expect(run).toContainText("Message content is hidden");
+  expect((await collectVisualMetrics(page, 24)).privateLabelLeaks).toEqual([]);
+  expect(messages).toEqual([]);
+});
 
 test("every custom property the stylesheet uses resolves under Hermes' token set", async ({ page }, testInfo) => {
   const messages = await openFixture(page, testInfo, DESKTOP, { state: "noisy", agent: "profile:default" });

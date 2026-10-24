@@ -5307,8 +5307,29 @@ def collect_agent_activity(profiles: List[Dict[str, Any]], now: Optional[float] 
             "days": [{"day": day, **store["days"].get(day, empty)} for day in days],
             "last_active_ts": store["last_active_ts"],
             "live_tool": store["live_tool"],
+            "runs": run_glance(_store_runs(home / "state.db", since), days),
         }
     return out
+
+
+def run_glance(runs: List[Dict[str, Any]], days: List[str]) -> Dict[str, Any]:
+    """The roster's seven days: runs and unsuccessful runs per day, and the success rate."""
+    top = [r for r in runs if not r["subagent"] and not r["rotated"]]
+    finished = [r for r in top if r["outcome"] != "open"]
+    succeeded = sum(1 for r in finished if r["outcome"] == "succeeded")
+    per_day = {day: {"runs": 0, "unsuccessful": 0} for day in days}
+    for run in top:
+        day = per_day.get(datetime.fromtimestamp(run["started"], tz=timezone.utc).date().isoformat())
+        if day is not None:
+            day["runs"] += 1
+            day["unsuccessful"] += 1 if run["outcome"] in ("failed", "cut_off") else 0
+    return {
+        "days": [per_day[day] for day in days],
+        "runs": len(top),
+        "finished": len(finished),
+        "succeeded": succeeded,
+        "success_rate": round(succeeded / len(finished), 3) if finished else None,
+    }
 
 
 def agent_status(kinds: set[str], live: bool) -> str:
@@ -5412,7 +5433,7 @@ def build_agents(
                 "cron": sum(1 for job in cron_by_profile.get(raw, []) if job.get("enabled")),
             },
             "last_active_at": ts_to_iso(last_active) if last_active else None,
-            "activity_7d": [day["sessions"] for day in activity.get(raw, {}).get("days", [])],
+            "runs_7d": activity.get(raw, {}).get("runs"),
             "issues": len(own_items),
             "setup": agent_setup(profile, gateways),
             "gateway_state": profile.get("gateway_state"),
@@ -5660,6 +5681,340 @@ def build_agent_detail(scan: Dict[str, Any], agent_id: str, actions: List[Dict[s
         "success": agent_success(kanban_items(scan["kanban"], "_runs"), raw, now),
         "fixes": [fix for fix in fixes if fix.get("agent") == agent_id],
         "start_gateway": gateway_start_command(raw) if profile.get("gateway_state") != "running" else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Performance: how well each agent's runs go over 7 or 30 days.
+#
+# A run is a top-level session. Its outcome uses Hermes' own rule
+# (hermes_state_sessions.classify_session_status: the session's last message)
+# and a failed tool call uses Hermes' own display rule
+# (agent/display._detect_tool_failure). Hermes stores no per-call latency, so
+# run time is a session's start-to-end time.
+# ---------------------------------------------------------------------------
+
+PERFORMANCE_DAYS = (7, 30)
+# Sessions that ended by rolling over into another session, not by finishing.
+ROTATED_END_REASONS = {"compression", "branched", "superseded_by_repair", "orphaned_compression"}
+FAILED_END_REASONS = {"cron_incomplete_no_output"}
+ERROR_FINISH_REASONS = {"error", "agent_error", "content_filter"}
+FILE_MUTATING_TOOLS = {"write_file", "patch"}
+TOOL_RESULT_SCAN_LIMIT = 20000
+TOOL_RESULT_FULL_CHARS = 20000
+PERFORMANCE_TOOLS_SHOWN = 10
+PERFORMANCE_RUNS_SHOWN = 6
+RUN_STEP_LIMIT = 400
+FAILURE_MARKER_RE = re.compile(r'"(?:error|failed)"(?!\s*:\s*(?:null|false|0|""|\[\]|\{\})\s*(?:[,}\]]|$))', re.IGNORECASE)
+EXIT_CODE_RE = re.compile(r'"exit_code"\s*:\s*(-?\d+)')
+
+
+def run_outcome(ended: Any, end_reason: Any, last_role: Any, pending_tool_calls: bool, finish_reason: Any) -> str:
+    """succeeded / failed / cut_off for a finished run, open while it runs."""
+    if not ended:
+        return "open"
+    if str(end_reason or "") in FAILED_END_REASONS or str(finish_reason or "").strip().lower() in ERROR_FINISH_REASONS:
+        return "failed"
+    role = str(last_role or "").strip().lower()
+    if role in ("user", "tool") or (role == "assistant" and pending_tool_calls):
+        return "cut_off"
+    return "succeeded"
+
+
+def _has_failure_marker(text: str) -> bool:
+    head = text[:600]
+    return any(m.start() < 500 for m in FAILURE_MARKER_RE.finditer(head)) or text.startswith("Error")
+
+
+def tool_result_failed(tool_name: str, content: Any, truncated: bool = False) -> bool:
+    """Whether a stored tool result is a failure, by Hermes' own display rule.
+
+    ``truncated`` results (over TOOL_RESULT_FULL_CHARS) cannot be parsed as
+    JSON, so only their head is read: an exit code, ``"success": false`` or a
+    failure marker.
+    """
+    if not isinstance(content, str) or not content:
+        return False
+    text = content.strip()
+    if truncated:
+        code = EXIT_CODE_RE.search(text[:600]) if tool_name == "terminal" else None
+        if code:
+            return int(code.group(1)) != 0
+        return '"success": false' in text[:600] or _has_failure_marker(text)
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return _has_failure_marker(text)
+    if not isinstance(data, dict):
+        return _has_failure_marker(text) if isinstance(data, str) else False
+    if data.get("guardrail_refusal") is True:
+        return False
+    if tool_name in FILE_MUTATING_TOOLS and not data.get("error"):
+        if (tool_name == "write_file" and "bytes_written" in data) or (tool_name == "patch" and data.get("success") is True):
+            return False
+    if data.get("user_summary"):
+        return True
+    if tool_name == "terminal":
+        return data.get("exit_code") not in (None, 0)
+    error = data.get("error") or data.get("message")
+    if error and (data.get("success") is False or "error" in data):
+        return True
+    if str(data.get("status", "")).lower() in ("failed", "error"):
+        return True
+    items = data.get("results")
+    return isinstance(items, list) and bool(items) and all(isinstance(i, dict) for i in items) and all(i.get("error") for i in items)
+
+
+def _store_runs(db: Path, since: float, session_id: Optional[str] = None, now: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Every session started since ``since`` (or the one ``session_id``) with its outcome, cost and size."""
+    now = time.time() if now is None else now
+    if not db.exists():
+        return []
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        cols = table_columns(con, "sessions")
+        message_cols = table_columns(con, "messages")
+        if not {"id", "started_at"}.issubset(cols):
+            return []
+        wanted = [c for c in (
+            "id", "source", "title", "started_at", "ended_at", "last_activity_at", "end_reason", "tool_call_count", "api_call_count",
+            "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+            "actual_cost_usd", "estimated_cost_usd", "parent_session_id",
+        ) if c in cols]
+        last = ""
+        if {"id", "session_id", "role"}.issubset(message_cols):
+            finish = "m.finish_reason" if "finish_reason" in message_cols else "NULL"
+            pending = "(m.tool_calls IS NOT NULL AND m.tool_calls NOT IN ('', '[]'))" if "tool_calls" in message_cols else "0"
+            last = (f", m.role AS last_role, {finish} AS last_finish, {pending} AS last_pending "
+                    "FROM sessions s LEFT JOIN messages m ON m.id = (SELECT MAX(id) FROM messages WHERE session_id = s.id)")
+        else:
+            last = ", NULL AS last_role, NULL AS last_finish, 0 AS last_pending FROM sessions s"
+        where, params = ("s.id = ?", (session_id,)) if session_id is not None else ("s.started_at >= ?", (since,))
+        rows = con.execute(
+            f"SELECT {', '.join('s.' + c for c in wanted)}{last} WHERE {where} ORDER BY s.started_at",
+            params,
+        ).fetchall()
+    except sqlite3.Error as exc:
+        log_read_warning("performance run scan failed", exc)
+        return []
+    finally:
+        con.close()
+    runs: List[Dict[str, Any]] = []
+    for r in rows:
+        session_id = row_value(r, "id")
+        started = safe_float(row_value(r, "started_at"))
+        # A session nobody closed but that has been quiet for a day is over:
+        # Hermes reaps it the same way. It ends at its last activity.
+        quiet_since = safe_float(row_value(r, "last_activity_at")) or started
+        ended = safe_float(row_value(r, "ended_at")) or (quiet_since if now - quiet_since > STALE_SECONDS else 0.0)
+        actual = row_value(r, "actual_cost_usd")
+        cost = safe_float(actual if actual not in (None, "") else row_value(r, "estimated_cost_usd"))
+        source = str(row_value(r, "source") or "session")
+        runs.append({
+            "_id": str(session_id),
+            "ref": str(session_id) if EXPOSE_LOCAL_LABELS else safe_id(session_id, "session"),
+            "label": public_label(row_value(r, "title"), source, "session"),
+            "source": source,
+            "subagent": source == "subagent",
+            "rotated": str(row_value(r, "end_reason") or "") in ROTATED_END_REASONS,
+            "started": started,
+            "ended": ended or None,
+            "duration": max(0.0, ended - started) if ended and started else None,
+            "outcome": run_outcome(ended, row_value(r, "end_reason"), row_value(r, "last_role"), bool(row_value(r, "last_pending")), row_value(r, "last_finish")),
+            "end_reason": row_value(r, "end_reason"),
+            "tool_calls": safe_int(row_value(r, "tool_call_count")),
+            "api_calls": safe_int(row_value(r, "api_call_count")),
+            "tokens": sum(safe_int(row_value(r, c)) for c in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")),
+            "cost": cost,
+        })
+    return runs
+
+
+def _store_tool_outcomes(db: Path, since: float) -> Dict[str, Dict[str, int]]:
+    """Calls and failures per tool for sessions started since ``since`` (newest results first)."""
+    if not db.exists():
+        return {}
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        message_cols = table_columns(con, "messages")
+        if not {"session_id", "tool_name", "content", "role"}.issubset(message_cols):
+            return {}
+        rows = con.execute(
+            "SELECT m.tool_name, length(m.content) AS size, "
+            f"CASE WHEN length(m.content) <= {TOOL_RESULT_FULL_CHARS} THEN m.content ELSE substr(m.content, 1, 600) END AS body "
+            "FROM messages m JOIN sessions s ON s.id = m.session_id "
+            "WHERE s.started_at >= ? AND m.role = 'tool' AND m.tool_name IS NOT NULL AND m.tool_name != '' "
+            "ORDER BY m.id DESC LIMIT ?",
+            (since, TOOL_RESULT_SCAN_LIMIT),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        log_read_warning("performance tool scan failed", exc)
+        return {}
+    finally:
+        con.close()
+    out: Dict[str, Dict[str, int]] = {}
+    for row in rows:
+        name = redact_text(row["tool_name"], 60)
+        stats = out.setdefault(name, {"calls": 0, "failures": 0})
+        stats["calls"] += 1
+        stats["failures"] += 1 if tool_result_failed(str(row["tool_name"]), row["body"], safe_int(row["size"]) > TOOL_RESULT_FULL_CHARS) else 0
+    return out
+
+
+def percentile(sorted_values: List[float], share: float) -> Optional[float]:
+    """Nearest-rank percentile of an ascending list."""
+    if not sorted_values:
+        return None
+    return sorted_values[max(0, math.ceil(len(sorted_values) * share) - 1)]
+
+
+def _public_run(run: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "ref": run["ref"], "label": run["label"], "source": run["source"], "outcome": run["outcome"],
+        "started_at": ts_to_iso(run["started"]), "duration_seconds": run["duration"],
+        "tool_calls": run["tool_calls"], "tokens": run["tokens"], "cost_usd": round(run["cost"], 4),
+    }
+
+
+def summarize_runs(runs: List[Dict[str, Any]], tools: Dict[str, Dict[str, int]], days: List[str]) -> Dict[str, Any]:
+    """One agent's performance over the window: outcomes, run time, size, cost and tools."""
+    top = [r for r in runs if not r["subagent"] and not r["rotated"]]
+    finished = [r for r in top if r["outcome"] != "open"]
+    counts = {name: sum(1 for r in top if r["outcome"] == name) for name in ("succeeded", "failed", "cut_off", "open")}
+    durations = sorted(r["duration"] for r in finished if r["duration"] is not None)
+    tool_calls = sum(f["calls"] for f in tools.values())
+    tool_failures = sum(f["failures"] for f in tools.values())
+    daily: List[Dict[str, Any]] = []
+    for day in days:
+        on_day = [r for r in top if datetime.fromtimestamp(r["started"], tz=timezone.utc).date().isoformat() == day]
+        day_durations = sorted(r["duration"] for r in on_day if r["duration"] is not None and r["outcome"] != "open")
+        daily.append({
+            "day": day,
+            "runs": len(on_day),
+            "succeeded": sum(1 for r in on_day if r["outcome"] == "succeeded"),
+            "failed": sum(1 for r in on_day if r["outcome"] == "failed"),
+            "cut_off": sum(1 for r in on_day if r["outcome"] == "cut_off"),
+            "open": sum(1 for r in on_day if r["outcome"] == "open"),
+            "median_seconds": percentile(day_durations, 0.5),
+            "tokens": sum(r["tokens"] for r in on_day),
+            "cost_usd": round(sum(r["cost"] for r in on_day), 4),
+        })
+    return {
+        "runs": len(top),
+        "subagent_runs": sum(1 for r in runs if r["subagent"]),
+        **counts,
+        "success_rate": round(counts["succeeded"] / len(finished), 3) if finished else None,
+        "median_seconds": percentile(durations, 0.5),
+        "p90_seconds": percentile(durations, 0.9),
+        "tool_calls_per_run": round(sum(r["tool_calls"] for r in top) / len(top), 1) if top else 0,
+        "tokens_per_run": int(sum(r["tokens"] for r in top) / len(top)) if top else 0,
+        "cost_usd": round(sum(r["cost"] for r in runs), 4),
+        "tool_calls": tool_calls,
+        "tool_failures": tool_failures,
+        "tool_error_rate": round(tool_failures / tool_calls, 3) if tool_calls else None,
+        "tools": [
+            {"tool": name, "calls": stats["calls"], "failures": stats["failures"],
+             "error_rate": round(stats["failures"] / stats["calls"], 3)}
+            for name, stats in sorted(tools.items(), key=lambda kv: (-kv[1]["calls"], kv[0]))[:PERFORMANCE_TOOLS_SHOWN]
+        ],
+        "daily": daily,
+        "slowest": [_public_run(r) for r in sorted((r for r in finished if r["duration"] is not None), key=lambda r: -r["duration"])[:PERFORMANCE_RUNS_SHOWN]],
+        "failed_runs": [_public_run(r) for r in sorted((r for r in finished if r["outcome"] in ("failed", "cut_off")), key=lambda r: -r["started"])[:PERFORMANCE_RUNS_SHOWN]],
+    }
+
+
+def build_performance(profiles: List[Dict[str, Any]], days: int, now: Optional[float] = None) -> Dict[str, Any]:
+    """Per-agent performance for the last ``days`` UTC days, plus fleet totals."""
+    now = time.time() if now is None else now
+    day_list = [
+        datetime.fromtimestamp(now - offset * 86400, tz=timezone.utc).date().isoformat()
+        for offset in range(days - 1, -1, -1)
+    ]
+    since = datetime.fromisoformat(day_list[0]).replace(tzinfo=timezone.utc).timestamp()
+    agents: List[Dict[str, Any]] = []
+    all_runs: List[Dict[str, Any]] = []
+    all_tools: Dict[str, Dict[str, int]] = {}
+    for profile in profiles:
+        db = Path(str(profile["_path"])) / "state.db"
+        runs = _store_runs(db, since)
+        tools = _store_tool_outcomes(db, since)
+        all_runs.extend(runs)
+        for name, stats in tools.items():
+            merged = all_tools.setdefault(name, {"calls": 0, "failures": 0})
+            merged["calls"] += stats["calls"]
+            merged["failures"] += stats["failures"]
+        agents.append({"id": profile["id"], "label": profile["label"], "avatar": agent_avatar(str(profile["label"])), **summarize_runs(runs, tools, day_list)})
+    fleet = summarize_runs(all_runs, all_tools, day_list)
+    return {
+        "days": days,
+        "generated_at": now_iso(),
+        "fleet": {k: v for k, v in fleet.items() if k not in ("slowest", "failed_runs")},
+        "agents": agents,
+        "basis": (
+            "A run is a top-level session (subagents and sessions that rolled over are counted separately). "
+            "Outcome follows Hermes: a run failed when it ended on a provider or agent error, and was cut off "
+            "when it ended waiting on a tool or a reply. Run time is start to end; Hermes records no per-call latency. "
+            "Tool failures use the rule Hermes uses to mark failed tool calls."
+        ),
+    }
+
+
+def build_run_detail(ref: str) -> Optional[Dict[str, Any]]:
+    """One run step by step: who spoke, which tool, how long each step took."""
+    found = resolve_session_ref(ref)
+    if found is None:
+        return None
+    profile = next((p for p in collect_profiles() if p["name"] == found["profile"]), None)
+    if profile is None:
+        return None
+    db = Path(str(profile["_path"])) / "state.db"
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        session_cols = table_columns(con, "sessions")
+        message_cols = table_columns(con, "messages")
+        run = next(iter(_store_runs(db, 0.0, found["session_id"])), None)
+        wanted = [c for c in ("id", "role", "tool_name", "timestamp", "token_count", "finish_reason", "content") if c in message_cols]
+        rows = con.execute(
+            f"SELECT {', '.join(wanted)} FROM messages WHERE session_id = ? ORDER BY id LIMIT ?",
+            (found["session_id"], RUN_STEP_LIMIT),
+        ).fetchall() if {"id", "role"}.issubset(message_cols) else []
+        total = con.execute("SELECT COUNT(*) FROM messages WHERE session_id = ?", (found["session_id"],)).fetchone()[0] if "session_id" in message_cols else 0
+        has_end = "ended_at" in session_cols
+    except sqlite3.Error as exc:
+        log_read_warning("run detail read failed", exc)
+        return None
+    finally:
+        con.close()
+    if run is None or not has_end:
+        return None
+    steps: List[Dict[str, Any]] = []
+    previous: Optional[float] = run["started"]
+    for row in rows:
+        ts = safe_float(row_value(row, "timestamp")) or None
+        role = str(row_value(row, "role") or "")
+        tool = row_value(row, "tool_name")
+        content = row_value(row, "content")
+        steps.append({
+            "at": ts_to_iso(ts),
+            "role": role,
+            "tool": redact_text(tool, 60) if tool else None,
+            "failed": role == "tool" and tool_result_failed(str(tool or ""), content),
+            "seconds": round(ts - previous, 1) if ts and previous else None,
+            "tokens": safe_int(row_value(row, "token_count")) or None,
+            "error": str(row_value(row, "finish_reason") or "").lower() in ERROR_FINISH_REASONS,
+            "preview": redact_text(content, 160) if EXPOSE_LOCAL_LABELS and isinstance(content, str) else None,
+        })
+        previous = ts or previous
+    return {
+        "run": {**_public_run(run), "end_reason": run["end_reason"], "api_calls": run["api_calls"], "subagent": run["subagent"]},
+        "agent": {"id": profile["id"], "label": profile["label"]},
+        "steps": steps,
+        "steps_total": int(total),
+        "tool_failures": sum(1 for s in steps if s["failed"]),
+        "content_shown": EXPOSE_LOCAL_LABELS,
     }
 
 
@@ -6072,6 +6427,23 @@ def agent(ref: str) -> Dict[str, Any]:
     if detail is None:
         return {"found": False}
     return {"found": True, "generated_at": now_iso(), "controls": controls_enabled(), **detail}
+
+
+@router.get("/performance")
+def performance(days: int = 7) -> Dict[str, Any]:
+    """Per-agent run outcomes, run time, size, cost and tool failures (7 or 30 days)."""
+    refresh_expose_local_labels()
+    if days not in PERFORMANCE_DAYS:
+        return {"error": f"days must be one of {', '.join(str(d) for d in PERFORMANCE_DAYS)}"}
+    return build_performance(collect_profiles(), days)
+
+
+@router.get("/run")
+def run_detail(ref: str) -> Dict[str, Any]:
+    """One run step by step (``ref`` is a public session ref)."""
+    refresh_expose_local_labels()
+    detail = build_run_detail(ref)
+    return {"found": False} if detail is None else {"found": True, **detail}
 
 
 def resolve_ref(kind: str, ref: str, board: Optional[str] = None) -> Optional[Dict[str, str]]:

@@ -150,6 +150,19 @@
   color: var(--olympus-muted);
 }
 
+.olympus-views,
+.olympus-range {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.olympus-view-current,
+.olympus-view-current:hover {
+  border-color: var(--olympus-fg);
+  background: var(--color-muted);
+  font-weight: 600;
+}
+
 .olympus-key {
   display: block;
   margin: 12px 0 16px;
@@ -643,15 +656,21 @@
 }
 
 .olympus-cell-agent {
-  display: flex;
-  align-items: center;
-  gap: 10px;
   min-width: 180px;
+  white-space: nowrap;
+}
+
+/* A table cell stays a table cell (a flex cell breaks row heights); the
+   avatar and name sit inline beside each other. */
+.olympus-cell-agent > .olympus-avatar {
+  vertical-align: middle;
 }
 
 .olympus-agent-name {
-  display: grid;
-  min-width: 0;
+  display: inline-grid;
+  max-width: calc(100% - 42px);
+  margin-left: 10px;
+  vertical-align: middle;
 }
 
 .olympus-agent-name small,
@@ -716,6 +735,108 @@
 
 .olympus-activity-today {
   background: var(--olympus-fg);
+}
+
+.olympus-activity-bar {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.olympus-activity-bad {
+  flex: none;
+  background: var(--color-destructive);
+}
+
+.olympus-runs {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.olympus-rate {
+  display: inline-grid;
+  font-weight: 600;
+}
+
+.olympus-rate small,
+.olympus-perf-table td small {
+  display: block;
+  color: var(--olympus-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.olympus-rate-low,
+.olympus-facts dd.olympus-rate-low {
+  color: var(--color-warning);
+}
+
+.olympus-rate-bad,
+.olympus-facts dd.olympus-rate-bad {
+  color: var(--color-destructive);
+}
+
+.olympus-series-ok {
+  background: color-mix(in srgb, var(--olympus-fg) 40%, transparent);
+}
+
+.olympus-series-cut {
+  background: var(--color-warning);
+}
+
+.olympus-series-failed {
+  background: var(--color-destructive);
+}
+
+.olympus-series-open {
+  background: color-mix(in srgb, var(--olympus-fg) 14%, transparent);
+}
+
+.olympus-performance {
+  display: grid;
+  gap: 16px;
+}
+
+.olympus-perf-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.olympus-perf-basis {
+  display: block;
+  max-width: 90ch;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.olympus-run-head {
+  display: grid;
+  gap: 6px;
+}
+
+.olympus-run-head h2 {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.olympus-run-head > .olympus-link-button {
+  justify-self: start;
+}
+
+.olympus-run-outcome {
+  color: var(--olympus-muted);
+  font-size: 13px;
+}
+
+.olympus-run-outcome.olympus-error-text {
+  color: var(--color-destructive);
+}
+
+.olympus-run-outcome.olympus-attention-text {
+  color: var(--color-warning);
 }
 
 /* With the inspector open the roster keeps its decision columns. */
