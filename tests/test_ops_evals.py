@@ -16,8 +16,8 @@ class OpsEvalTest(unittest.TestCase):
                 "totals": {"blocked": 2, "ready": 2},
                 "attention": [{"severity": "warning", "label": "Blocked work"}],
                 "assignee_load": [{"assignee": "Default", "open": 8, "running": 3, "blocked": 2}],
-                "recent_tasks": [{"status": "ready", "assignee": "unassigned"}],
-                "recent_runs": [{"status": "failed", "outcome": "crashed"}],
+                "_tasks": [{"status": "ready", "assignee": "unassigned"}],
+                "_runs": [{"status": "failed", "outcome": "crashed"}],
             },
             skill_coverage={"summary": {"zero_skill_profiles": 1, "forced_skill_tasks": 2}},
             skill_hygiene={"summary": {"forced_skill_metadata_gaps": 1, "hub_audit_warn": 1, "hub_audit_fail": 1}},
@@ -42,7 +42,7 @@ class OpsEvalTest(unittest.TestCase):
     def test_operational_evals_pass_for_clean_operational_inputs(self):
         payload = plugin_api.build_ops_evals(
             sessions=[{"state": "completed", "tool_call_count": 5, "message_count": 8, "avg_input_tokens": 1200}],
-            kanban={"open": 0, "totals": {"blocked": 0, "ready": 0}, "recent_runs": [], "recent_tasks": []},
+            kanban={"open": 0, "totals": {"blocked": 0, "ready": 0}, "_runs": [], "_tasks": []},
             skill_coverage={"summary": {"zero_skill_profiles": 0, "forced_skill_tasks": 0}},
             skill_hygiene={"summary": {"forced_skill_metadata_gaps": 0, "hub_audit_warn": 0, "hub_audit_fail": 0}},
             config_policy={"summary": {"max_turns": 40, "hard_loop_stop": True, "browser_private_flags": 0}},

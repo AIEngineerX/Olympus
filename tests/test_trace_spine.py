@@ -23,7 +23,7 @@ class TraceSpineTest(unittest.TestCase):
                 "transcript": "private transcript content must not appear",
             }],
             kanban={
-                "recent_tasks": [{
+                "_tasks": [{
                     "id": task_ref,
                     "board": "default",
                     "title": task_ref,
@@ -33,7 +33,7 @@ class TraceSpineTest(unittest.TestCase):
                     "consecutive_failures": 2,
                     "forced_skill_count": 1,
                 }],
-                "recent_runs": [{
+                "_runs": [{
                     "id": run_ref,
                     "task_id": task_ref,
                     "status": "failed",
@@ -75,7 +75,7 @@ class TraceSpineTest(unittest.TestCase):
                 "messages": ["raw user prompt"],
             }],
             kanban={
-                "recent_tasks": [{
+                "_tasks": [{
                     "id": task_ref,
                     "board": "default",
                     "title": task_ref,
@@ -83,7 +83,7 @@ class TraceSpineTest(unittest.TestCase):
                     "assignee": "profile:default",
                     "session_ref": session_ref,
                 }],
-                "recent_runs": [],
+                "_runs": [],
                 "recent_events": [],
             },
         )
