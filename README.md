@@ -14,21 +14,25 @@ problems it targets, and the Hermes issues that show people have them, are in
 - **Agents.** One row per agent (Hermes profile): status in a word, the task and
   tool it is on now, its helpers, last activity, and a week of runs with the
   failed ones marked. Above it, **Needs you**: every question waiting on an
-  answer, failed or overdue cron job, stalled or failing worker, blocked or
-  unassigned task, offline gateway, and looping or expensive run, once each,
-  with its action. Pick an agent to open its inspector: what it did recently,
+  answer (with the question the agent asked), failed or overdue cron job
+  (including a run Hermes recorded as OK in which every tool call failed),
+  stalled or failing worker, blocked or unassigned task, offline gateway, and
+  looping or expensive run, once each, with its action. Pick an agent to open
+  its inspector: what it did recently,
   its scheduled jobs and Kanban work, how it works, and whether your fixes
   worked.
 - **Performance.** For 7 or 30 days: runs, how many succeeded, typical and slow
   run time, tool calls that failed, and cost, per agent and across all of them.
-  Any run opens step by step.
+  Outcomes follow Hermes' own session status, except that a scheduled run in
+  which every tool call failed counts as failed. Any run opens step by step.
 - **Checks.** Findings across your agents, Kanban backlog grouped by who has to
   act, skill hygiene, configuration risks, and where spend goes.
 
 ## Controls
 
-From the queue and the inspector you can pause, resume or run a cron job, and
-answer, retry, reclaim or reassign a Kanban task. Every control says exactly
+From the queue and the inspector you can pause, resume or run a cron job (or
+pause all of an agent's jobs), and answer, retry, reclaim, reassign or assign a
+Kanban task. Every control says exactly
 what it will do and waits for you to confirm. Hermes' own API does the work
 (`/api/cron/jobs/...` and the Kanban plugin's task routes), and Olympus records
 each action in its log.
