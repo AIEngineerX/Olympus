@@ -8,8 +8,8 @@ the public internet.
 
 - Olympus never writes Hermes files or databases; every Hermes store is opened
   with a read-only SQLite connection or read as a file.
-- Controls (pause, resume or run a cron job; answer, retry, reclaim or reassign
-  a Kanban task) are executed by Hermes' own HTTP endpoints, called from the
+- Controls (pause, resume or run a cron job; answer, retry, reclaim, reassign
+  or assign a Kanban task) are executed by Hermes' own HTTP endpoints, called from the
   browser through the Hermes plugin SDK with the dashboard session token. Each
   one is confirmed by the operator first and recorded in Olympus' action log.
 - `dashboard.olympus.controls: false` in `config.yaml` turns every control off.

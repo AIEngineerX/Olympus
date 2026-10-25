@@ -29,7 +29,7 @@
 
 Olympus reads local Hermes state (sessions, Kanban, cron, config, log tails)
 and never writes Hermes files or databases. Its controls (pause, resume or run
-a cron job; answer, retry, reclaim or reassign a Kanban task) each ask you to
+a cron job; answer, retry, reclaim, reassign or assign a Kanban task) each ask you to
 confirm, then call Hermes' own API. To turn them off, or to show session titles,
 task titles, cron names, model labels and paths on a private machine (hidden by
 default), set this in `config.yaml`:
