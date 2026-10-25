@@ -460,6 +460,11 @@
   color: var(--olympus-muted);
 }
 
+.olympus-popover-question {
+  color: var(--olympus-fg);
+  overflow-wrap: anywhere;
+}
+
 .olympus-popover-error,
 .olympus-error-text {
   color: var(--color-destructive);

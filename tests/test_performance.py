@@ -169,6 +169,37 @@ class PerformanceTest(unittest.TestCase):
         # Open and active ten minutes ago: still running.
         self.assertEqual((runs["open-1"]["outcome"], runs["open-1"]["duration"]), ("open", None))
 
+    def test_a_cron_run_whose_every_tool_call_failed_counts_as_failed(self):
+        # The live test's digest: Hermes booked cron_complete, but the only
+        # tool call (read_file) failed and the reply just reported it.
+        con = sqlite3.connect(self.home / "state.db")
+        con.executemany(
+            "INSERT INTO sessions (id, source, title, started_at, ended_at, end_reason) VALUES (?, ?, ?, ?, ?, 'cron_complete')",
+            [("cron-all", "cron", "Status digest", self.now - 1200, self.now - 1180),
+             ("cron-some", "cron", "Status digest", self.now - 900, self.now - 870),
+             ("cli-all", "cli", "Look for a file", self.now - 800, self.now - 790)],
+        )
+        missing = json.dumps({"content": "", "error": "File not found: status.md"})
+        con.executemany(
+            "INSERT INTO messages (session_id, role, content, tool_name, timestamp, finish_reason) VALUES (?, ?, ?, ?, ?, ?)",
+            [("cron-all", "tool", missing, "read_file", self.now - 1190, None),
+             ("cron-all", "assistant", "File not found: status.md", None, self.now - 1181, "stop"),
+             ("cron-some", "tool", missing, "read_file", self.now - 890, None),
+             ("cron-some", "tool", json.dumps({"content": "two items", "total_lines": 2}), "read_file", self.now - 880, None),
+             ("cron-some", "assistant", "Two open items.", None, self.now - 871, "stop"),
+             ("cli-all", "tool", missing, "read_file", self.now - 795, None),
+             ("cli-all", "assistant", "That file does not exist.", None, self.now - 791, "stop")],
+        )
+        con.commit()
+        con.close()
+
+        runs = {r["_id"]: r["outcome"] for r in plugin_api._store_runs(self.home / "state.db", 0.0)}
+
+        # A scheduled run with no successful tool call did not do its job; one
+        # that recovered did, and a chat that only reports a missing file is fine.
+        self.assertEqual((runs["cron-all"], runs["cron-some"], runs["cli-all"]), ("failed", "succeeded", "succeeded"))
+        self.assertIn("every tool call", plugin_api.performance(7)["basis"])
+
     def test_thirty_days_include_last_month_and_bad_ranges_are_refused(self):
         self.assertEqual(plugin_api.performance(30)["agents"][0]["runs"], 6)
         self.assertEqual(plugin_api.performance(14), {"error": "days must be one of 7, 30"})

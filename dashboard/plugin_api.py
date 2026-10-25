@@ -45,6 +45,9 @@ RECENT_SECONDS = 60 * 60
 ACTIVE_SECONDS = 60 * 10
 KANBAN_READY_STALE_SECONDS = 60 * 60 * 24
 KANBAN_HEARTBEAT_STALE_SECONDS = 60 * 60
+# Hermes closes a cron session, delivers, then stamps the job's last_run_at;
+# a session that ended longer before that stamp is not the last run.
+CRON_RUN_SETTLE_SECONDS = 5 * 60
 TOOL_HEAVY_THRESHOLD = 20
 LONG_THREAD_THRESHOLD = 40
 OVERLOADED_OPEN_THRESHOLD = 5
@@ -1643,12 +1646,62 @@ def collect_cron(profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[s
     out: List[Dict[str, Any]] = []
     for raw_profile, home in profile_stores(profiles):
         data = read_json(home / "cron" / "jobs.json") or {}
-        jobs = data.get("jobs") if isinstance(data, dict) else []
-        out.extend(_cron_rows(as_list(jobs), raw_profile, profile_public_names))
+        jobs = as_list(data.get("jobs") if isinstance(data, dict) else [])
+        out.extend(_cron_rows(jobs, raw_profile, profile_public_names, _cron_last_run_tool_failures(home / "state.db", jobs)))
     return out
 
 
-def _cron_rows(jobs: List[Any], raw_profile: str, profile_public_names: Dict[str, str]) -> List[Dict[str, Any]]:
+def _cron_last_run_tool_failures(db: Path, jobs: List[Any]) -> Dict[str, Dict[str, Any]]:
+    """Per job id: its last run, when Hermes recorded it OK but every tool call failed.
+
+    Hermes titles each cron session "<job name> · <time>" before closing it
+    and sets the job's last_run_at just after (cron/scheduler.py
+    _finalize_cron_session), so the last run is the newest session with that
+    title that ended shortly before last_run_at.
+    """
+    wanted: Dict[str, tuple[str, float]] = {}
+    for job in jobs:
+        if not isinstance(job, dict) or not job.get("id") or job.get("no_agent") or job.get("last_status") != "ok":
+            continue
+        last_run = parse_iso_ts(job.get("last_run_at"))
+        if last_run is None:
+            continue
+        job_id = str(job["id"])
+        base = " ".join(str(job.get("name") or job.get("prompt") or job_id).split())[:60].strip() or f"cron {job_id}"
+        wanted[job_id] = (f"{base} · ", last_run)
+    if not wanted or not db.exists():
+        return {}
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    out: Dict[str, Dict[str, Any]] = {}
+    try:
+        if not {"id", "source", "title", "started_at", "ended_at"}.issubset(table_columns(con, "sessions")):
+            return {}
+        for job_id, (prefix, last_run) in wanted.items():
+            row = con.execute(
+                "SELECT id, ended_at FROM sessions WHERE source = 'cron' AND started_at <= ? AND substr(title, 1, ?) = ? "
+                "ORDER BY started_at DESC LIMIT 1",
+                (last_run, len(prefix), prefix),
+            ).fetchone()
+            if row is None or last_run - safe_float(row["ended_at"]) > CRON_RUN_SETTLE_SECONDS:
+                continue
+            failed = _sessions_with_every_tool_failed(con, "s.id = ?", (row["id"],)).get(str(row["id"]))
+            if failed:
+                out[job_id] = failed
+    except sqlite3.Error as exc:
+        log_read_warning("cron last-run scan failed", exc)
+        return {}
+    finally:
+        con.close()
+    return out
+
+
+def _cron_rows(
+    jobs: List[Any],
+    raw_profile: str,
+    profile_public_names: Dict[str, str],
+    tool_failures: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     public_name = public_profile_label(raw_profile, profile_public_names) or "default"
     for job in jobs:
@@ -1658,6 +1711,13 @@ def _cron_rows(jobs: List[Any], raw_profile: str, profile_public_names: Dict[str
         enabled = bool(job.get("enabled", True))
         error = job.get("last_error") or job.get("last_delivery_error")
         state = "error" if error or last_status == "error" else ("scheduled" if enabled else "paused")
+        tools_failed = None if state == "error" else tool_failures.get(str(job.get("id")))
+        last_error = public_error(error)
+        if tools_failed:
+            state = "error"
+            calls = tools_failed["calls"]
+            which = "its only tool call" if calls == 1 else f"all {calls} of its tool calls"
+            last_error = f"Hermes recorded the run as OK, but {which} failed. {public_error(tools_failed['first'])}"
         job_ref = public_ref(job.get("id"), "cron") or "cron"
         out.append({
             "id": job_ref,
@@ -1670,7 +1730,8 @@ def _cron_rows(jobs: List[Any], raw_profile: str, profile_public_names: Dict[str
             "next_run_at": ts_to_iso(job.get("next_run_at")),
             "last_run_at": ts_to_iso(job.get("last_run_at")),
             "last_status": last_status,
-            "last_error": public_error(error),
+            "last_error": last_error,
+            "tools_failed": bool(tools_failed),
             "profile": public_name,
             "_profile": raw_profile,
             "no_agent": bool(job.get("no_agent")),
@@ -1946,17 +2007,25 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                     open_params + (KANBAN_CLOSED_TASK_SAMPLE,),
                 ).fetchall())
 
-            # When each blocked task last blocked: the task row has no
-            # timestamp for it, task_events does.
+            # When each blocked task last blocked, and why (the agent's
+            # question for needs_input): the task row has neither, the
+            # latest "blocked" event in task_events does.
             blocked_at: Dict[str, Any] = {}
-            if {"task_id", "kind", "created_at"}.issubset(table_columns(con, "task_events")):
-                blocked_at = {
-                    str(r["task_id"]): r["at"]
-                    for r in con.execute(
-                        "SELECT e.task_id, MAX(e.created_at) AS at FROM task_events e JOIN tasks t ON t.id = e.task_id "
-                        "WHERE t.status = 'blocked' AND e.kind = 'blocked' GROUP BY e.task_id"
-                    )
-                }
+            block_reasons: Dict[str, Optional[str]] = {}
+            event_cols = table_columns(con, "task_events")
+            if {"task_id", "kind", "created_at"}.issubset(event_cols):
+                payload_col = "e.payload" if "payload" in event_cols else "NULL"
+                for r in con.execute(
+                    f"SELECT e.task_id, e.created_at AS at, {payload_col} AS payload FROM task_events e JOIN tasks t ON t.id = e.task_id "
+                    "WHERE t.status = 'blocked' AND e.kind = 'blocked' ORDER BY e.created_at, e.id"
+                ):
+                    blocked_at[str(r["task_id"])] = r["at"]
+                    try:
+                        payload = json.loads(r["payload"] or "{}")
+                    except ValueError:
+                        payload = {}
+                    reason = payload.get("reason") if isinstance(payload, dict) else None
+                    block_reasons[str(r["task_id"])] = redact_text(reason, 300) if EXPOSE_LOCAL_LABELS and isinstance(reason, str) and reason.strip() else None
 
             for t in task_rows:
                 status = str(row_value(t, "status", "unknown"))
@@ -2047,6 +2116,7 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                     "block_kind": row_value(t, "block_kind"),
                     "block_recurrences": safe_int(row_value(t, "block_recurrences")),
                     "blocked_at": ts_to_iso(blocked_at.get(task_id)),
+                    "block_reason": block_reasons.get(task_id),
                     "last_failure_error": public_error(row_value(t, "last_failure_error"), 160),
                     "_created_ts": safe_float(created_at),
                     "goal_max_turns": row_value(t, "goal_max_turns"),
@@ -3428,7 +3498,8 @@ def task_actions(task: Dict[str, Any], who: str, now: float) -> List[Dict[str, A
     target = {"kind": "task", "ref": task["id"], "board": task["board"], "status": task.get("status"), "name": title}
     status = task.get("status")
     if status == "blocked" and task.get("block_kind") == "needs_input":
-        return [_action("answer", target, f"Post your answer on {title} as a comment and move it back to ready for {who}.")]
+        return [{**_action("answer", target, f"Post your answer on {title} as a comment and move it back to ready for {who}."),
+                 "question": task.get("block_reason")}]
     if status == "blocked":
         return [
             _action("retry", target, f"Move {title} from blocked back to ready so {who} picks it up again."),
@@ -3549,7 +3620,7 @@ def build_needs_you(
             queue.append(_queue_item(
                 f"answer:{task['id']}", "answer", "critical", agent,
                 f"{title} is waiting on your answer",
-                "The agent stopped on a question only you can answer.",
+                task.get("block_reason") or "The agent stopped on a question only you can answer. Open the task in Kanban to read it.",
                 task.get("blocked_at") or task.get("created_at"), actions, "/kanban",
             ))
         elif status == "running" and stale:
@@ -3596,7 +3667,7 @@ def build_needs_you(
             if job.get("state") == "error":
                 queue.append(_queue_item(
                     f"cron_failed:{job['id']}", "cron_failed", "critical", agent,
-                    f"{label} failed on its last run",
+                    f"{label} ran, but every tool call failed" if job.get("tools_failed") else f"{label} failed on its last run",
                     job.get("last_error") or "Its last run reported an error.",
                     job.get("last_run_at"), cron_actions(job, who), "/cron",
                 ))
@@ -4117,8 +4188,9 @@ def build_agent_detail(scan: Dict[str, Any], agent_id: str, actions: List[Dict[s
 # A run is a top-level session. Its outcome uses Hermes' own rule
 # (hermes_state_sessions.classify_session_status: the session's last message)
 # and a failed tool call uses Hermes' own display rule
-# (agent/display._detect_tool_failure). Hermes stores no per-call latency, so
-# run time is a session's start-to-end time.
+# (agent/display._detect_tool_failure). A cron run whose every tool call
+# failed is failed too, though Hermes books it complete. Hermes stores no
+# per-call latency, so run time is a session's start-to-end time.
 # ---------------------------------------------------------------------------
 
 PERFORMANCE_DAYS = (7, 30)
@@ -4192,6 +4264,47 @@ def tool_result_failed(tool_name: str, content: Any, truncated: bool = False) ->
     return isinstance(items, list) and bool(items) and all(isinstance(i, dict) for i in items) and all(i.get("error") for i in items)
 
 
+def _tool_error_text(content: str) -> str:
+    try:
+        data = json.loads(content)
+    except ValueError:
+        return content
+    if isinstance(data, dict):
+        for key in ("error", "message", "user_summary"):
+            if data.get(key):
+                return str(data[key])
+        if data.get("exit_code") not in (None, 0):
+            return f"exit code {data['exit_code']}"
+    return content
+
+
+def _sessions_with_every_tool_failed(con: sqlite3.Connection, where: str, params: tuple) -> Dict[str, Dict[str, Any]]:
+    """Sessions (``where`` filters ``sessions s``) that made tool calls and none worked.
+
+    Each comes with its call count and its first failure, ``tool: error``.
+    """
+    if not {"session_id", "tool_name", "content", "role"}.issubset(table_columns(con, "messages")):
+        return {}
+    rows = con.execute(
+        "SELECT m.session_id, m.tool_name, length(m.content) AS size, "
+        f"CASE WHEN length(m.content) <= {TOOL_RESULT_FULL_CHARS} THEN m.content ELSE substr(m.content, 1, 600) END AS body "
+        f"FROM messages m JOIN sessions s ON s.id = m.session_id WHERE {where} "
+        "AND m.role = 'tool' AND m.tool_name IS NOT NULL AND m.tool_name != '' ORDER BY m.id",
+        params,
+    ).fetchall()
+    sessions: Dict[str, Optional[Dict[str, Any]]] = {}
+    for row in rows:
+        session_id = str(row["session_id"])
+        tool = str(row["tool_name"])
+        if not tool_result_failed(tool, row["body"], safe_int(row["size"]) > TOOL_RESULT_FULL_CHARS):
+            sessions[session_id] = None  # one call worked
+        elif session_id not in sessions:
+            sessions[session_id] = {"calls": 1, "first": f"{tool}: {_tool_error_text(str(row['body']))}"}
+        elif sessions[session_id] is not None:
+            sessions[session_id]["calls"] += 1
+    return {session_id: failed for session_id, failed in sessions.items() if failed is not None}
+
+
 def _store_runs(db: Path, since: float, session_id: Optional[str] = None, now: Optional[float] = None) -> List[Dict[str, Any]]:
     """Every session started since ``since`` (or the one ``session_id``) with its outcome, cost and size."""
     now = time.time() if now is None else now
@@ -4222,6 +4335,9 @@ def _store_runs(db: Path, since: float, session_id: Optional[str] = None, now: O
             f"SELECT {', '.join('s.' + c for c in wanted)}{last} WHERE {where} ORDER BY s.started_at",
             params,
         ).fetchall()
+        # Hermes books a cron run complete when the agent replied; a run whose
+        # every tool call failed replied without doing its job.
+        cron_tools_failed = _sessions_with_every_tool_failed(con, f"s.source = 'cron' AND {where}", params) if "source" in cols else {}
     except sqlite3.Error as exc:
         log_read_warning("performance run scan failed", exc)
         return []
@@ -4238,6 +4354,9 @@ def _store_runs(db: Path, since: float, session_id: Optional[str] = None, now: O
         actual = row_value(r, "actual_cost_usd")
         cost = safe_float(actual if actual not in (None, "") else row_value(r, "estimated_cost_usd"))
         source = str(row_value(r, "source") or "session")
+        outcome = run_outcome(ended, row_value(r, "end_reason"), row_value(r, "last_role"), bool(row_value(r, "last_pending")), row_value(r, "last_finish"))
+        if outcome == "succeeded" and str(session_id) in cron_tools_failed:
+            outcome = "failed"
         runs.append({
             "_id": str(session_id),
             "ref": str(session_id) if EXPOSE_LOCAL_LABELS else safe_id(session_id, "session"),
@@ -4248,7 +4367,7 @@ def _store_runs(db: Path, since: float, session_id: Optional[str] = None, now: O
             "started": started,
             "ended": ended or None,
             "duration": max(0.0, ended - started) if ended and started else None,
-            "outcome": run_outcome(ended, row_value(r, "end_reason"), row_value(r, "last_role"), bool(row_value(r, "last_pending")), row_value(r, "last_finish")),
+            "outcome": outcome,
             "end_reason": row_value(r, "end_reason"),
             "tool_calls": safe_int(row_value(r, "tool_call_count")),
             "api_calls": safe_int(row_value(r, "api_call_count")),
@@ -4382,7 +4501,8 @@ def build_performance(profiles: List[Dict[str, Any]], days: int, now: Optional[f
         "basis": (
             "A run is a top-level session (subagents and sessions that rolled over are counted separately). "
             "Outcome follows Hermes: a run failed when it ended on a provider or agent error, and was cut off "
-            "when it ended waiting on a tool or a reply. Run time is start to end; Hermes records no per-call latency. "
+            "when it ended waiting on a tool or a reply. A scheduled run also failed when every tool call in it failed, "
+            "even if Hermes booked it complete. Run time is start to end; Hermes records no per-call latency. "
             "Tool failures use the rule Hermes uses to mark failed tool calls."
         ),
     }
