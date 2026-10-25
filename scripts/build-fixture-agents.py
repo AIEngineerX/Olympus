@@ -82,7 +82,23 @@ def seed(home: Path, now: float) -> None:
                     [("web_extract", now - 300), ("web_extract", now - 200)])
     con.commit()
     con.close()
-    sessions(home / "profiles" / "researcher", history("r", 7, 1, 30000))
+    sessions(home / "profiles" / "researcher", history("r", 7, 1, 30000) + [
+        # This morning's digest: Hermes booked it complete, but its only tool
+        # call failed and the reply just said so.
+        ("r-digest", "cron", "Morning market digest · 07:30", now - 5 * 3600 - 40, now - 5 * 3600 - 2, "cron_complete",
+         now - 5 * 3600 - 2, 26000, 300, 0, 0.03, None),
+    ])
+    con = sqlite3.connect(home / "profiles" / "researcher" / "state.db")
+    con.executemany(
+        "INSERT INTO messages (session_id, role, tool_name, content, tool_calls, finish_reason, timestamp) VALUES ('r-digest', ?, ?, ?, ?, ?, ?)",
+        [
+            ("assistant", None, "", '[{"id": "s1"}]', None, now - 5 * 3600 - 35),
+            ("tool", "web_search", json.dumps({"success": False, "error": "Search quota exceeded for this month"}), None, None, now - 5 * 3600 - 20),
+            ("assistant", None, "Search is unavailable today, so there is no digest.", None, "stop", now - 5 * 3600 - 3),
+        ],
+    )
+    con.commit()
+    con.close()
     sessions(home / "profiles" / "coder", history("c", 7, 3, 24000) + [
         ("coder-kanban", "kanban", "Fix flaky checkout test", now - 2400, None, None, now - 60, 30000, 7000, 140000, 0.88, None),
     ])
@@ -161,7 +177,7 @@ def seed(home: Path, now: float) -> None:
         "last_failure_error TEXT, block_kind TEXT, block_recurrences INTEGER);"
         "CREATE TABLE task_runs (id INTEGER PRIMARY KEY, task_id TEXT, profile TEXT, status TEXT, outcome TEXT, "
         "started_at INTEGER, ended_at INTEGER, error TEXT);"
-        "CREATE TABLE task_events (id INTEGER PRIMARY KEY, task_id TEXT, run_id INTEGER, kind TEXT, created_at INTEGER);"
+        "CREATE TABLE task_events (id INTEGER PRIMARY KEY, task_id TEXT, run_id INTEGER, kind TEXT, payload TEXT, created_at INTEGER);"
     )
     tasks = [
         ("t-pricing", "Which market should the pricing study cover?", "blocked", "researcher", n - 3 * 86400, n - 2 * 86400, None, None, None, 0, None, "needs_input"),
@@ -182,7 +198,6 @@ def seed(home: Path, now: float) -> None:
     ])
     con.executemany("INSERT INTO task_events (task_id, kind, created_at) VALUES (?, ?, ?)", [
         ("t-pricing", "claimed", n - 2 * 86400),
-        ("t-pricing", "blocked", n - 26 * 3600),
         ("t-checkout", "claimed", n - 2400),
         ("t-checkout", "spawned", n - 2390),
         ("t-preview", "crashed", n - 79000),
@@ -190,6 +205,10 @@ def seed(home: Path, now: float) -> None:
         ("t-search", "completed", n - 2 * 86400),
         ("t-pr412", "claimed", n - 14000),
     ])
+    con.execute(
+        "INSERT INTO task_events (task_id, kind, payload, created_at) VALUES ('t-pricing', 'blocked', ?, ?)",
+        (json.dumps({"reason": "Should the study cover the US only, or the US and the EU? The brief mentions both.", "kind": "needs_input"}), n - 26 * 3600),
+    )
     con.commit()
     con.close()
 

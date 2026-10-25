@@ -253,6 +253,85 @@ class AgentsTest(unittest.TestCase):
                       writer["timeline"])
         self.assertEqual(plugin_api.agent("profile:nobody"), {"found": False})
 
+    def add_quiet_cron_runs(self):
+        """Quiet's two jobs, both last recorded "ok" by Hermes. Status digest's
+        last run failed its only tool call; Morning brief failed once, then recovered."""
+        now = self.now
+        quiet = self.home / "profiles" / "quiet"
+        (quiet / "cron").mkdir()
+        (quiet / "cron" / "jobs.json").write_bytes(json.dumps({"jobs": [
+            {"id": "job-q-1", "name": "Status digest", "enabled": True, "schedule": {"display": "every 5m"},
+             "last_status": "ok", "last_run_at": iso(now - 60), "next_run_at": iso(now + 240)},
+            {"id": "job-q-2", "name": "Morning brief", "enabled": True, "schedule": {"display": "every 5m"},
+             "last_status": "ok", "last_run_at": iso(now - 100), "next_run_at": iso(now + 200)},
+        ]}).encode("utf-8"))
+        con = sqlite3.connect(quiet / "state.db")
+        con.execute(SESSIONS_SQL)
+        con.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, tool_name TEXT, timestamp REAL)")
+        # Hermes titles each cron session "<job name> · <time>".
+        con.executemany("INSERT INTO sessions (id, source, title, started_at, ended_at, end_reason) VALUES (?, 'cron', ?, ?, ?, 'cron_complete')", [
+            ("q-old", "Status digest · Oct 24 18:37", now - 700, now - 680),
+            ("q-new", "Status digest · Oct 24 18:49", now - 90, now - 62),
+            ("b-old", "Morning brief · Oct 24 18:30", now - 500, now - 480),
+            ("b-new", "Morning brief · Oct 24 18:48", now - 130, now - 101),
+        ])
+        missing = json.dumps({"content": "", "error": "File not found: C:\\hermes\\work\\status.md"})
+        found = json.dumps({"content": "two items", "total_lines": 2})
+        con.executemany("INSERT INTO messages (session_id, role, content, tool_name, timestamp) VALUES (?, 'tool', ?, 'read_file', ?)", [
+            ("q-old", found, now - 690), ("q-new", missing, now - 80),
+            ("b-old", missing, now - 490), ("b-new", found, now - 120),
+        ])
+        con.executemany("INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, 'assistant', 'Done.', ?)", [
+            ("q-old", now - 681), ("q-new", now - 63), ("b-old", now - 481), ("b-new", now - 102),
+        ])
+        con.commit()
+        con.close()
+
+    def test_a_cron_run_hermes_booked_ok_whose_tool_calls_all_failed_needs_you(self):
+        self.add_quiet_cron_runs()
+        scan = self.labelled_scan()
+
+        failed = [item for item in scan["needs_you"] if item["kind"] == "cron_failed" and item["agent"]["label"] == "Quiet"]
+        self.assertEqual([item["title"] for item in failed], ["Status digest ran, but every tool call failed"])
+        self.assertEqual(failed[0]["detail"], "Hermes recorded the run as OK, but its only tool call failed. read_file: File not found: [redacted-path]")
+        self.assertEqual([a["id"] for a in failed[0]["actions"]], ["run_now", "pause"])
+        rows = {row["label"]: row for row in scan["agents"]["agents"]}
+        self.assertEqual(rows["Quiet"]["status_label"], "Failed")
+        # The run counts against the week as well; Morning brief's old failure is history.
+        self.assertEqual((rows["Quiet"]["runs_7d"]["finished"], rows["Quiet"]["runs_7d"]["succeeded"]), (4, 2))
+
+        self.configure()
+        plugin_api.refresh_expose_local_labels()
+        payload = plugin_api.overview_payload(plugin_api.scan_hermes())
+        hidden = next(item for item in payload["needs_you"] if item["kind"] == "cron_failed" and item["title"].endswith("every tool call failed"))
+        self.assertRegex(hidden["title"], r"^Job [0-9a-f]{4} ran, but every tool call failed$")
+        self.assertNotIn("status.md", json.dumps(payload["needs_you"]))
+        self.assertNotIn("Status digest", json.dumps(payload["needs_you"]))
+
+    def test_answer_shows_the_question_the_agent_asked(self):
+        con = sqlite3.connect(self.home / "kanban.db")
+        con.execute("ALTER TABLE task_events ADD COLUMN payload TEXT")
+        con.executemany("INSERT INTO task_events (task_id, kind, created_at, payload) VALUES ('t-answer', 'blocked', ?, ?)", [
+            (int(self.now) - 9000, json.dumps({"reason": "Postgres or SQLite?", "kind": "needs_input"})),
+            (int(self.now) - 3600, json.dumps({"reason": "Which version, 1.1 or 2.0? Token: sk-abcdefghijklmnop", "kind": "needs_input"})),
+        ])
+        con.commit()
+        con.close()
+
+        answer = next(item for item in self.labelled_scan()["needs_you"] if item["kind"] == "answer")
+
+        # The latest block is the open question; secrets in it are redacted.
+        self.assertEqual(answer["detail"], "Which version, 1.1 or 2.0? [redacted]")
+        self.assertEqual(answer["actions"][0]["question"], "Which version, 1.1 or 2.0? [redacted]")
+        self.assertEqual(answer["since"], iso(int(self.now) - 3600))
+
+        self.configure()
+        plugin_api.refresh_expose_local_labels()
+        private = next(item for item in plugin_api.overview_payload(plugin_api.scan_hermes())["needs_you"] if item["kind"] == "answer")
+        self.assertIsNone(private["actions"][0]["question"])
+        self.assertEqual(private["detail"], "The agent stopped on a question only you can answer. Open the task in Kanban to read it.")
+        self.assertNotIn("Which version", json.dumps(private))
+
     def test_refs_resolve_to_raw_ids_only_at_click_time(self):
         scan = plugin_api.scan_hermes()
         queue = {item["kind"]: item for item in scan["needs_you"]}

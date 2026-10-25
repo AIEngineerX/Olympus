@@ -443,6 +443,10 @@
         onClick: () => setOpen(!open)
       }, labelText),
       open ? el("div", { ref: box, className: "olympus-popover", role: "dialog", "aria-label": action.label + ": " + subject },
+        action.question ? el("div", { className: "olympus-popover-field" },
+          el("span", null, "The agent asked"),
+          el("p", { className: "olympus-popover-question" }, action.question)
+        ) : null,
         el("p", null, action.effect),
         action.id === "answer" ? el("textarea", {
           rows: 3,

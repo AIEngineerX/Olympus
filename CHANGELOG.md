@@ -24,6 +24,13 @@ below was never released; this supersedes its Brief, Fleet and readiness parts.
   session status and tool-failure rules.
 - Routes: `GET /agent`, `GET /performance`, `GET /run`, `GET /resolve`,
   `POST /actions`.
+- A cron run Hermes booked as OK but in which every tool call failed now
+  counts as failed: the job goes into Needs you ("ran, but every tool call
+  failed", with the first failure) and the run counts against success rates.
+  Found in a live test where a digest read a missing file three runs in a row.
+- Answer shows the question the agent asked (the reason on Hermes' `blocked`
+  event), in Needs you and in the Answer box. It is hidden, like other task
+  text, unless `expose_local_labels` is on.
 
 ### Changed
 

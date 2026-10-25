@@ -108,6 +108,8 @@ test.describe("Olympus behaviour", () => {
     await item.getByRole("button", { name: "Answer" }).click();
 
     const popover = page.getByRole("dialog", { name: /^Answer:/ });
+    await expect(popover.locator(".olympus-popover-question")).toHaveText("Should the study cover the US only, or the US and the EU? The brief mentions both.");
+    await expect(popover).toContainText("The agent asked");
     await expect(popover).toContainText("Post your answer on Which market should the pricing study cover? as a comment and move it back to ready for Researcher.");
     const confirm = popover.getByRole("button", { name: "Confirm" });
     await expect(confirm).toBeDisabled();
@@ -115,7 +117,7 @@ test.describe("Olympus behaviour", () => {
     await confirm.click();
 
     await expect(page.locator(".olympus-notice")).toHaveText("Answer posted; back to ready: Which market should the pricing study cover?");
-    await expect(page.locator(".olympus-banner .olympus-count")).toHaveText("7");
+    await expect(page.locator(".olympus-banner .olympus-count")).toHaveText("8");
     const sent = await writes(page);
     expect(sent.slice(0, 2)).toEqual([
       { method: "POST", path: "/api/plugins/kanban/tasks/t-pricing/comments", query: "board=default", body: { body: "Cover the EU market first." } },
@@ -149,7 +151,7 @@ test.describe("Olympus behaviour", () => {
 
   test("assigning unowned work logs it on the agent that received it", async ({ page }) => {
     await openPage(page, { state: "noisy" });
-    await page.getByRole("button", { name: "+5 more" }).click();
+    await page.getByRole("button", { name: "+6 more" }).click();
     await bannerItem(page, "has no agent").getByRole("button", { name: "Assign" }).click();
     const popover = page.getByRole("dialog", { name: /^Assign:/ });
     await popover.getByRole("combobox").selectOption({ label: "Analyst" });
@@ -169,7 +171,7 @@ test.describe("Olympus behaviour", () => {
 
     await expect(popover.getByRole("alert")).toHaveText("Hermes said: 409: cannot reclaim (fixture refusal)");
     await expect(popover.getByRole("button", { name: "Try again" })).toBeEnabled();
-    await expect(page.locator(".olympus-banner .olympus-count")).toHaveText("8");
+    await expect(page.locator(".olympus-banner .olympus-count")).toHaveText("9");
     const logged = new URLSearchParams((await writes(page))[1].query);
     expect([logged.get("action"), logged.get("ok"), logged.get("detail")]).toEqual(["reclaim", "false", "409: cannot reclaim (fixture refusal)"]);
 
@@ -202,12 +204,12 @@ test.describe("Olympus behaviour", () => {
   test("performance ranks agents by success and drills into one run", async ({ page }) => {
     await openPage(page, { state: "noisy" });
     await expect(page.locator('tr[data-agent="profile:coder"] .olympus-rate')).toHaveText("96%");
-    await expect(page.locator(".olympus-census")).toContainText("97% of runs succeeded this week");
+    await expect(page.locator(".olympus-census")).toContainText("96% of runs succeeded this week");
     await page.getByRole("button", { name: "Performance" }).click();
     expect(new URL(page.url()).searchParams.get("view")).toBe("performance");
 
     const perf = page.locator(".olympus-performance");
-    await expect(perf.locator(".olympus-census")).toContainText("77 runs · 97% succeeded");
+    await expect(perf.locator(".olympus-census")).toContainText("78 runs · 96% succeeded");
     const names = await perf.locator(".olympus-perf-table .olympus-agent-name strong").allTextContents();
     expect(names.slice(0, 2)).toEqual(["Researcher", "Coder"]); // worst success first
 
