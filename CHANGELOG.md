@@ -4,11 +4,18 @@ All notable changes to Olympus are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-10-26
 
 Olympus is now organised around your agents, and keeps only what traces to a
 problem Hermes operators have reported (see `PRODUCT.md`). The 1.1.0 entry
 below was never released; this supersedes its Brief, Fleet and readiness parts.
+The major version marks the removals: the readiness score and `GET /tuning`
+are gone, and the Brief, Fleet and readiness views are replaced.
+
+This is the first release of the agent-centred Olympus. It has been exercised
+on one test install with three agents, not yet on anyone else's; if something
+on your own install reads wrong, please open an issue. Known issues are listed
+in the README.
 
 ### Added
 
@@ -241,6 +248,7 @@ credentials, or config.
 - `verify` workflow runs backend compile, backend unit tests, frontend parse,
   whitespace check, and the visual smoke on push and pull request.
 
+[2.0.0]: https://github.com/AIEngineerX/Olympus/compare/v1.0.3...v2.0.0
 [1.0.3]: https://github.com/AIEngineerX/Olympus/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/AIEngineerX/Olympus/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/AIEngineerX/Olympus/compare/v1.0.0...v1.0.1
