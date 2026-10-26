@@ -11,7 +11,8 @@ those problems, or that blurs that boundary, will be sent back.
 ## Prerequisites
 
 - A working [Hermes Agent](https://github.com/NousResearch/hermes-agent) install (v0.21.6+) (`$HERMES_HOME`, default `~/.hermes`).
-- Python 3.10+ and Node.js.
+- Python 3.10+ with PyYAML (`pip install pyyaml`; the standalone tests read
+  `config.yaml` with it, Hermes itself uses its own loader) and Node.js.
 - For visual QA: run `npm install` once, then `npx playwright install chromium`
   if Chromium is not already installed for Playwright.
 - Optional but recommended: a local clone of `hermes-agent` to validate
