@@ -209,13 +209,13 @@ test.describe("Olympus behaviour", () => {
     expect(new URL(page.url()).searchParams.get("view")).toBe("performance");
 
     const perf = page.locator(".olympus-performance");
-    await expect(perf.locator(".olympus-census")).toContainText("78 runs · 96% succeeded");
+    await expect(perf.locator(".olympus-census")).toContainText("77 runs · 96% succeeded");
     const names = await perf.locator(".olympus-perf-table .olympus-agent-name strong").allTextContents();
     expect(names.slice(0, 2)).toEqual(["Researcher", "Coder"]); // worst success first
 
     await perf.locator('tr[data-agent="profile:coder"]').click();
     const panel = page.getByRole("complementary", { name: "Performance of Coder" });
-    await expect(panel.locator(".olympus-facts")).toContainText("96% of 25");
+    await expect(panel.locator(".olympus-facts")).toContainText("96% of 24");
     const terminal = panel.locator(".olympus-table tbody tr").filter({ hasText: "terminal" });
     await expect(terminal.locator("td")).toHaveText(["terminal", "12", "8", "67%"]);
 

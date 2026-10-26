@@ -41,6 +41,16 @@ below was never released; this supersedes its Brief, Fleet and readiness parts.
 - The live smoke checks the Agents, Performance and Checks views; the
   performance smoke measures `/overview` and `/performance`.
 
+### Fixed
+
+- The agent timeline shows a logged control's task or job name, and Hermes'
+  reply to it, only while `expose_local_labels` is on; entries recorded while
+  it was on are hidden once it is off.
+- Performance's median run time is the standard median (the lower middle
+  value was used before).
+- A cron job's last run is matched only to a session that ended before Hermes
+  stamped the run.
+
 ### Removed
 
 - The readiness score, its trend and its breakdown.

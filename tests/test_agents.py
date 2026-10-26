@@ -356,14 +356,24 @@ class AgentsTest(unittest.TestCase):
 
         self.assertEqual(plugin_api.log_action("pause", "cron", "job-w-1", "Weekly post", True, agent="profile:writer"), {"recorded": True})
         self.assertEqual(plugin_api.log_action("delete", "cron", "job-w-1", "Weekly post", True), {"recorded": False, "reason": "not an Olympus control"})
-        plugin_api.log_action("retry", "task", "t-transient", "Fetch the feed", False, agent="profile:coder", detail="409: blocked by parent")
+        plugin_api.log_action("retry", "task", "t-transient", "Fetch the feed", False, agent="profile:default", detail="409: blocked by parent")
+        plugin_api.log_action("resume", "cron", "cron:7f3a9c21e0", "Nightly digest", True, agent="profile:default")
 
         writer = plugin_api.agent("profile:writer")
-        coder = plugin_api.agent("profile:coder")
+        default = plugin_api.agent("profile:default")
         self.assertEqual(writer["timeline"][0]["text"], "You chose Pause: Weekly post")
         self.assertEqual(writer["timeline"][0]["state"], "ok")
-        failed = next(event for event in coder["timeline"] if event["kind"] == "action")
+        failed = next(event for event in default["timeline"] if event["kind"] == "action" and event["state"] == "error")
         self.assertEqual((failed["text"], failed["state"], failed["detail"]), ("You chose Retry: Fetch the feed", "error", "409: blocked by parent"))
+
+        # Turning labels off hides what was logged while they were on
+        # ("default" keeps its id either way; other agents' ids are hashed).
+        self.configure(expose_local_labels=False)
+        events = [event for event in plugin_api.agent("profile:default")["timeline"] if event["kind"] == "action"]
+        self.assertEqual([event["text"] for event in events],
+                         ["You chose Resume: Job 7f3a", f"You chose Retry: Task {plugin_api.safe_id('t-transient', 'task')[5:9]}"])
+        self.assertNotIn("blocked by parent", events[1]["detail"])
+        self.assertTrue(events[1]["detail"].endswith("(details hidden)"))
 
 
 class FixStoreMigrationTest(unittest.TestCase):
