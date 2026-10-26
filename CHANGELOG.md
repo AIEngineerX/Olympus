@@ -4,6 +4,18 @@ All notable changes to Olympus are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Olympus no longer opens a profile's `.env` file for any reason. Which
+  messaging platforms a profile has configured now comes from Hermes' own
+  `channel_platforms_configured` helper (its read of the env file and
+  config.yaml); a standalone load without `hermes_cli` falls back to
+  config.yaml alone. The auxiliary-route policy signal is config-only, and the
+  unused `has_env` field left the agent setup summary. This follows plugin
+  catalog rule 11 (credentials come through Hermes, never from files).
+
 ## [2.0.0] - 2026-10-26
 
 Olympus is now organised around your agents, and keeps only what traces to a

@@ -76,7 +76,8 @@ stores no credentials. Per request it reads, for each profile:
   outcomes)
 - `cron/jobs.json` and `cron/usage_audit.jsonl`
 - `config.yaml` structure and flags (never values such as keys or base URLs)
-- `.env` variable **names** only, to see which gateways are configured
+- which messaging platforms each profile has configured, as Hermes itself
+  reports it (Olympus never opens a profile's `.env`)
 - gateway process state, and the last 8 KB of the agent, gateway and error logs
 - `skills/` metadata and the skill hub lock
 

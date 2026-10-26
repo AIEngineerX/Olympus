@@ -223,24 +223,20 @@ def read_json(path: Path) -> Any:
         return None
 
 
-def env_keys(path: Path) -> set[str]:
-    keys: set[str] = set()
+def configured_platforms(home: Path) -> set[str]:
+    """Platform ids with any channel setting in ``home``, as Hermes itself
+    reports them (its own read of the profile's env file and config.yaml).
+    Olympus never opens an env file: a standalone load without hermes_cli
+    falls back to config.yaml alone (see ``collect_gateways``)."""
     try:
-        lines = path.read_text(errors="replace").splitlines()
-    except Exception:
-        return keys
-    for raw in lines:
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[7:].strip()
-        if "=" not in line:
-            continue
-        key = line.split("=", 1)[0].strip()
-        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-            keys.add(key.upper())
-    return keys
+        from hermes_cli.profile_channels import channel_platforms_configured
+    except ImportError:
+        return set()
+    try:
+        return {str(platform).lower() for platform in channel_platforms_configured(home)}
+    except Exception as exc:
+        logger.warning("configured platforms unavailable for %s: %s", home.name, redact_text(exc))
+        return set()
 
 
 def redact_text(value: Any, limit: int = 180) -> str:
@@ -1196,8 +1192,8 @@ def _loop_guardrail_policy(config: Dict[str, Any]) -> Dict[str, bool]:
     return {"interactive": hard_stop, "unattended": unattended}
 
 
-def _auxiliary_route_count(config: Dict[str, Any], env_names: set[str]) -> int:
-    config_count = _cfg_any_count(config, [
+def _auxiliary_route_count(config: Dict[str, Any]) -> int:
+    return _cfg_any_count(config, [
         ["auxiliary_provider"],
         ["auxiliary_providers"],
         ["auxiliary"],
@@ -1208,8 +1204,6 @@ def _auxiliary_route_count(config: Dict[str, Any], env_names: set[str]) -> int:
         ["providers", "background"],
         ["providers", "summarizer"],
     ])
-    env_count = 1 if any("AUX" in key or "AUXILIARY" in key for key in env_names) else 0
-    return config_count + env_count
 
 
 def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1220,11 +1214,6 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
     profile_paths = _profile_config_paths(profiles)
     profile_configs = [read_yaml(path) for path in profile_paths if path.exists()]
     configs = [root_config, *profile_configs]
-    env_names = set(env_keys(hermes_home / ".env"))
-    for profile in profiles:
-        raw = profile.get("_path") if isinstance(profile, dict) else None
-        if raw:
-            env_names.update(env_keys(Path(str(raw)) / ".env"))
 
     max_turns_values = _config_max_turns(configs, kanban)
     max_turns = max(max_turns_values) if max_turns_values else 0
@@ -1239,7 +1228,7 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
     compression_enabled = any(_cfg_any_bool(cfg, [["compression", "enabled"], ["agent", "compression"], ["memory", "compression"]]) for cfg in configs)
     browser_private_urls = _cfg_any_bool(root_config, [["browser", "allow_private_urls"], ["browser", "allow_local_urls"], ["browser", "private_urls"], ["browser", "allow_private_network"]])
     browser_recording = _cfg_any_bool(root_config, [["browser", "record_sessions"], ["browser", "recording"], ["browser", "session_recording"]])
-    auxiliary_routes = _auxiliary_route_count(root_config, env_names)
+    auxiliary_routes = _auxiliary_route_count(root_config)
     route_audit_profiles = sum(1 for profile in profiles if profile.get("model") or profile.get("provider"))
     model_override_tasks = int(((build_orchestration(kanban).get("summary") or {}).get("model_override_tasks")) or 0)
     sessions_with_cost = sum(1 for session in sessions if _session_cost(session) > 0)
@@ -1579,7 +1568,6 @@ def collect_profiles() -> List[Dict[str, Any]]:
         model = summarize_model(cfg)
         model_name = model.get("model")
         provider_name = model.get("provider")
-        env_exists = (home / ".env").exists()
         soul_exists = (home / "SOUL.md").exists()
         skills_dir = home / "skills"
         skill_count = 0
@@ -1608,7 +1596,6 @@ def collect_profiles() -> List[Dict[str, Any]]:
             "_path": str(home),
             "model": model_name if EXPOSE_LOCAL_LABELS else ("configured" if model_name else None),
             "provider": provider_name if EXPOSE_LOCAL_LABELS else ("configured" if provider_name else None),
-            "has_env": env_exists,
             "has_soul": soul_exists,
             "skill_count": skill_count,
             "gateway_state": gstate,
@@ -1877,20 +1864,10 @@ def _store_sessions(db: Path, limit: int, since: Optional[float] = None) -> List
 
 def collect_gateways(profiles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     # Match Hermes gateway env markers.
-    platform_markers = {
-        "telegram": ["TELEGRAM_BOT_TOKEN"],
-        "discord": ["DISCORD_BOT_TOKEN"],
-        "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
-        "whatsapp": ["WHATSAPP_ENABLED"],
-        "signal": ["SIGNAL_HTTP_URL", "SIGNAL_ACCOUNT"],
-        "matrix": ["MATRIX_ACCESS_TOKEN", "MATRIX_HOMESERVER"],
-        "email": ["EMAIL_ADDRESS", "EMAIL_IMAP_HOST", "EMAIL_SMTP_HOST"],
-        "sms": ["TWILIO_ACCOUNT_SID"],
-        "mattermost": ["MATTERMOST_TOKEN", "MATTERMOST_URL"],
-        "homeassistant": ["HASS_TOKEN", "HASS_URL"],
-        "webhook": ["WEBHOOK_ENABLED"],
-        "api_server": ["API_SERVER_KEY", "API_SERVER_ENABLED"],
-    }
+    known_platforms = [
+        "telegram", "discord", "slack", "whatsapp", "signal", "matrix", "email",
+        "sms", "mattermost", "homeassistant", "webhook", "api_server",
+    ]
     out: List[Dict[str, Any]] = []
     for prof in profiles:
         name = prof["name"]
@@ -1898,15 +1875,17 @@ def collect_gateways(profiles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         home = Path(prof["_path"])
         cfg = profile_config(home)
         platforms_block = cfg.get("platforms") if isinstance(cfg.get("platforms"), dict) else {}
-        configured_keys = env_keys(home / ".env")
+        # Hermes decides which platforms have credentials or settings; Olympus
+        # never reads the profile's env file (catalog rule 11).
+        configured_set = configured_platforms(home)
         gateway_state = prof.get("gateway_state") or "unknown"
-        for platform, markers in platform_markers.items():
+        for platform in sorted(set(known_platforms) | configured_set, key=lambda p: (p not in known_platforms, p)):
             # Hermes accepts top-level and `platforms.<platform>` config.
             pdata = cfg.get(platform)
             if not isinstance(pdata, dict):
                 pdata = platforms_block.get(platform)
             explicitly_enabled = bool(pdata.get("enabled", False)) if isinstance(pdata, dict) else False
-            configured = any(marker in configured_keys for marker in markers)
+            configured = platform in configured_set
             enabled = explicitly_enabled or configured
             if not enabled:
                 continue
