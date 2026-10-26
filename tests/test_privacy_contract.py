@@ -27,7 +27,36 @@ class PrivacyContractTest(unittest.TestCase):
             os.environ.pop("HERMES_KANBAN_HOME", None)
         else:
             os.environ["HERMES_KANBAN_HOME"] = self.old_kanban
+        plugin_api.EXPOSE_LOCAL_LABELS = False
         self.tmp.cleanup()
+
+    def test_expose_local_labels_defaults_to_false_without_config(self):
+        self.assertFalse(plugin_api.refresh_expose_local_labels())
+        self.assertFalse(plugin_api.EXPOSE_LOCAL_LABELS)
+
+    def test_expose_local_labels_config_opt_in_returns_raw_cron_labels(self):
+        (self.home / "config.yaml").write_text(
+            "dashboard:\n"
+            "  olympus:\n"
+            "    expose_local_labels: true\n"
+        )
+        cron_dir = self.home / "cron"
+        cron_dir.mkdir(parents=True)
+        (cron_dir / "jobs.json").write_text(json.dumps({
+            "jobs": [{
+                "id": "raw-cron-job-123",
+                "name": "private cron name",
+                "enabled": True,
+                "profile": "default",
+            }]
+        }))
+
+        self.assertTrue(plugin_api.refresh_expose_local_labels())
+        payload = plugin_api.collect_cron([])
+        serialized = json.dumps(payload)
+
+        self.assertIn("raw-cron-job-123", serialized)
+        self.assertIn("private cron name", serialized)
 
     def test_cron_ids_are_public_refs_when_local_labels_are_hidden(self):
         cron_dir = self.home / "cron"
@@ -209,6 +238,165 @@ class PrivacyContractTest(unittest.TestCase):
         self.assertNotIn('"token":', redacted)
         self.assertIn("[redacted]", redacted)
 
+    def test_redaction_scrubs_paths_and_urls(self):
+        raw = (
+            "Worker crashed at /home/alice/.hermes/profiles/default/run.py "
+            "posting to https://hooks.example.com/T0/B0/abc "
+            "(C:\\Users\\alice\\secrets.txt)"
+        )
+
+        redacted = plugin_api.redact_text(raw, limit=500)
+
+        self.assertNotIn("/home/alice", redacted)
+        self.assertNotIn("hooks.example.com", redacted)
+        self.assertNotIn("C:\\Users\\alice", redacted)
+        self.assertIn("[redacted-path]", redacted)
+        self.assertIn("[redacted-url]", redacted)
+
+    def test_cron_string_schedule_does_not_crash(self):
+        # Legacy / hand-edited jobs.json can store ``schedule`` as a bare cron
+        # string with no ``schedule_display``. collect_cron must not raise
+        # AttributeError on ``.get("display")`` (which 500s /overview and /tuning).
+        cron_dir = self.home / "cron"
+        cron_dir.mkdir(parents=True)
+        (cron_dir / "jobs.json").write_text(json.dumps({
+            "jobs": [
+                {"id": "j-str", "name": "n1", "enabled": True, "profile": "default", "schedule": "0 9 * * *"},
+                {"id": "j-dict", "name": "n2", "enabled": True, "profile": "default", "schedule": {"display": "every hour"}},
+                {"id": "j-none", "name": "n3", "enabled": True, "profile": "default"},
+            ]
+        }))
+
+        payload = plugin_api.collect_cron([])
+
+        self.assertEqual([p["schedule"] for p in payload], ["0 9 * * *", "every hour", None])
+
+    def _seed_error_columns(self, leak):
+        # Free-text error columns: cron last_error, sessions.handoff_error,
+        # tasks.last_failure_error and task_runs.error.
+        now = int(time.time())
+        cron_dir = self.home / "cron"
+        cron_dir.mkdir(parents=True)
+        (cron_dir / "jobs.json").write_text(json.dumps({
+            "jobs": [{
+                "id": "job-1", "name": "n", "enabled": True, "profile": "default",
+                "last_status": "error", "last_error": leak,
+            }]
+        }))
+
+        db = self.home / "state.db"
+        con = sqlite3.connect(db)
+        con.executescript(
+            """
+            CREATE TABLE sessions (
+              id TEXT, title TEXT, source TEXT, state TEXT, model TEXT,
+              started_at INTEGER, ended_at INTEGER, message_count INTEGER,
+              tool_call_count INTEGER, input_tokens INTEGER, output_tokens INTEGER,
+              reasoning_tokens INTEGER, api_call_count INTEGER,
+              actual_cost_usd REAL, estimated_cost_usd REAL, handoff_error TEXT,
+              handoff_platform TEXT
+            );
+            """
+        )
+        con.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("sess-1", "t", "cli", "completed", "m", now - 120, now - 60, 1, 1, 10, 10, 0, 1, None, 0.0, leak, "telegram"),
+        )
+        con.commit()
+        con.close()
+
+        kdb = self.home / "kanban.db"
+        con = sqlite3.connect(kdb)
+        con.executescript(
+            """
+            CREATE TABLE tasks (
+              id TEXT, title TEXT, status TEXT, assignee TEXT, priority INTEGER,
+              created_at INTEGER, started_at INTEGER, completed_at INTEGER,
+              consecutive_failures INTEGER, last_failure_error TEXT,
+              worker_pid INTEGER, claim_expires INTEGER, last_heartbeat_at INTEGER,
+              current_run_id TEXT, max_runtime_seconds INTEGER, session_id TEXT
+            );
+            CREATE TABLE task_runs (
+              id TEXT, task_id TEXT, profile TEXT, step_key TEXT, status TEXT,
+              outcome TEXT, worker_pid INTEGER, last_heartbeat_at INTEGER,
+              started_at INTEGER, ended_at INTEGER, error TEXT, summary TEXT
+            );
+            CREATE TABLE task_events (
+              id TEXT, task_id TEXT, run_id TEXT, kind TEXT, created_at INTEGER
+            );
+            """
+        )
+        con.execute(
+            "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("task-1", "private task", "running", "default", 0, now - 60, now - 30, None,
+             1, leak, 111, now + 600, now - 10, "run-1", 3600, "sess-1"),
+        )
+        con.execute(
+            "INSERT INTO task_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("run-1", "task-1", "default", "step", "crashed", "crashed", 111, now - 5,
+             now - 30, now - 1, leak, None),
+        )
+        con.commit()
+        con.close()
+
+
+    def _error_payloads(self):
+        cron_payload = json.dumps(plugin_api.collect_cron([]))
+        sessions_payload = json.dumps(plugin_api.collect_sessions())
+        kanban_payload = json.dumps(
+            plugin_api.collect_kanban([{"name": "default", "_public_name": "default", "gateway_state": "running"}])
+        )
+        return cron_payload, sessions_payload, kanban_payload
+
+    def test_error_fields_return_only_the_failure_class_by_default(self):
+        # Error text can quote prompts, task titles, or raw IDs that no pattern
+        # can scrub, so hidden-label mode returns only the failure class.
+        leak = (
+            "Worker crashed: api_key=SUPER-SECRET-VALUE at /home/alice/.hermes/run.py "
+            "posting to https://hooks.example.com/T0/B0/abcdef while answering 'summarise my private notes' "
+            "for session sess-raw-1234"
+        )
+        self._seed_error_columns(leak)
+
+        for blob in self._error_payloads():
+            for fragment in ("SUPER-SECRET-VALUE", "/home/alice", "hooks.example.com", "private notes", "sess-raw-1234"):
+                self.assertNotIn(fragment, blob)
+            self.assertIn("crash (details hidden)", blob)
+
+    def test_error_fields_scrub_paths_urls_and_secrets_when_labels_are_exposed(self):
+        leak = "Worker crashed: api_key=SUPER-SECRET-VALUE at /home/alice/.hermes/run.py posting to https://hooks.example.com/T0/B0/abcdef"
+        self._seed_error_columns(leak)
+        plugin_api.EXPOSE_LOCAL_LABELS = True
+
+        for blob in self._error_payloads():
+            self.assertNotIn("SUPER-SECRET-VALUE", blob)
+            self.assertNotIn("/home/alice", blob)
+            self.assertNotIn("hooks.example.com", blob)
+            # The error text surfaced (scrubbed), not silently dropped.
+            self.assertIn("Worker crashed", blob)
+            self.assertIn("[redacted", blob)
+
+    def test_redaction_removes_whole_quoted_secret_values(self):
+        cases = [
+            "login failed: password='alpha bravo charlie' for user",
+            'login failed: password="alpha bravo charlie" for user',
+            "login failed: password='alpha bravo charlie",  # truncated before the closing quote
+            'config {"token": "alpha bravo charlie", "safe": true}',
+        ]
+        for raw in cases:
+            redacted = plugin_api.redact_text(raw, limit=500)
+            for word in ("alpha", "bravo", "charlie"):
+                self.assertNotIn(word, redacted, raw)
+            self.assertIn("[redacted]", redacted, raw)
+
+    def test_error_category_classifies_common_failures(self):
+        self.assertEqual(plugin_api.error_category("Request timed out after 60s"), "timeout")
+        self.assertEqual(plugin_api.error_category("HTTP 429 Too Many Requests"), "rate limit")
+        self.assertEqual(plugin_api.error_category("401 Unauthorized"), "auth")
+        self.assertEqual(plugin_api.error_category("Connection refused"), "network")
+        self.assertEqual(plugin_api.error_category("Traceback (most recent call last)"), "crash")
+        self.assertEqual(plugin_api.error_category("something odd"), "error")
+        self.assertIsNone(plugin_api.public_error(""))
 
 if __name__ == "__main__":
     unittest.main()

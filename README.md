@@ -1,247 +1,190 @@
 # Olympus
 
-Olympus is a read-only [HermesOS](https://github.com/NousResearch/hermes-agent) Agent Monitor for operational tuning.
+Olympus is where you manage your [Hermes Agent](https://github.com/NousResearch/hermes-agent)
+agents: every agent on one list, what each is doing, what is waiting on you, and
+how reliably its runs succeed. It is a Hermes dashboard plugin.
 
-It reads local Hermes runtime state and shows what to tune next across profiles,
-routes, skills, sessions, cron, gateways, Kanban work, and runtime health. It
-does not run agents and does not replace Hermes admin pages. It explains how the
-agent system is performing and links to the Hermes page that owns each fix.
+It exists for operators running several agents with cron jobs and Kanban
+workers, who find out late that something failed, stalled or got stuck. The
+problems it targets, and the Hermes issues that show people have them, are in
+[`PRODUCT.md`](PRODUCT.md).
 
-See [`OLYMPUS_GOAL.md`](OLYMPUS_GOAL.md) for the product boundary (what Olympus
-owns vs. what Hermes owns).
+## What you see
 
-![Olympus dashboard showing readiness score, mode tabs, and Agent Monitor](docs/assets/olympus-dashboard.jpg)
+- **Agents.** One row per agent (Hermes profile): status in a word, the task and
+  tool it is on now, its helpers, last activity, and a week of runs with the
+  failed ones marked. Above it, **Needs you**: every question waiting on an
+  answer (with the question the agent asked), failed or overdue cron job
+  (including a run Hermes recorded as OK in which every tool call failed),
+  stalled or failing worker, blocked or unassigned task, offline gateway, and
+  looping or expensive run, once each, with its action. Pick an agent to open
+  its inspector: what it did recently,
+  its scheduled jobs and Kanban work, how it works, and whether your fixes
+  worked.
+- **Performance.** For 7 or 30 days: runs, how many succeeded, typical and slow
+  run time, tool calls that failed, and cost, per agent and across all of them.
+  Outcomes follow Hermes' own session status, except that a scheduled run in
+  which every tool call failed counts as failed. Any run opens step by step.
+- **Checks.** Findings across your agents, Kanban backlog grouped by who has to
+  act, skill hygiene, configuration risks, and where spend goes.
 
-## What It Does
+## Controls
 
-- Ranks agent optimization items with the evidence behind each one.
-- Compares profile readiness, route metadata, skill coverage, gateway state, and workload.
-- Summarizes Kanban pressure: blocked work, active workers, retries, and assignee load.
-- Surfaces safe config policy risks: turn limits, loop guardrails, browser privacy flags, fallbacks, toolsets, and auxiliary cost visibility.
-- Computes a transparent heuristic readiness score with a full deduction breakdown.
-- Opens with a Brief view for the next action, then stages deeper panels behind Agents, Skills, Kanban, Policy, and Diagnostics tabs.
-- Adds Metrics Spine in Diagnostics: aggregate Hermes-grounded usage visibility, profile workload, skill lifecycle, and work reliability for tuning.
-- Keeps v1 read-only: every action is a link to the Hermes page that owns it.
+From the queue and the inspector you can pause, resume or run a cron job (or
+pause all of an agent's jobs), and answer, retry, reclaim, reassign or assign a
+Kanban task. Every control says exactly
+what it will do and waits for you to confirm. Hermes' own API does the work
+(`/api/cron/jobs/...` and the Kanban plugin's task routes), and Olympus records
+each action in its log.
 
-## What It Does Not Do
+To turn every control off:
 
-- Create or move Kanban tasks, or spawn workers.
-- Edit profiles, cron, gateways, routes, memory, MCP, keys, or config.
-- Rebuild Hermes Usage/Analytics for token, model, session, or spend totals.
-- Show secrets, or expose local labels/paths unless explicitly enabled.
+```yaml
+# $HERMES_HOME/config.yaml
+dashboard:
+  olympus:
+    controls: false
+```
 
-## Requirements
+Anything else (creating or deleting agents, jobs or tasks; editing prompts,
+models, skills, keys or config) stays on the Hermes page that owns it, and
+Olympus links there.
 
-- A working [HermesOS / Hermes Agent](https://github.com/NousResearch/hermes-agent) install (`$HERMES_HOME`, default `~/.hermes`).
-- Python 3.10+ (the backend is a FastAPI router loaded by Hermes).
-- Node.js/npm for verification and Playwright-based visual smoke tests. There is
-  no frontend build step; `dashboard/dist/*` is hand-authored SDK React/CSS.
+## Install
 
-> **Current Hermes compatibility:** hardened Hermes builds load static user
-> dashboard plugins from `$HERMES_HOME/plugins`, but refuse non-bundled Python
-> backend imports. In that mode `/olympus` can load while
-> `/api/plugins/olympus/*` returns `404`. Full backend routes require Olympus to
-> be bundled into Hermes or a future trusted backend-plugin model. See
-> [`dashboard/docs/HERMES_BACKEND_PLUGIN_COMPATIBILITY.md`](dashboard/docs/HERMES_BACKEND_PLUGIN_COMPATIBILITY.md)
-> and [`dashboard/docs/STATIC_USER_PLUGIN_MODE.md`](dashboard/docs/STATIC_USER_PLUGIN_MODE.md).
-
-## Install In A Local Hermes Dashboard
-
-Install Olympus from source, link it into your local Hermes home, and start the
-Hermes dashboard:
+Requires Hermes Agent v0.21.6 or newer; verified against v0.22.5. No Python
+dependencies and no build step.
 
 ```bash
-git clone https://github.com/AIEngineerX/Olympus.git
-cd Olympus
-npm ci
-npm run dev
+hermes plugins install AIEngineerX/Olympus
+hermes plugins enable olympus
+hermes dashboard
 ```
 
-`npm run dev` links this repository's `dashboard/` folder into:
+Open the **Olympus** tab (default `http://127.0.0.1:9119/olympus`). Hermes loads
+a user plugin's API only once it is in `plugins.enabled`; until then the tab
+lists your agents from Hermes' own API and says how to enable the rest. If the
+tab shows no data after enabling, restart `hermes dashboard` once.
 
-```text
-$HERMES_HOME/plugins/olympus/dashboard/
-```
+## What Olympus reads and writes
 
-Then it starts Hermes with:
+Olympus never writes Hermes files or databases. It opens every Hermes store
+read-only, makes no network calls of its own, runs no background processes and
+stores no credentials. Per request it reads, for each profile:
+
+- `state.db`: sessions and messages (timestamps, tokens, cost, tool calls,
+  outcomes)
+- `cron/jobs.json` and `cron/usage_audit.jsonl`
+- `config.yaml` structure and flags (never values such as keys or base URLs)
+- `.env` variable **names** only, to see which gateways are configured
+- gateway process state, and the last 8 KB of the agent, gateway and error logs
+- `skills/` metadata and the skill hub lock
+
+and the Kanban databases under the Hermes root. It writes only to
+`$HERMES_HOME/plugin-data/olympus/` (daily snapshots, findings you marked fixed,
+the action log, alert state), plus `$HERMES_HOME/scripts/olympus_alerts.py` if
+you install alerts.
+
+## Alerts (opt-in)
+
+Olympus can tell you when a cron job fails or stops running on time, a Kanban
+worker stalls or fails, a session starts looping, or spend jumps to twice its
+daily average:
 
 ```bash
-scripts/install-dashboard-link.sh
-hermes dashboard --no-open --skip-build
+hermes olympus install-alerts --deliver telegram   # any `hermes cron --deliver` target
 ```
 
-Then open:
-
-```text
-http://127.0.0.1:9119/olympus
-```
-
-After the tab loads, follow [`after-install.md`](after-install.md) to confirm
-the first screen, privacy defaults, and local smoke checks.
-
-## Dashboard Modes
-
-Olympus opens in Brief mode: hero status, score details, and Agent Monitor.
-Deeper inspection is split into purpose-built tabs:
-
-- Agents: Performance Tracking, Profile Fitness, and Pantheon.
-- Skills: Skill Coverage and Skill Hygiene.
-- Kanban: Trace Spine and Kanban Intelligence.
-- Policy: Tool Policy & Aux Cost.
-- Diagnostics: Operational Evals, Metrics Spine, Production Diagnostics, and Evidence Sources.
+This copies `olympus_alerts.py` into `$HERMES_HOME/scripts/` and prints the
+`hermes cron create --no-agent ...` command to run. Hermes cron runs it on your
+schedule and delivers what it prints; no model is called, and a run with
+nothing new is silent. An alert repeats at most every six hours while it is
+still active. Preview with `hermes olympus alerts --preview`; stop with
+`hermes cron remove <job id>`. With `plugins.isolation: host`, copy
+`alerts/olympus_alerts.py` into `$HERMES_HOME/scripts/` yourself.
 
 ## Hermes Desktop
 
-Hermes Desktop owns chat, agents, profiles, skills, sessions, cron, settings,
-and Command Center Usage. Olympus is the read-only operations monitor beside
-those controls. It should show risk and evidence, then link to the Hermes page
-that owns the fix.
-
-Today Olympus is verified through the Hermes web dashboard at `/olympus`.
-Desktop visibility requires Hermes Desktop plugin-tab parity for dashboard
-plugins. See
-[`dashboard/docs/HERMES_DESKTOP_INTEGRATION.md`](dashboard/docs/HERMES_DESKTOP_INTEGRATION.md).
-
-Run `npm run test:desktop` to verify the local Desktop app, Command Center
-Usage ownership, web dashboard plugin support, and the current plugin-tab parity
-status before preparing an upstream Desktop PR.
-
-## API
-
-When Olympus is bundled or another trusted backend-plugin path is available, Hermes mounts Olympus at `/api/plugins/olympus/`:
-
-| Route | Purpose |
-| --- | --- |
-| `GET /health` | Liveness and a coarse runtime status summary |
-| `GET /overview` | Full dashboard read model: health, tuning, profiles, gateways, cron, sessions, Kanban, performance, Trace Spine, Operational Evals, Metrics Spine, skill hygiene, config policy, and evidence sources |
-| `GET /tuning` | Tuning-focused read model with score breakdown, Kanban intelligence, Trace Spine, Operational Evals, Metrics Spine, skill hygiene, config policy, performance, and evidence sources |
-
-Routes sit behind the Hermes dashboard session-token middleware. The frontend
-calls them through the plugin SDK's `fetchJSON`, which injects the token. In
-static user-plugin mode these routes are not mounted; run `npm run test:compat`
-to identify the active mode.
+Desktop does not render web-dashboard tabs, so Olympus ships a Desktop page
+too (`desktop/plugin.js`). Installing the plugin copies it into
+`$HERMES_HOME/desktop-plugins/olympus/`; turn it on under **Capabilities →
+Plugins**. Today it shows the findings that need you (with sessions that open
+in Desktop and "I fixed this"), fix tracking, cron spend and backlog triage.
+The roster, queue and inspector are coming to Desktop next.
 
 ## Privacy
 
-Olympus hides session titles, Kanban task titles, cron names, exact route labels,
-and local paths by default. To show richer local labels on a private machine:
+Session titles, task titles, cron names, model labels, message content and
+local paths are hidden by default. To show them on a private machine:
 
-```bash
-OLYMPUS_EXPOSE_LOCAL_LABELS=1 hermes dashboard --no-open --skip-build
+```yaml
+# $HERMES_HOME/config.yaml
+dashboard:
+  olympus:
+    expose_local_labels: true
 ```
 
-See [`SECURITY.md`](SECURITY.md) for the full security and privacy posture.
+Both settings are re-read on every request. See [`SECURITY.md`](SECURITY.md).
+Keep the Hermes dashboard on localhost.
 
-## Project Layout
+## API
 
-```text
-.
-├── dashboard/
-│   ├── manifest.json            # plugin metadata, tab path, assets, api module
-│   ├── plugin_api.py            # FastAPI router (read-only backend)
-│   ├── dist/index.js            # hand-authored SDK React frontend
-│   ├── dist/style.css           # olympus-* styles
-│   ├── docs/BUILD_PLAN.md       # implementation plan
-│   ├── docs/HERMES_DESKTOP_INTEGRATION.md
-│   ├── docs/PRODUCTION_READINESS.md
-│   ├── docs/VIEWPORT_STRATEGY.md
-│   ├── docs/FRONTEND_SKILL_RESEARCH.md
-│   └── README.md                # package notes
-├── docs/assets/olympus-dashboard.jpg
-├── scripts/install-dashboard-link.sh
-├── scripts/olympus-live-smoke.mjs
-├── scripts/olympus-performance-smoke.mjs
-├── tests/visual/                 # Playwright fixture checks
-├── tests/fixtures/                # Olympus browser fixtures
-├── package.json                   # verification scripts
-├── after-install.md              # post-install checks
-├── OLYMPUS_GOAL.md              # product boundary
-├── TODO.md                      # active backlog
-├── SECURITY.md                  # security and privacy notes
-├── CONTRIBUTING.md              # development and contribution guide
-├── LICENSE                      # MIT
-└── README.md
-```
+Mounted at `/api/plugins/olympus/` behind the Hermes dashboard session token:
 
-Note: `dashboard/dist/*` is hand-authored SDK React/CSS. There is no bundler or
-build step. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow.
+| Route | Purpose |
+| --- | --- |
+| `GET /overview` | Roster, Needs you, findings, backlog, skills, policy, spend |
+| `GET /agent?ref=` | One agent's inspector |
+| `GET /performance?days=7\|30` | Run success, run time, tool failures and cost per agent |
+| `GET /run?ref=` | One run, step by step |
+| `GET /resolve?kind=&ref=` | The id a control needs, looked up at click time; refused when controls are off |
+| `POST /actions` | Record a control in the action log |
+| `POST /fixes?key=` / `DELETE /fixes?key=` | Start or stop tracking a finding you fixed |
+| `GET /open/session?ref=` | A session's Hermes chat link, or `null` if it is gone |
+| `GET /health` | Liveness and a coarse runtime summary |
 
 ## Verify
 
 ```bash
-npm run verify
-npm run test:compat
-npm run test:visual
-npm run test:live
-npm run test:performance
-npm run test:security
-npm run test:desktop
-npm audit --audit-level=moderate
+npm run verify            # backend compiles, Python tests, frontend parses
+npm run test:visual       # Playwright on fixture data, desktop and 390 px
+npm run test:live         # the real Hermes dashboard, desktop and 390 px
+npm run test:security     # live payload: no secrets, paths or raw ids
+npm run test:performance  # live /overview and /performance response budgets
+npm run test:compat       # whether Hermes mounted the Olympus API
+npm run test:desktop      # Desktop page preflight
 ```
 
-`npm run test:visual` uses a fixture-backed Playwright harness. It loads the
-hand-authored dashboard assets directly, checks desktop/mobile readability across
-multiple fixture states, validates link destinations, verifies empty evidence
-sections stay hidden, verifies staged dashboard modes, and catches private-label
-leaks in the no-labels scenario.
+The live, security and performance smokes use an existing Hermes dashboard at
+`OLYMPUS_SMOKE_URL` (default `http://127.0.0.1:9119/olympus`), or start one.
 
-`npm run test:compat` diagnoses whether the current Hermes install mounted
-Olympus backend routes or is running in static-user-plugin mode. If it reports
-`backendMounted: false` with the non-bundled backend refusal reason, the live
-backend gates are blocked by Hermes' security boundary rather than by a frontend
-or syntax failure.
+## Layout
 
-`npm run test:live` checks the real Hermes dashboard route at
-`http://127.0.0.1:9119/olympus`. It starts Hermes when needed, verifies
-desktop/mobile rendering, clicks each dashboard mode, and fails on console
-errors, overflow, tiny labels, bad links, SVG text, or missing staged panels.
+```text
+dashboard/plugin_api.py   FastAPI backend: reads Hermes, builds every view
+dashboard/dist/           hand-authored SDK React (index.js) and styles; no build step
+desktop/plugin.js         Hermes Desktop page
+alerts/olympus_alerts.py  script for the opt-in alert cron job
+plugin.yaml, __init__.py  catalog manifest and the `hermes olympus` command
+scripts/                  smokes, dev link, fixture builder
+tests/                    Python tests and Playwright fixture checks
+PRODUCT.md, DESIGN.md     what Olympus is for, and how it looks
+```
 
-`npm run test:performance` checks the real `/overview` and `/tuning` plugin API
-routes through the Hermes session-token flow. It fails on non-2xx responses,
-slow local response time, backend diagnostic budget warnings, or payloads above
-the documented budget.
+## Known issues
 
-The live smoke runner reuses an existing Hermes dashboard only when the served
-HTML includes the Hermes session token. If it needs to start Hermes and your
-`$HERMES_HOME/plugins/olympus/dashboard` target already points somewhere else,
-set `OLYMPUS_SMOKE_RELINK=1` before running the smoke command.
+Seen on the test install; not yet fixed.
 
-## Quality Gates
+- A Kanban worker that has finished can read as **Working** for up to ten
+  minutes, because Hermes leaves the worker's session open after the task run
+  ends. The next release will end the agent's status with the run.
+- While a worker runs, "Now" shows its task but not the tool it is using.
+- At 390 px the confirm popup for a control can overflow its row by a pixel.
 
-- API responses redact session IDs, private labels, paths, and secrets unless
-  `OLYMPUS_EXPOSE_LOCAL_LABELS=1` is explicitly set.
-- Brief mode hides deep panels by default; visual and live smoke tests click the
-  tabs that own Agents, Skills, Kanban, Policy, and Diagnostics.
-- Pantheon uses HTML text and accessible profile buttons rather than SVG text or an
-  image-role wrapper.
-- Frontend refreshes ignore stale `/overview` responses so an older request
-  cannot overwrite newer data.
-- Attention items are sorted by severity before truncation.
-- Gateway configuration detection parses `.env` variable names only; values are
-  not scanned or returned.
-- Config policy reads only safe structure, counts, and flags; it does not return
-  prompt text, base URLs, API keys, env values, or local paths.
-- Dependencies are exact-pinned in `package.json`, locked in
-  `package-lock.json`, and checked with `npm audit --audit-level=moderate`.
+If you hit anything else, [open an issue](https://github.com/AIEngineerX/Olympus/issues)
+and say what Olympus showed and what Hermes' own page showed.
 
-## Contributing
+## Contributing, security, license
 
-Contributions are welcome. Please read [`CONTRIBUTING.md`](CONTRIBUTING.md)
-first. It covers the local dev loop, the read-only and privacy rules, the
-verification commands, and commit/PR conventions.
-
-## Security
-
-Found a security or privacy issue? See [`SECURITY.md`](SECURITY.md) for the
-posture and how to report.
-
-## References
-
-- [HermesOS / Hermes Agent](https://github.com/NousResearch/hermes-agent)
-- [HermesOS documentation](https://hermes-agent.nousresearch.com/docs)
-- [`dashboard/docs/PRODUCTION_READINESS.md`](dashboard/docs/PRODUCTION_READINESS.md)
-- [`dashboard/docs/VIEWPORT_STRATEGY.md`](dashboard/docs/VIEWPORT_STRATEGY.md)
-
-## License
-
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`SECURITY.md`](SECURITY.md).
 [MIT](LICENSE), AIEngineerX.

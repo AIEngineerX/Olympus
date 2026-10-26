@@ -1,184 +1,120 @@
 ---
 name: Olympus
-description: Read-only HermesOS Agent Monitor for operational tuning.
+description: Manage your Hermes agents.
 colors:
-  surface-night: "#08070b"
-  surface-panel: "#151923"
-  surface-panel-deep: "#0f1119"
-  text-primary: "#f6f0df"
-  accent-cyan: "#43c9bf"
-  accent-gold: "#efc45c"
-  warning-red: "#ef6b5a"
-  muted-warm: "#b9aa8b"
+  surface: "inherited from the Hermes page"
+  panel: "var(--color-card)"
+  text: "var(--color-card-foreground)"
+  muted-text: "var(--color-muted-foreground)"
+  hairline: "var(--color-border)"
+  accent: "var(--color-primary)"
+  waiting: "var(--color-warning)"
+  failure: "var(--color-destructive)"
+  success: "var(--color-success)"
+  focus: "var(--color-ring)"
 typography:
-  display:
+  wordmark:
     fontFamily: "Charter, Iowan Old Style, Palatino Linotype, Georgia, ui-serif, serif"
-    fontSize: "56px"
-    fontWeight: 700
-    lineHeight: 0.95
-    letterSpacing: "0"
-  headline:
-    fontFamily: "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-    fontSize: "21px"
-    fontWeight: 700
-    lineHeight: 1.2
-    letterSpacing: "0"
+    fontSize: "26px"
+    fontWeight: 600
+  heading:
+    fontFamily: "inherit (Hermes theme fontSans)"
+    fontSize: "15px"
+    fontWeight: 600
   body:
-    fontFamily: "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-    fontSize: "16px"
+    fontFamily: "inherit (Hermes theme fontSans)"
+    fontSize: "14px"
     fontWeight: 400
     lineHeight: 1.45
-    letterSpacing: "0"
   label:
-    fontFamily: "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+    fontFamily: "inherit (Hermes theme fontSans)"
     fontSize: "12px"
-    fontWeight: 700
-    lineHeight: 1.1
-    letterSpacing: "0"
+    fontWeight: 600
+  numerals: "font-variant-numeric: tabular-nums"
 rounded:
-  sm: "4px"
-  md: "6px"
-  lg: "8px"
+  base: "var(--radius)"
 spacing:
-  xs: "6px"
+  xs: "4px"
   sm: "8px"
   md: "12px"
   lg: "16px"
   xl: "24px"
-components:
-  action-link:
-    backgroundColor: "{colors.accent-gold}"
-    textColor: "{colors.text-primary}"
-    rounded: "{rounded.md}"
-    padding: "8px 10px"
-  command-card:
-    backgroundColor: "{colors.surface-panel}"
-    textColor: "{colors.text-primary}"
-    rounded: "{rounded.md}"
-    padding: "12px"
 ---
 
 # Design System: Olympus
 
 ## 1. Overview
 
-**Creative North Star: "Operator Evidence Console"**
+**North star: "The Quiet Roster."** One calm list of your agents, each saying in
+a word what it is doing, with the ones that need you lifted to the top. It
+should feel like Linear's issue list with Stripe's precision, sitting inside
+Hermes as if Hermes had shipped it.
 
-Olympus uses a dense dark command surface with warm text, restrained gold controls, and cyan operational highlights. The visual system feels specific to Hermes agent operations while staying quiet enough for repeated diagnostic use.
+## 2. Color
 
-The system explicitly rejects generic AI tool marketing, decorative visual elements that do not clarify operational state, a shrunk network diagram with unreadable SVG labels, SaaS landing-page composition, oversized hero copy, dark purple or blue gradient dashboards used as a one-note theme, and any treatment that exposes private local labels by default.
+Olympus has no palette of its own. It reads the active Hermes theme through
+`--color-*` tokens, so it is native in Hermes Teal, Midnight, Ember, Mono, Rosé
+and Nous Blue.
 
-**Key Characteristics:**
-- Dark operational canvas with warm readable text.
-- Cyan for active or successful runtime signals.
-- Gold for ownership links and important controls.
-- Red only for warning and failure states.
-- Compact cards, clear headings, and stable responsive grids.
+Hermes builds its CSS with Tailwind v4, which emits only the theme variables
+Hermes itself uses. `--color-foreground` and `--color-background` do not exist
+at runtime: text is `--color-card-foreground` (as `--olympus-fg`) and the page
+background is inherited. Use only tokens the Hermes page defines; the visual
+tests run against exactly that set.
 
-## 2. Colors
+- **Accent** (`--color-primary`): the live dot, selection, primary buttons.
+- **Waiting** (`--color-warning`): "Waiting on you" and the Needs-you banner.
+- **Failure** (`--color-destructive`): Failed, Stalled, errors.
+- **Success** (`--color-success`): confirmations and "fixed" verdicts only.
+- Everything else is foreground, muted foreground and hairline borders.
 
-The palette is a dark operational base with two restrained accents: cyan for live state and gold for action ownership.
-
-### Primary
-- **Signal Cyan** (#43c9bf): active work, success, selected cards, and live runtime emphasis.
-- **Action Gold** (#efc45c): links, refresh control borders, and important affordances.
-
-### Tertiary
-- **Warning Red** (#ef6b5a): failed, stale, blocked, critical, and high-risk states only.
-
-### Neutral
-- **Surface Night** (#08070b): page depth and outer background.
-- **Panel Night** (#151923): primary card and panel bodies.
-- **Panel Deep** (#0f1119): inset panels and dense metrics.
-- **Warm Text** (#f6f0df): primary text.
-- **Muted Warm** (#b9aa8b): secondary labels, quiet evidence, and metadata.
-
-### Named Rules
-
-**The Evidence Color Rule.** Cyan, gold, and red must map to state or action ownership. Do not add accent colors unless they carry a real data role.
+**The One Signal Rule.** A colour appears only when a state needs attention.
+Healthy and idle are plain text.
 
 ## 3. Typography
 
-**Display Font:** Charter or the platform serif fallback, used only for the Olympus wordmark
-**Body Font:** the system UI sans stack
-**Label/Mono Font:** no separate mono family in the current dashboard
+The Hermes theme font for everything except the wordmark. Tabular numerals for
+every number. Scale steps of about 1.2: 12 / 14 / 15 / 18 / 26 (wordmark).
 
-**Character:** The type is practical and product-native. The Olympus wordmark carries a small amount of identity; dashboard headings, labels, controls, and data use the system UI stack.
+## 4. Surfaces and elevation
 
-### Hierarchy
-- **Display** (700, 56px desktop and 42px mobile, 0.95): page title only.
-- **Headline** (700, 21px, 1.2): section titles such as Agent Monitor and Agent View.
-- **Title** (700, 16px to 24px, 1.15): panel titles, selected profile names, and operational state labels.
-- **Body** (400, 13px to 16px, 1.45): explanatory copy, evidence, and panel text.
-- **Label** (700, 12px, 0, uppercase): short metric labels only.
-
-### Named Rules
-
-**The Readable Agent Rule.** Never render agent or profile labels as SVG text that scales below 10px. Use HTML text with responsive layout instead.
-
-## 4. Elevation
-
-Olympus uses bordered tonal layering with hard offset shadows on dense cards. Soft floating-card shadows are rare; depth is carried by surface contrast, 1px borders, and compact spacing.
-
-### Shadow Vocabulary
-- **Command Offset** (`box-shadow: 4px 4px 0 rgba(8, 7, 11, 0.34)`): repeated operational cards and panes.
-- **Hero Depth** (`box-shadow: 0 18px 55px rgba(0, 0, 0, 0.34)`): first-screen hero only.
-
-### Named Rules
-
-**The Flat Workbench Rule.** Panels look placed on the dashboard, not floating as marketing cards.
+Flat. Panels are `--color-card` with a 1px `--color-border` hairline and
+`--radius` corners. No gradients, glows, glass or shadows. Depth comes only from
+the inspector sitting beside the roster.
 
 ## 5. Components
 
-### Buttons
-- **Shape:** compact rounded rectangle with 6px radius.
-- **Primary:** warm gold border, translucent gold background, warm text, and at least 44px practical click height when possible.
-- **Hover / Focus:** increase contrast through border or background shift; always preserve a visible focus outline.
+- **Roster row:** avatar (initial on a soft tint derived from the profile name),
+  name and role, status pill, what it is doing now (task, live tool, elapsed
+  time), helper counts, last active, runs per day for 7 days with the
+  unsuccessful part marked plus the success rate, and issue count. The row
+  opens the inspector.
+- **Status pill:** a word plus a dot. Working (accent dot, pulsing), Idle (no
+  colour), Waiting on you (warning), Failed (destructive), Stalled
+  (destructive), Offline (muted, outlined).
+- **Needs-you banner:** warning-tinted panel, top three items with avatar,
+  reason and one action, "+N more" to expand.
+- **Inspector:** side panel with title row, setup line and controls; Needs
+  you, Now (timeline), Scheduled, Kanban, How it's working; a footer of tokens
+  per day, Kanban worker success and your fixes.
+- **Performance:** a fleet line, runs per day by outcome, one row per agent
+  (worst success first), and a run view that lists every step.
+- **Confirmation popover:** anchored to the button, states the exact effect,
+  Confirm and Cancel. Never a modal.
+- **Charts:** hairline axes, tabular labels, one accent plus two muted tints.
+  No chart without a labelled unit.
 
-### Chips
-- **Style:** small state pills with semantic color, compact padding, and readable labels.
-- **State:** state names are short and operational: ok, warning, running, idle, active, unknown.
+## 6. Identity
 
-### Cards / Containers
-- **Corner Style:** 4px to 8px depending on density.
-- **Background:** dark tonal panels, not plain black.
-- **Shadow Strategy:** use the Command Offset shadow for dense dashboard panes.
-- **Border:** 1px warm or cyan-tinted borders.
-- **Internal Padding:** 10px to 16px for dashboard cards; avoid oversized marketing spacing.
+- **Laurel mark** beside the serif wordmark in the header.
+- **One Greek-key hairline** under the header, drawn in `--color-border`.
+- Nothing else decorative.
 
-### Inputs / Fields
-- **Style:** no dedicated input system exists yet.
-- **Focus:** future fields use a clear cyan or gold focus outline.
-- **Error / Disabled:** use Warning Red for error text and reduced contrast for disabled states.
+## 7. Do's and Don'ts
 
-### Navigation
+Do keep agents as the subject of every screen; state status in words; confirm
+every action with its exact effect; inherit the Hermes theme.
 
-Navigation is inherited from the Hermes dashboard shell. Olympus does not clone Hermes admin navigation. Handoff links are short, explicit, and point to Hermes-owned routes.
-
-Inside Olympus, mode tabs divide work by intent. Brief is the default and owns
-hero status, score details, and Agent Monitor. Agents, Skills, Kanban, Policy,
-and Diagnostics hold deeper panels. Mobile tabs use short labels and a
-two-column layout.
-
-### Pantheon / Agent View
-
-The Agent View uses trigger lanes, agent cards, a selected profile inspector, and an activity feed. It answers which profiles are active, idle, blocked, or risky without shrinking a graph. Mobile stacks the view rather than compressing the whole surface.
-
-## 6. Do's and Don'ts
-
-### Do:
-- **Do** show the evidence behind tuning recommendations.
-- **Do** keep action links specific to Hermes-owned pages.
-- **Do** preserve the dark operational canvas with warm text, cyan state, and gold action ownership.
-- **Do** keep Agent View labels readable on desktop and mobile.
-- **Do** use real fixture states before adding visual complexity.
-- **Do** treat tokens, model usage, and spend as evidence for risk, not as a replacement for Hermes Usage.
-
-### Don't:
-- **Don't** use generic AI tool marketing, buzzwords, or feature theater.
-- **Don't** add decorative visual elements that do not clarify operational state.
-- **Don't** return to a shrunk network diagram with unreadable SVG labels.
-- **Don't** rebuild Desktop Command Center Usage or web Analytics.
-- **Don't** use SaaS landing-page composition, oversized hero copy, or marketing card grids.
-- **Don't** make the dashboard a dark purple or blue gradient one-note theme.
-- **Don't** expose hidden local paths, secrets, or raw private labels by default.
+Don't build tile grids of label/number/chip; add colour for decoration; use
+gradients, glows, glass or shadows; act without confirmation; show private
+labels by default.

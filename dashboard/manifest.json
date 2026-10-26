@@ -1,9 +1,9 @@
 {
   "name": "olympus",
   "label": "Olympus",
-  "description": "Read-only HermesOS Agent Monitor: profiles, routes, skills, Kanban, gateways, sessions, and health.",
+  "description": "Manage your Hermes agents: the roster, what needs you, run performance, and confirmed controls.",
   "icon": "Activity",
-  "version": "1.0.3",
+  "version": "2.0.0",
   "tab": { "path": "/olympus", "position": "end" },
   "entry": "dist/index.js",
   "css": "dist/style.css",

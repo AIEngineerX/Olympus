@@ -1,84 +1,41 @@
 # Hermes Backend Plugin Compatibility
 
-Olympus uses a static dashboard tab plus an optional Python FastAPI backend in
-`dashboard/plugin_api.py`.
+Olympus is a dashboard tab (`dashboard/dist/*`) plus a FastAPI router
+(`dashboard/plugin_api.py`) that Hermes mounts at `/api/plugins/olympus/`.
 
-Current Hermes versions intentionally **do not auto-import Python backend routes
-from user-installed or project dashboard plugins**. This is a security boundary:
-non-bundled dashboard plugins may provide static UI assets, but their Python
-`api` files are ignored.
+## When Hermes mounts the Olympus API
 
-The Hermes guard lives in `hermes_cli/web_server.py`:
+Verified against Hermes v0.22.5 (`hermes_cli/web_server_dashboard.py`,
+`_plugin_api_mount_skip_reason`):
 
-```python
-_NON_BUNDLED_PLUGIN_SOURCES = frozenset({"user", "project"})
-```
+| Plugin source | Python `api` imported? |
+| --- | --- |
+| `user` (`$HERMES_HOME/plugins/olympus/`, including catalog installs) | Only when `olympus` is in `plugins.enabled` and not in `plugins.disabled` (GHSA-mcfc-hp25-cjv7). |
+| `bundled` (`hermes-agent/plugins/`) | Yes, unless explicitly disabled. |
+| `project` (`./.hermes/plugins/`) | Never; project plugins ship with the working directory and are untrusted (GHSA-5qr3-c538-wm9j). |
 
-When a plugin is installed under:
+`hermes plugins enable olympus` writes `plugins.enabled`. The check repeats on
+every request, and a newly enabled plugin is mounted on its first request.
 
-```text
-$HERMES_HOME/plugins/olympus/dashboard/
-```
+With `plugins.isolation: host`, non-bundled plugin APIs run in the profile's
+plugin host process and Hermes forwards `/api/plugins/olympus/*` to it through
+an ASGI bridge. Responses are buffered, which suits Olympus' JSON routes.
 
-Hermes treats it as a user dashboard plugin. The `/olympus` tab can load, but
-backend routes such as these will return `404`:
+The earliest SemVer release with this behaviour is v0.21.6, which is the
+`requires_hermes` floor in `plugin.yaml`.
 
-```text
-/api/plugins/olympus/health
-/api/plugins/olympus/overview
-/api/plugins/olympus/tuning
-```
-
-This is expected on hardened Hermes builds unless Olympus is bundled into Hermes
-or Hermes adds an explicit trusted backend-plugin model.
-
-## Supported Modes
-
-| Mode | Static tab | `/api/plugins/olympus/*` backend | Status |
-| --- | --- | --- | --- |
-| User dashboard plugin under `$HERMES_HOME/plugins` | Yes | No | Static UI only on current Hermes |
-| Bundled Hermes plugin under `hermes-agent/plugins/olympus/dashboard` | Yes | Yes | Preferred full integration path |
-| Future trusted backend-plugin API | Yes | Yes | Requires upstream Hermes design/security approval |
-| Separate local service + static plugin | Yes | External only | Possible, but adds auth/daemon burden |
-
-## Recommended Architecture
-
-The cleanest production path is to upstream Olympus as a bundled Hermes dashboard
-plugin or first upstream a safe trusted-backend plugin model.
-
-Short term, Olympus should be treated as:
-
-```text
-read-only monitor + architecture prototype
-```
-
-not as a fully working external backend plugin on hardened Hermes.
-
-## Smoke-Test Interpretation
-
-If `/olympus` loads but live security/performance smoke tests fail with `404` on
-`/api/plugins/olympus/*`, diagnose backend mounting before debugging frontend
-code.
-
-Run:
+## Diagnose the active mode
 
 ```bash
 npm run test:compat
 ```
 
-Expected result on current user-plugin installs:
+It reports whether Hermes discovered the Olympus manifest, whether the plugin
+source is `user`, `bundled` or `project`, and the HTTP status of
+`/api/plugins/olympus/health` and `/overview`. A `404` from those routes with a
+`user` source almost always means the plugin is not in `plugins.enabled`.
 
-```text
-backendMounted: false
-likelyReason: current Hermes refuses non-bundled dashboard plugin Python backends
-```
+## Without the backend
 
-That means the compatibility boundary is working as designed. It does **not**
-mean `dashboard/plugin_api.py` failed to compile.
-
-## Product Boundary
-
-Olympus should keep linking to Hermes-owned pages for actual mutations:
-profiles, skills, cron, gateways, MCP, memory, config, and keys. Backend support
-is for read-only synthesis, scoring, privacy-redacted evidence, and tuning
-recommendations.
+If the API is not mounted, the tab renders a reduced view from Hermes' own
+dashboard APIs. See [`STATIC_USER_PLUGIN_MODE.md`](STATIC_USER_PLUGIN_MODE.md).

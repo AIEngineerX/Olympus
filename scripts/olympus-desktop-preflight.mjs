@@ -3,9 +3,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { defaultHermesHome } from "./olympus-compat-helper.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const hermesHome = process.env.HERMES_HOME || path.join(process.env.HOME || "", ".hermes");
+const hermesHome = defaultHermesHome();
 const hermesSource = process.env.HERMES_SOURCE || path.join(hermesHome, "hermes-agent");
 const dashboardSourceDir = path.join(repoRoot, "dashboard");
 const dashboardTargetDir = path.join(hermesHome, "plugins", "olympus", "dashboard");

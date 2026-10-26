@@ -1,0 +1,12 @@
+manifest_version: 1
+name: olympus
+label: Olympus
+version: "2.0.0"
+description: "Manage your Hermes agents: every agent on one list, what needs you, and how reliably their runs succeed, with confirmed controls through Hermes' own APIs."
+author: AIEngineerX
+license: MIT
+homepage: https://github.com/AIEngineerX/Olympus
+kind: standalone
+# Earliest Hermes SemVer release; it already gates user dashboard plugin APIs
+# on plugins.enabled and hot-mounts them after install.
+requires_hermes: ">=0.21.6"

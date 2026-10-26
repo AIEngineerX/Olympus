@@ -1,58 +1,53 @@
 window.__OLYMPUS_FIXTURE_DATA__ = {
   generated_at: "2026-06-06T12:00:00Z",
+  backlog: {
+    summary: { groups: 3, tasks: 14, needs_you: 11 },
+    groups: [
+      { kind: "needs_input", label: "Waiting on a human answer", action: "These tasks are blocked on a decision or answer only a person can give. Answer them in Kanban, oldest first.", severity: "critical", count: 9, oldest_days: 6, stale: 4, repeat_blocks: 1, assignees: [{ assignee: "default", count: 7 }, { assignee: "profile_1", count: 2 }], samples: [{ title: "task:51c0aa93be", board: "default" }, { title: "task:0d2e7bb81f", board: "default" }] },
+      { kind: "capability", label: "Missing a tool, skill or permission", action: "The assignee could not do the work with what it has. Give it the tool, skill or permission, or reassign the task.", severity: "warning", count: 2, oldest_days: 1, stale: 0, repeat_blocks: 0, assignees: [{ assignee: "profile_1", count: 2 }], samples: [{ title: "task:77aa10c3e9", board: "default" }] },
+      { kind: "dependency", label: "Waiting on parent tasks", action: "Not actionable yet: these start when the tasks they depend on finish.", severity: "info", count: 3, oldest_days: 2, stale: 0, repeat_blocks: 0, assignees: [{ assignee: "default", count: 3 }], samples: [] }
+    ],
+    recommended_view: "/kanban"
+  },
+  cost_attribution: {
+    window_days: 7,
+    window_cost_usd: 7.42,
+    cron: {
+      total_cost_usd: 3.1,
+      jobs: [
+        { job_ref: "cron:1d4f2a9b3c", label: "cron:1d4f2a9b3c", profile: "default", schedule: "every 30m", fires: 14, tokens: 412000, avg_duration_seconds: 48, errors: 2, silent_runs: 3, est_cost_usd: 2.48 },
+        { job_ref: "cron:7e0b5c1d22", label: "cron:7e0b5c1d22", profile: "profile_1", schedule: "0 * * * *", fires: 28, tokens: 103000, avg_duration_seconds: 9, errors: 0, silent_runs: 21, est_cost_usd: 0.62 }
+      ],
+      allocation: "Each profile's cron-session cost is shared across its jobs by token share from cron/usage_audit.jsonl."
+    },
+    background: {
+      total_cost_usd: 1.04,
+      tasks: [
+        { task: "background_review", calls: 38, tokens: 91000, cost_usd: 0.88 },
+        { task: "title_generation", calls: 52, tokens: 26000, cost_usd: 0.16 }
+      ],
+      note: "Background task cost is part of the session cost it ran in."
+    },
+    recommended_view: "/analytics"
+  },
+  fixes: [
+    {
+      key: "memory-runs-are-averaging-a-very-large-context-per-call",
+      title: "Runs are averaging a very large context per call",
+      kind: "memory",
+      baseline: 3,
+      current: 1,
+      verdict: "improved",
+      marked_at: "2026-06-02T09:00:00+00:00",
+      days_tracked: 4
+    }
+  ],
   health: {
     status: "warning",
     status_label: "Needs review",
-    summary: "Fixture scan: routing, skill, worker, and context signals are intentionally mixed."
+    summary: "Log tail contains failure terms. Inspect logs."
   },
   tuning: {
-    score: 68,
-    score_breakdown: {
-      base: 100,
-      score: 68,
-      label: "Needs review",
-      explanation: "Fixture score generated from local Hermes evidence.",
-      deductions: [
-        {
-          label: "Looping/tool thrash",
-          points: 12,
-          reason: "Repeated tool calls detected.",
-          evidence: "2 sessions",
-          source: "Hermes sessions tool_call_count"
-        },
-        {
-          label: "Worker failures",
-          points: 10,
-          reason: "Kanban worker failures show reliability risk.",
-          evidence: "1 failed run",
-          source: "Hermes Kanban task_runs"
-        }
-      ]
-    },
-    methodology: {
-      thresholds: [
-        {
-          signal: "Looping session",
-          threshold: ">= 40 tool calls",
-          why: "Runaway tool use is a direct signal for loops, unclear plans, or missing procedures."
-        },
-        {
-          signal: "Overloaded assignee",
-          threshold: ">= 8 open or >= 3 running Kanban tasks",
-          why: "Load concentration suggests route balancing or a specialist profile may help."
-        }
-      ],
-      sources: [
-        {
-          label: "Hermes session store",
-          detail: "Uses local runtime metadata, message_count, tool_call_count, handoff_error, and timestamps from the Hermes state store."
-        },
-        {
-          label: "Hermes Kanban",
-          detail: "Uses first-party task status, assignee load, worker heartbeats, retries, and task_runs."
-        }
-      ]
-    },
     agent_hq: {
       summary: {
         agents: 5,
@@ -63,6 +58,9 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         total_cost_usd: 7.42
       },
       metrics: {
+        window: { days: 7, sessions: 42, capped: false, label: "last 7 days, 42 sessions" },
+        spend_24h_usd: 2.36,
+        sessions_24h: 9,
         median_duration_seconds: 420,
         p90_duration_seconds: 2880,
         total_tokens: 1842200,
@@ -72,17 +70,25 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       agents: [],
       recommendations: [
         {
+          key: "skill-create-a-repeatable-browser-qa-skill",
+          count: 2,
           kind: "skill",
           severity: "warning",
           title: "Create a repeatable browser QA skill",
           detail: "Two recent sessions repeated viewport checks and screenshot interpretation.",
           evidence: "2 tool-heavy sessions",
           threshold: ">= 20 tool calls",
-          basis: "Hermes session tool_call_count",
+          basis: "Tool-call counts come straight from Hermes' own session records.",
+          targets: [
+            { kind: "session", ref: "session:3f9a1c2b7d", label: "cli" },
+            { kind: "session", ref: "session:91be04d6aa", label: "telegram" }
+          ],
           recommended_view: "/skills",
           action_label: "Open Skills"
         },
         {
+          key: "route-move-visual-work-to-a-specialist-profile",
+          count: 6,
           kind: "route",
           severity: "warning",
           title: "Move visual work to a specialist profile",
@@ -95,61 +101,6 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         }
       ]
     }
-  },
-  skill_coverage: {
-    summary: {
-      profiles: 5,
-      total_skills: 48,
-      zero_skill_profiles: 1,
-      forced_skill_tasks: 3,
-      forced_skill_total: 5,
-      looping_sessions: 2,
-      tool_heavy_sessions: 4,
-      long_threads: 1,
-      context_pressure_sessions: 1
-    },
-    suggestions: [
-      {
-        kind: "skill",
-        severity: "warning",
-        title: "Bundle visual QA and browser checks",
-        detail: "Repeated browser, screenshot, and layout work needs a named operating procedure.",
-        evidence: "4 tool-heavy visual sessions",
-        recommended_view: "/skills",
-        action_label: "Open Skills"
-      },
-      {
-        kind: "skill",
-        severity: "info",
-        title: "Add a performance-readiness skill",
-        detail: "Token, speed, and loop-pressure review is being repeated manually.",
-        evidence: "1 long thread and 1 context-pressure session",
-        recommended_view: "/skills",
-        action_label: "Open Skills"
-      }
-    ],
-    profiles: [
-      {
-        id: "profile:default",
-        label: "Default",
-        state: "warning",
-        skill_count: 12,
-        open_work: 6,
-        forced_skill_tasks: 1,
-        top_issue: "Visual QA work is concentrated here.",
-        recommended_view: "/skills"
-      },
-      {
-        id: "profile:visual",
-        label: "Visual QA",
-        state: "ok",
-        skill_count: 10,
-        open_work: 2,
-        forced_skill_tasks: 2,
-        top_issue: "Coverage looks healthy.",
-        recommended_view: "/profiles"
-      }
-    ]
   },
   skill_hygiene: {
     summary: {
@@ -199,7 +150,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       {
         kind: "skill",
         severity: "warning",
-        title: "Forced-skill Kanban work lacks local metadata",
+        title: "Kanban tasks require skills this machine does not have",
         detail: "Kanban references skills that do not appear in local usage or hub metadata.",
         evidence: "skill:4c823a88b1",
         recommended_view: "/kanban",
@@ -216,333 +167,6 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       { id: "skill:3c9a18f042", label: "skill:3c9a18f042", trust_level: "local", scan_verdict: "pass", audit_summary: "agent-trust-hub: pass", state: "ok" },
       { id: "skill:60cf2824b9", label: "skill:60cf2824b9", trust_level: null, scan_verdict: "warn", audit_summary: "socket: warn", state: "warning" },
       { id: "skill:ac52bb9910", label: "skill:ac52bb9910", trust_level: "community", scan_verdict: null, audit_summary: "snyk: fail", state: "critical" }
-    ]
-  },
-  profile_fitness: {
-    summary: {
-      profiles: 5,
-      needs_review: 2,
-      average_score: 82,
-      lowest_score: 58
-    },
-    profiles: [
-      {
-        id: "profile:default",
-        label: "Default",
-        state: "warning",
-        score: 58,
-        top_issue: "Open work concentrated",
-        recommended_view: "/kanban",
-        metrics: {
-          skills: 12,
-          cron: 3,
-          gateways: 1,
-          open: 6,
-          ready: 2,
-          running: 2,
-          blocked: 1,
-          failed_runs: 1
-        },
-        reasons: [
-          {
-            label: "Open work concentrated",
-            detail: "6 open Kanban tasks are assigned here.",
-            points: 14
-          }
-        ]
-      },
-      {
-        id: "profile:visual",
-        label: "Visual QA",
-        state: "ok",
-        score: 94,
-        top_issue: "No profile fitness issue found.",
-        recommended_view: "/profiles",
-        metrics: {
-          skills: 10,
-          cron: 0,
-          gateways: 1,
-          open: 2,
-          ready: 1,
-          running: 1,
-          blocked: 0,
-          failed_runs: 0
-        },
-        reasons: []
-      }
-    ]
-  },
-  performance: {
-    summary: {
-      state: "warning",
-      window_sessions: 12,
-      completed_sessions: 8,
-      total_tokens: 1842200,
-      total_tool_calls: 438,
-      avg_tools_per_session: 36.5,
-      avg_tokens_per_call: 8200,
-      total_cost_usd: 7.42
-    },
-    lanes: [
-      {
-        id: "speed",
-        label: "Speed",
-        value: 2880,
-        unit: "seconds",
-        state: "warning",
-        detail: "median 420s / p90 2880s",
-        source: "Hermes sessions duration_seconds",
-        recommended_view: "/sessions"
-      },
-      {
-        id: "tools",
-        label: "Tool Pressure",
-        value: 438,
-        state: "warning",
-        detail: "2 looping / 4 tool-heavy",
-        source: "Hermes sessions tool_call_count",
-        recommended_view: "/sessions"
-      },
-      {
-        id: "context",
-        label: "Context",
-        value: 8200,
-        state: "warning",
-        detail: "1 pressure session",
-        source: "Hermes sessions input_tokens/api_call_count",
-        recommended_view: "/sessions"
-      },
-      {
-        id: "reliability",
-        label: "Reliability",
-        value: 2,
-        state: "warning",
-        detail: "1 failed run / 1 stale / 0 errored",
-        source: "Hermes task_runs and sessions",
-        recommended_view: "/kanban"
-      },
-      {
-        id: "cost_risk",
-        label: "Cost Risk",
-        value: 1,
-        state: "warning",
-        detail: "1 session over $4.00",
-        source: "Hermes per-session cost fields; Usage/Analytics owns totals",
-        recommended_view: "/analytics"
-      }
-    ],
-    signals: [
-      {
-        severity: "warning",
-        label: "Looping sessions",
-        detail: "session 4: 71 tools",
-        recommended_view: "/sessions"
-      },
-      {
-        severity: "info",
-        label: "Tool-heavy sessions",
-        detail: "4 sessions crossed 20 tools",
-        recommended_view: "/skills"
-      }
-    ],
-    metrics: {
-      window_sessions: 12,
-      total_cost_usd: 7.42,
-      total_tokens: 1842200,
-      total_tool_calls: 438,
-      total_api_calls: 224,
-      median_duration_seconds: 420,
-      p90_duration_seconds: 2880,
-      avg_tools_per_session: 36.5,
-      avg_tokens_per_session: 153516,
-      avg_tokens_per_call: 8200,
-      looping_sessions: 2,
-      expensive_sessions: 1,
-      context_pressure_sessions: 1,
-      completed_sessions: 8,
-      stale_sessions: 1,
-      errored_sessions: 0,
-      failed_kanban_runs: 1
-    }
-  },
-  trace_spine: {
-    summary: {
-      state: "warning",
-      tasks: 1,
-      correlated_tasks: 1,
-      sessions: 12,
-      runs: 1,
-      events: 2,
-      failure_points: 4
-    },
-    items: [
-      {
-        task_ref: "task:7f2b9c8a12",
-        board: "olympus",
-        title: "Viewport polish",
-        status: "blocked",
-        assignee: "Default",
-        session_ref: "session:93c1a47e2d",
-        session_state: "warning",
-        session_tools: 71,
-        session_messages: 24,
-        run_refs: ["run:b214c9a7ee"],
-        event_refs: ["event:a2c71d93b4", "event:d8e14f027b"],
-        run_count: 1,
-        event_count: 2,
-        signals: ["blocked", "retry", "failed_run", "failed_event"],
-        severity: "warning",
-        recommendation: "Review the blocked task and the failed worker run together.",
-        detail: "The task, session, run, and event evidence point to the same failure chain.",
-        recommended_view: "/kanban",
-        action_label: "Open Kanban",
-        basis: "Kanban task refs plus Hermes session refs"
-      }
-    ]
-  },
-  ops_evals: {
-    summary: {
-      state: "critical",
-      score: 62,
-      checks: 4,
-      passed: 0,
-      warnings: 3,
-      failures: 1
-    },
-    items: [
-      {
-        id: "reliability",
-        label: "Reliability",
-        state: "warning",
-        score: 70,
-        detail: "Worker and session health from recent Hermes evidence.",
-        evidence: "1 failed run, 1 stale session, 0 errored sessions",
-        basis: "Hermes task_runs and session state",
-        signals: ["failed runs: 1", "stale sessions: 1", "errored sessions: 0"],
-        recommended_view: "/kanban",
-        action_label: "Open Kanban"
-      },
-      {
-        id: "routing",
-        label: "Routing",
-        state: "warning",
-        score: 60,
-        detail: "Kanban ownership, blocked work, and unassigned ready work.",
-        evidence: "1 loaded assignee, 1 unassigned ready task, 1 blocked task",
-        basis: "Hermes Kanban assignee load and task status",
-        signals: ["loaded assignees: 1", "unassigned ready: 1", "blocked tasks: 1"],
-        recommended_view: "/kanban",
-        action_label: "Open Kanban"
-      },
-      {
-        id: "skill_use",
-        label: "Skill Use",
-        state: "critical",
-        score: 45,
-        detail: "Coverage, forced-skill metadata, and stored audit results.",
-        evidence: "1 bare profile, 1 forced-skill gap, 1 audit warning, 1 audit fail",
-        basis: "Hermes skill coverage, skill usage metadata, and hub lock metadata",
-        signals: ["bare profiles: 1", "forced-skill tasks: 3", "metadata gaps: 1"],
-        recommended_view: "/skills",
-        action_label: "Open Skills"
-      },
-      {
-        id: "efficiency",
-        label: "Efficiency",
-        state: "warning",
-        score: 74,
-        detail: "Tool pressure, context pressure, long threads, and visible loop guardrails.",
-        evidence: "2 looping sessions, 4 tool-heavy sessions, 1 context-pressure session, 1 long thread",
-        basis: "Hermes session counters plus safe config policy",
-        signals: ["looping: 2", "tool-heavy: 4", "context pressure: 1", "loop stop visible: no"],
-        recommended_view: "/sessions",
-        action_label: "Open Sessions"
-      }
-    ]
-  },
-  metrics_spine: {
-    schema_version: "olympus.metrics_spine.v1",
-    generated_at: "2026-06-26T16:00:00Z",
-    window: { days: 30, session_sample_limit: 60, ledger_owner: "/analytics" },
-    ownership: {
-      olympus: "operational metrics, risk, readiness, usability signals, and handoff evidence",
-      hermes_analytics: "usage ledger, daily token bars, top models, top skills, and raw cost totals"
-    },
-    coverage: {
-      state_store: "warning",
-      state_stores_seen: 5,
-      skill_usage: "ok",
-      skill_usage_sources: 5,
-      kanban: "ok",
-      cost_visibility: "partial",
-      config_grounding: { toolsets: 6, enabled_toolsets: 4, max_turns: 120, auxiliary_routes: 2 }
-    },
-    usage: {
-      sessions: 37,
-      api_calls: 94,
-      total_tokens: 184000,
-      tool_calls: 412,
-      costed_sessions: 9,
-      estimated_cost_usd: 1.42,
-      actual_cost_usd: 0,
-      cost_confidence: "partial",
-      zero_usage_suspect_sessions: 3,
-      zero_cost_token_sessions: 8,
-      recommended_view: "/analytics",
-      note: "Operational evidence only. Hermes Analytics owns raw usage and cost ledgers."
-    },
-    agents: {
-      profiles: 5,
-      active_profiles: 3,
-      idle_profiles: 2,
-      profiles_with_skills: 4,
-      needs_review: 1,
-      average_score: 82,
-      cohorts: [],
-      recommended_view: "/profiles"
-    },
-    skills: {
-      recorded: 42,
-      created_30d: 4,
-      agent_created: 2,
-      used: 31,
-      never_used: 11,
-      stale: 6,
-      archived: 1,
-      recently_patched: 5,
-      forced_skill_tasks: 3,
-      metadata_gaps: 1,
-      by_profile: [],
-      recommended_view: "/skills"
-    },
-    work: {
-      open: 12,
-      ready: 3,
-      running: 2,
-      blocked: 1,
-      failed_runs: 1,
-      stale_workers: 1,
-      recommended_view: "/kanban"
-    },
-    evals: {
-      state: "critical",
-      score: 62,
-      reliability: "warning",
-      routing: "warning",
-      skill_use: "critical",
-      efficiency: "warning",
-      recommended_view: "/sessions"
-    },
-    signals: [
-      {
-        kind: "usage",
-        severity: "warning",
-        title: "Token accounting has gaps",
-        detail: "Some Hermes sessions have work evidence but zero recorded token usage. Treat usage and cost totals as lower-bound evidence.",
-        evidence: "3 zero-usage suspect session(s)",
-        recommended_view: "/analytics",
-        action_label: "Open Analytics"
-      }
     ]
   },
   config_policy: {
@@ -576,9 +200,9 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       {
         id: "loop_guard",
         label: "Loop Stop",
-        value: "not visible",
+        value: "off",
         state: "warning",
-        detail: "Hard loop guardrail or repeated-tool stop evidence.",
+        detail: "Sessions where repeated failing tool calls hard-stop instead of only warning.",
         source: "tool_loop_guardrails",
         recommended_view: "/config"
       },
@@ -606,10 +230,10 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       {
         kind: "policy",
         severity: "warning",
-        title: "High turn limit lacks a visible loop stop",
-        detail: "High agent turn limits need a visible hard loop guardrail so tool thrash stops before it burns time and tokens.",
-        evidence: "max_turns 120 / hard stop not visible",
-        threshold: "max_turns >= 80 and hard loop stop disabled or missing",
+        title: "Unattended sessions have no loop hard stop",
+        detail: "tool_loop_guardrails.non_interactive_hard_stop_enabled is off, so gateway and cron sessions only warn on tool loops while a high turn limit lets them run long. Nobody is present to stop them.",
+        evidence: "max_turns 120 / unattended hard stop off",
+        threshold: "max_turns >= 80 and non_interactive_hard_stop_enabled false",
         basis: "Hermes agent.max_turns plus tool_loop_guardrails",
         recommended_view: "/config",
         action_label: "Open Config"
@@ -630,189 +254,12 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         title: "Auxiliary route cost is not visible",
         detail: "Auxiliary or background provider routes are configured, but recent sessions do not expose cost.",
         evidence: "2 auxiliary route signals / 0 costed sessions",
-        basis: "Hermes auxiliary route presence plus per-session cost fields",
+        basis: "Auxiliary model routes and session costs",
         recommended_view: "/analytics",
         action_label: "Open Analytics"
       }
     ]
   },
-  party: {
-    summary: {
-      members: 5,
-      working: 2,
-      queued: 7,
-      workers: 2,
-      blocked: 1
-    },
-    members: [
-      {
-        id: "profile:default",
-        label: "Default",
-        state: "warning",
-        open_work: 6,
-        running_work: 2,
-        ready_work: 2,
-        blocked_work: 1,
-        skill_count: 12,
-        cron_jobs: 3,
-        gateway_count: 1,
-        flags: ["load balance", "blocked", "scheduled"],
-        current_task: {
-          title: "Viewport polish",
-          status: "running",
-          goal_mode: true,
-          forced_skill_count: 1
-        }
-      },
-      {
-        id: "profile:visual",
-        label: "Visual QA",
-        state: "running",
-        open_work: 2,
-        running_work: 1,
-        ready_work: 1,
-        blocked_work: 0,
-        skill_count: 10,
-        cron_jobs: 0,
-        gateway_count: 1,
-        flags: ["working", "skills"],
-        current_task: {
-          title: "Mobile visual fixture",
-          status: "running",
-          forced_skill_count: 2
-        }
-      },
-      {
-        id: "profile:backend",
-        label: "Backend",
-        state: "ready",
-        open_work: 1,
-        running_work: 0,
-        ready_work: 1,
-        blocked_work: 0,
-        skill_count: 8,
-        cron_jobs: 1,
-        gateway_count: 1,
-        flags: ["ready"]
-      },
-      {
-        id: "profile:curator",
-        label: "Curator",
-        state: "active",
-        open_work: 2,
-        running_work: 1,
-        ready_work: 0,
-        blocked_work: 0,
-        skill_count: 16,
-        cron_jobs: 0,
-        gateway_count: 1,
-        flags: ["skill hygiene"]
-      },
-      {
-        id: "profile:ops",
-        label: "Ops",
-        state: "idle",
-        open_work: 0,
-        running_work: 0,
-        ready_work: 0,
-        blocked_work: 0,
-        skill_count: 2,
-        cron_jobs: 0,
-        gateway_count: 0,
-        flags: ["idle"]
-      }
-    ]
-  },
-  orchestration: {
-    summary: {
-      boards: 2,
-      open: 9,
-      ready: 4,
-      running: 3,
-      blocked: 1,
-      review: 1,
-      active_workers: 2,
-      failed_runs: 1,
-      stale_workers: 1,
-      goal_mode_tasks: 2,
-      forced_skill_tasks: 3,
-      model_override_tasks: 1,
-      ready_unassigned: 1
-    },
-    workers: [],
-    pressure: [],
-    failed_runs: [],
-    stale_workers: [],
-    attention: []
-  },
-  activity_events: [
-    {
-      label: "Worker heartbeat stale",
-      kind: "worker_stale",
-      source: "Kanban",
-      profile: "Default",
-      detail: "Viewport polish",
-      state: "warning"
-    },
-    {
-      label: "Task claimed",
-      kind: "claimed",
-      source: "Kanban",
-      profile: "Visual QA",
-      detail: "Mobile visual fixture",
-      state: "running"
-    }
-  ],
-  kanban: {
-    open: 9,
-    totals: {
-      ready: 4,
-      running: 3,
-      blocked: 1,
-      review: 1
-    },
-    boards: [
-      {
-        slug: "olympus",
-        name: "Olympus",
-        open: 9,
-        counts: {
-          running: 3,
-          blocked: 1
-        }
-      }
-    ],
-    attention: [
-      {
-        severity: "warning",
-        label: "Ready task is unassigned",
-        board: "olympus",
-        detail: "Dispatcher cannot claim ready work without an assignee."
-      }
-    ],
-    assignee_load: [
-      {
-        assignee: "Default",
-        open: 6,
-        running: 2,
-        ready: 2,
-        blocked: 1
-      },
-      {
-        assignee: "Visual QA",
-        open: 2,
-        running: 1,
-        ready: 1,
-        blocked: 0
-      }
-    ],
-    active_workers: [
-      {
-        task_id: "task_visual",
-        profile: "Visual QA"
-      }
-    ]
-  }
 };
 
 (function selectOlympusFixtureState() {
@@ -825,14 +272,6 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       status: "ok",
       status_label: "Healthy",
       summary: "Fixture scan: no operational thresholds crossed."
-    };
-    data.tuning.score = 96;
-    data.tuning.score_breakdown = {
-      base: 100,
-      score: 96,
-      label: "Stable",
-      explanation: "Fixture score generated from healthy Hermes evidence.",
-      deductions: []
     };
     data.tuning.agent_hq.summary.recommendations = 1;
     data.tuning.agent_hq.summary.looping_sessions = 0;
@@ -851,46 +290,6 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       recommended_view: "/analytics",
       action_label: "Open Analytics"
     }];
-    data.performance.summary.state = "active";
-    data.performance.summary.total_cost_usd = 0.18;
-    data.performance.summary.total_tool_calls = 72;
-    data.performance.summary.avg_tools_per_session = 6;
-    data.performance.summary.avg_tokens_per_call = 1200;
-    data.performance.lanes = data.performance.lanes.map((lane) => ({
-      ...lane,
-      state: lane.id === "reliability" || lane.id === "cost_risk" ? "ok" : "active",
-      value: lane.id === "speed" ? 540 : lane.id === "tools" ? 72 : lane.id === "context" ? 1200 : 0,
-      detail: lane.id === "speed" ? "median 180s / p90 540s" : lane.id === "tools" ? "0 looping / 0 tool-heavy" : lane.id === "context" ? "0 pressure sessions" : lane.id === "reliability" ? "0 failed runs / 0 stale / 0 errored" : "0 sessions over $4.00"
-    }));
-    data.performance.signals = [];
-    data.trace_spine = {
-      summary: {
-        state: "ok",
-        tasks: 0,
-        correlated_tasks: 0,
-        sessions: 6,
-        runs: 0,
-        events: 1,
-        failure_points: 0
-      },
-      items: []
-    };
-    data.ops_evals = {
-      summary: { state: "ok", score: 100, checks: 4, passed: 4, warnings: 0, failures: 0 },
-      items: data.ops_evals.items.map((item) => ({
-        ...item,
-        state: "ok",
-        score: 100,
-        evidence: item.id === "reliability" ? "0 failed runs, 0 stale sessions, 0 errored sessions" :
-          item.id === "routing" ? "0 loaded assignees, 0 unassigned ready tasks, 0 blocked tasks" :
-          item.id === "skill_use" ? "0 bare profiles, 0 forced-skill gaps, 0 audit warnings, 0 audit fails" :
-          "0 looping sessions, 0 tool-heavy sessions, 0 context-pressure sessions, 0 long threads",
-        signals: item.id === "reliability" ? ["failed runs: 0", "stale sessions: 0", "errored sessions: 0"] :
-          item.id === "routing" ? ["loaded assignees: 0", "unassigned ready: 0", "blocked tasks: 0"] :
-          item.id === "skill_use" ? ["bare profiles: 0", "forced-skill tasks: 0", "metadata gaps: 0"] :
-          ["looping: 0", "tool-heavy: 0", "context pressure: 0", "loop stop visible: yes"]
-      }))
-    };
     data.config_policy = {
       summary: {
         state: "ok",
@@ -922,9 +321,9 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         {
           id: "loop_guard",
           label: "Loop Stop",
-          value: "visible",
+          value: "unattended only",
           state: "ok",
-          detail: "Hard loop guardrail or repeated-tool stop evidence.",
+          detail: "Sessions where repeated failing tool calls hard-stop instead of only warning.",
           source: "tool_loop_guardrails",
           recommended_view: "/config"
         },
@@ -941,19 +340,6 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       ],
       findings: []
     };
-    data.skill_coverage.summary.zero_skill_profiles = 0;
-    data.skill_coverage.summary.looping_sessions = 0;
-    data.skill_coverage.summary.tool_heavy_sessions = 0;
-    data.skill_coverage.summary.context_pressure_sessions = 0;
-    data.skill_coverage.suggestions = [{
-      kind: "skill",
-      severity: "ok",
-      title: "Skill coverage looks healthy",
-      detail: "No fixture profile is missing skills or repeating tool-heavy work.",
-      evidence: "Healthy fixture scan",
-      recommended_view: "/skills",
-      action_label: "Open Skills"
-    }];
     data.skill_hygiene = {
       summary: {
         state: "ok",
@@ -981,31 +367,6 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         { id: "skill:90ff0d121b", label: "skill:90ff0d121b", trust_level: "local", scan_verdict: "pass", audit_summary: "socket: pass", state: "ok" }
       ]
     };
-    data.profile_fitness.summary.needs_review = 0;
-    data.profile_fitness.summary.average_score = 96;
-    data.profile_fitness.summary.lowest_score = 92;
-    data.profile_fitness.profiles = data.profile_fitness.profiles.map((profile) => ({
-      ...profile,
-      state: "ok",
-      score: profile.id === "profile:default" ? 92 : 98,
-      top_issue: "No profile fitness issue found.",
-      reasons: [],
-      metrics: { ...profile.metrics, open: Math.min(profile.metrics.open || 0, 2), running: 0, blocked: 0, failed_runs: 0 }
-    }));
-    data.orchestration.summary.blocked = 0;
-    data.orchestration.summary.failed_runs = 0;
-    data.orchestration.summary.stale_workers = 0;
-    data.orchestration.summary.ready_unassigned = 0;
-    data.kanban.totals.blocked = 0;
-    data.kanban.attention = [];
-    data.activity_events = [{
-      label: "Task completed",
-      kind: "completed",
-      source: "Kanban",
-      profile: "Visual QA",
-      detail: "Healthy fixture task",
-      state: "ok"
-    }];
     return data;
   }
 
@@ -1016,44 +377,20 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       status_label: "No evidence",
       summary: "Fixture scan: no Hermes runtime evidence was found."
     };
-    data.tuning.score = 100;
-    data.tuning.score_breakdown = {
-      base: 100,
-      score: 100,
-      label: "No evidence",
-      explanation: "No local Hermes evidence crossed a tuning threshold.",
-      deductions: []
-    };
     data.tuning.agent_hq = {
       summary: { agents: 0, recommendations: 0, total_tokens: 0, looping_sessions: 0, context_pressure_sessions: 0, total_cost_usd: 0 },
       metrics: { median_duration_seconds: 0, p90_duration_seconds: 0, total_tokens: 0, total_tool_calls: 0, failed_kanban_runs: 0 },
       agents: [],
       recommendations: []
     };
-    data.performance = { summary: { state: "unknown" }, lanes: [], signals: [], metrics: {} };
-    data.trace_spine = { summary: { state: "unknown", tasks: 0, correlated_tasks: 0, sessions: 0, runs: 0, events: 0, failure_points: 0 }, items: [] };
-    data.ops_evals = { summary: { state: "unknown", score: 0, checks: 0, passed: 0, warnings: 0, failures: 0 }, items: [] };
     data.config_policy = { summary: {}, settings: [], findings: [] };
-    data.skill_coverage = { summary: {}, suggestions: [], profiles: [] };
     data.skill_hygiene = { summary: {}, signals: [], usage: [], hub: [] };
-    data.profile_fitness = { summary: {}, profiles: [] };
-    data.party = { summary: { members: 0, working: 0, queued: 0, workers: 0, blocked: 0 }, members: [] };
-    data.orchestration = { summary: { boards: 0, open: 0, ready: 0, running: 0, blocked: 0, review: 0, active_workers: 0, failed_runs: 0, stale_workers: 0, ready_unassigned: 0 }, workers: [], pressure: [], failed_runs: [], stale_workers: [], attention: [] };
-    data.activity_events = [];
-    data.kanban = { open: 0, totals: { ready: 0, running: 0, blocked: 0, review: 0 }, boards: [], attention: [], assignee_load: [], active_workers: [] };
     return data;
   }
 
   function overloaded() {
     const data = clone(base);
     data.health.summary = "Fixture scan: workload is concentrated on one profile.";
-    data.tuning.score = 52;
-    data.tuning.score_breakdown.score = 52;
-    data.tuning.score_breakdown.label = "Needs action";
-    data.party.members[0].open_work = 14;
-    data.party.members[0].running_work = 5;
-    data.party.members[0].ready_work = 6;
-    data.party.members[0].flags = ["load balance", "route split", "blocked"];
     data.tuning.agent_hq.metrics.p90_duration_seconds = 3600;
     data.tuning.agent_hq.recommendations.unshift({
       kind: "agent",
@@ -1066,39 +403,6 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
       recommended_view: "/profiles",
       action_label: "Open Profiles"
     });
-    data.profile_fitness.profiles[0].state = "critical";
-    data.profile_fitness.profiles[0].score = 38;
-    data.profile_fitness.profiles[0].top_issue = "Open work concentrated";
-    data.profile_fitness.profiles[0].metrics.open = 14;
-    data.profile_fitness.profiles[0].metrics.running = 5;
-    data.kanban.open = 18;
-    data.kanban.assignee_load[0].open = 14;
-    data.kanban.assignee_load[0].running = 5;
-    data.trace_spine.items.unshift({
-      task_ref: "task:e8c31b6f90",
-      board: "olympus",
-      title: "Route split",
-      status: "running",
-      assignee: "Default",
-      session_ref: "session:2fb17e90cd",
-      session_state: "warning",
-      session_tools: 58,
-      session_messages: 19,
-      run_refs: [],
-      event_refs: ["event:8f144a2f18"],
-      run_count: 0,
-      event_count: 1,
-      signals: ["tool_pressure", "stale"],
-      severity: "warning",
-      recommendation: "Check why the same owner is carrying the busy trace.",
-      detail: "Open work and tool pressure are concentrated on one profile.",
-      recommended_view: "/profiles",
-      action_label: "Open Profiles",
-      basis: "Kanban assignee load plus Hermes session counters"
-    });
-    data.trace_spine.summary.tasks = data.trace_spine.items.length;
-    data.trace_spine.summary.correlated_tasks = data.trace_spine.items.length;
-    data.trace_spine.summary.failure_points = 5;
     return data;
   }
 
@@ -1107,57 +411,13 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
     data.health.status = "warning";
     data.health.status_label = "Needs action";
     data.health.summary = "Fixture scan: blocked work and stale workers need review.";
-    data.tuning.score = 45;
-    data.tuning.score_breakdown.score = 45;
-    data.tuning.score_breakdown.label = "Needs action";
-    data.orchestration.summary.blocked = 3;
-    data.orchestration.summary.stale_workers = 2;
-    data.orchestration.stale_workers = [
-      { task_id: "task:stale-1", title: "Viewport polish", assignee: "Default", detail: "heartbeat stale" },
-      { task_id: "task:stale-2", title: "Browser smoke", assignee: "Visual QA", detail: "claim expired" }
-    ];
-    data.kanban.totals.blocked = 3;
-    data.kanban.attention = [
-      { severity: "critical", label: "Stale running task", board: "olympus", detail: "A worker heartbeat is stale." },
-      { severity: "warning", label: "Blocked task", board: "olympus", detail: "A task needs acceptance criteria." }
-    ];
-    data.activity_events.unshift({
-      label: "Worker heartbeat stale",
-      kind: "worker_stale",
-      source: "Kanban",
-      profile: "Default",
-      detail: "Browser smoke",
-      state: "warning"
-    });
-    data.trace_spine.summary.state = "critical";
-    data.trace_spine.summary.failure_points = 6;
-    data.trace_spine.items[0].severity = "critical";
-    data.trace_spine.items[0].signals = ["blocked", "stale", "retry", "failed_run", "failed_event"];
-    data.trace_spine.items[0].recommendation = "Review the stale worker before assigning more work.";
-    data.trace_spine.items[0].detail = "Blocked work and stale heartbeat evidence are on the same chain.";
     return data;
   }
 
   function highCost() {
     const data = clone(base);
     data.health.summary = "Fixture scan: cost and context pressure are intentionally high.";
-    data.tuning.score = 61;
-    data.tuning.score_breakdown.score = 61;
-    data.tuning.score_breakdown.label = "Needs review";
     data.tuning.agent_hq.summary.total_cost_usd = 32.75;
-    data.performance.summary.total_cost_usd = 32.75;
-    data.performance.summary.avg_tokens_per_call = 64000;
-    data.performance.lanes = data.performance.lanes.map((lane) => {
-      if (lane.id === "cost_risk") return { ...lane, value: 3, state: "warning", detail: "3 sessions over $4.00" };
-      if (lane.id === "context") return { ...lane, value: 64000, state: "warning", detail: "3 pressure sessions" };
-      return lane;
-    });
-    data.performance.signals.push({
-      severity: "warning",
-      label: "Cost concentration",
-      detail: "3 sessions crossed the cost review threshold",
-      recommended_view: "/analytics"
-    });
     data.config_policy.summary.costed_sessions = 3;
     data.config_policy.summary.total_cost_usd = 32.75;
     data.config_policy.settings = data.config_policy.settings.map((item) => (
@@ -1167,9 +427,6 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
     ));
     data.config_policy.findings = data.config_policy.findings.filter((item) => item.kind !== "cost");
     data.config_policy.summary.findings = data.config_policy.findings.length;
-    data.trace_spine.items[0].signals = ["tool_pressure", "retry", "failed_run"];
-    data.trace_spine.items[0].recommendation = "Review the failed run before repeating the high-cost path.";
-    data.trace_spine.items[0].detail = "Context pressure and worker retry evidence appear in the same trace.";
     return data;
   }
 
@@ -1191,39 +448,13 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
   function noLabels() {
     const data = clone(base);
     data.health.summary = "Fixture scan: private local labels are hidden.";
-    data.party.members = data.party.members.map((member, idx) => ({
-      ...member,
-      label: idx === 0 ? "Default" : "Profile " + idx,
-      id: idx === 0 ? "profile:default" : "profile:" + idx,
-      current_task: member.current_task ? { ...member.current_task, title: "Task " + idx } : member.current_task
-    }));
-    data.skill_coverage.profiles = data.skill_coverage.profiles.map((profile, idx) => ({
-      ...profile,
-      label: idx === 0 ? "Default" : "Profile " + idx
-    }));
-    data.profile_fitness.profiles = data.profile_fitness.profiles.map((profile, idx) => ({
-      ...profile,
-      label: idx === 0 ? "Default" : "Profile " + idx
-    }));
-    data.activity_events = data.activity_events.map((event, idx) => ({
-      ...event,
-      profile: idx === 0 ? "Default" : "Profile " + idx,
-      detail: "Task " + idx
-    }));
-    data.kanban.boards = data.kanban.boards.map((board, idx) => ({
-      ...board,
-      slug: idx === 0 ? "default" : "board:" + idx,
-      name: idx === 0 ? "Default" : "Board " + idx
-    }));
-    data.kanban.assignee_load = data.kanban.assignee_load.map((item, idx) => ({
-      ...item,
-      assignee: idx === 0 ? "Default" : "Profile " + idx
-    }));
     return scrubPrivateLabels(data);
   }
 
+  const KANBAN_ATTENTION = { noisy: 1, healthy: 0, empty: 0, overloaded: 1, stale: 2, "high-cost": 1, "no-labels": 1 };
+
   function withDiagnostics(data, state) {
-    const boardCount = data.kanban && data.kanban.boards ? data.kanban.boards.length : 0;
+    const boardCount = state === "empty" ? 0 : 1;
     const sourceState = state === "empty" ? "missing" : "ok";
     data.diagnostics = {
       route: "/overview",
@@ -1241,11 +472,11 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
         client_render: "reported_by_browser"
       },
       counts: {
-        profiles_scanned: data.party && data.party.members ? data.party.members.length : 0,
+        profiles_scanned: state === "empty" ? 0 : 5,
         sessions_scanned: state === "empty" ? 0 : 12,
-        kanban_boards_scanned: data.kanban && data.kanban.boards ? data.kanban.boards.length : 0,
+        kanban_boards_scanned: state === "empty" ? 0 : 1,
         kanban_board_read_failures: 0,
-        kanban_attention_items: data.kanban && data.kanban.attention ? data.kanban.attention.length : 0
+        kanban_attention_items: KANBAN_ATTENTION[state]
       },
       hermes: {
         version: "fixture",
@@ -1285,8 +516,8 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
           present: Boolean(boardCount),
           counts: {
             boards_scanned: boardCount,
-            open_tasks: data.kanban && data.kanban.open || 0,
-            attention_items: data.kanban && data.kanban.attention ? data.kanban.attention.length : 0
+            open_tasks: state === "empty" ? 0 : state === "overloaded" ? 18 : 9,
+            attention_items: KANBAN_ATTENTION[state]
           },
           fields: ["tasks.status", "tasks.assignee", "tasks.skills", "task_runs.outcome"],
           redaction: "Task IDs and board labels are hashed unless local labels are enabled.",
@@ -1300,7 +531,7 @@ window.__OLYMPUS_FIXTURE_DATA__ = {
           state: "ok",
           present: true,
           counts: {
-            profiles_scanned: data.party && data.party.members ? data.party.members.length : 0,
+            profiles_scanned: state === "empty" ? 0 : 5,
             cron_jobs: 3,
             gateways: 2
           },

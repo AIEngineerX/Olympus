@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   backendCompatibilityStatus,
+  defaultHermesHome,
   findOlympusPlugin,
   manifestDeclaresApi,
   parsePluginRows,
@@ -14,7 +15,7 @@ import {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const baseUrl = process.env.OLYMPUS_SMOKE_URL || "http://127.0.0.1:9119/olympus";
-const hermesHome = process.env.HERMES_HOME || path.join(process.env.HOME || "", ".hermes");
+const hermesHome = defaultHermesHome();
 const dashboardSourceDir = path.join(repoRoot, "dashboard");
 const dashboardTargetDir = path.join(hermesHome, "plugins", "olympus", "dashboard");
 const manifestPath = path.join(dashboardSourceDir, "manifest.json");

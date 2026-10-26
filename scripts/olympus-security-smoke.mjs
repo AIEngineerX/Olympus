@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-import { spawn, spawnSync } from "node:child_process";
-import fs from "node:fs";
+import { spawn } from "node:child_process";
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   backendCompatibilityStatus,
+  commandExists,
+  defaultHermesHome,
+  ensureDashboardLink,
   findOlympusPlugin,
   manifestDeclaresApi,
   parsePluginRows,
@@ -16,7 +18,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const baseUrl = process.env.OLYMPUS_SMOKE_URL || "http://127.0.0.1:9119/olympus";
 const apiUrl = new URL("/api/plugins/olympus/overview", baseUrl).toString();
 const dashboardSourceDir = path.join(repoRoot, "dashboard");
-const hermesHome = process.env.HERMES_HOME || path.join(process.env.HOME || "", ".hermes");
+const hermesHome = defaultHermesHome();
 const dashboardTargetDir = path.join(hermesHome, "plugins", "olympus", "dashboard");
 const manifestPath = path.join(dashboardSourceDir, "manifest.json");
 
@@ -40,7 +42,7 @@ const leakPatterns = [
   { name: "secret assignment", pattern: /(api[_-]?key|secret|password|passwd)\s*[:=]/i },
   { name: "bearer token", pattern: /bearer\s+[a-z0-9._~+/=-]+/i },
 ];
-const traceSpineBlockedKeys = new Set([
+const rawFieldKeys = new Set([
   "current_run_id",
   "event_id",
   "handoff_error",
@@ -100,22 +102,6 @@ async function waitForServer(url, timeoutMs = 30000) {
   return false;
 }
 
-function commandExists(command) {
-  const result = spawnSync("sh", ["-lc", `command -v ${command}`], { encoding: "utf8" });
-  return result.status === 0;
-}
-
-function linkAlreadyTargetsRepo() {
-  try {
-    const stat = fs.lstatSync(dashboardTargetDir);
-    return stat.isSymbolicLink() && path.resolve(path.dirname(dashboardTargetDir), fs.readlinkSync(dashboardTargetDir)) === dashboardSourceDir;
-  } catch {
-    return false;
-  }
-}
-
-
-
 async function backendCompatibilityHint(sessionToken, routeStatus) {
   const plugins = await requestText(new URL("/api/dashboard/plugins", baseUrl).toString(), {
     headers: sessionToken ? { "X-Hermes-Session-Token": sessionToken } : {},
@@ -133,21 +119,12 @@ async function backendCompatibilityHint(sessionToken, routeStatus) {
   return compatibility.hint;
 }
 
-function ensureDashboardLink() {
-  if (linkAlreadyTargetsRepo()) return;
-  if (fs.existsSync(dashboardTargetDir) && process.env.OLYMPUS_SMOKE_RELINK !== "1") {
-    throw new Error(`Hermes already has an Olympus dashboard at ${dashboardTargetDir}. Set OLYMPUS_SMOKE_RELINK=1 to replace it for this smoke run.`);
-  }
-  const result = spawnSync(path.join(repoRoot, "scripts", "install-dashboard-link.sh"), [], { cwd: repoRoot, encoding: "utf8" });
-  if (result.status !== 0) throw new Error(`install-dashboard-link.sh failed:\n${result.stderr || result.stdout}`);
-}
-
 async function startHermesIfNeeded() {
   if (await isHermesDashboard(baseUrl)) return null;
   if (!commandExists("hermes")) {
     throw new Error("hermes command is not installed; start Hermes yourself or install Hermes before running security smoke.");
   }
-  ensureDashboardLink();
+  ensureDashboardLink(dashboardSourceDir, dashboardTargetDir);
   const child = spawn("hermes", ["dashboard", "--no-open", "--skip-build"], {
     stdio: ["ignore", "pipe", "pipe"],
     env: process.env,
@@ -186,33 +163,31 @@ function assertPayload(payload) {
   if (!payload.evidence_sources) failures.push("missing evidence_sources");
   if (!payload.skill_hygiene) failures.push("missing skill_hygiene");
   if (!payload.config_policy) failures.push("missing config_policy");
-  if (!payload.trace_spine) failures.push("missing trace_spine");
-  if (!payload.ops_evals) failures.push("missing ops_evals");
   const serialized = JSON.stringify(payload);
   for (const item of leakPatterns) {
     const match = serialized.match(item.pattern);
     if (match) failures.push(`${item.name}: ${match[0]}`);
   }
-  const traceKeyLeaks = [];
-  function scanTrace(value, pathName) {
+  const rawFieldLeaks = [];
+  function scanRawFields(value, pathName) {
     if (Array.isArray(value)) {
-      value.forEach((item, idx) => scanTrace(item, `${pathName}[${idx}]`));
+      value.forEach((item, idx) => scanRawFields(item, `${pathName}[${idx}]`));
       return;
     }
     if (!value || typeof value !== "object") return;
     for (const [key, item] of Object.entries(value)) {
       const nextPath = `${pathName}.${key}`;
-      if (traceSpineBlockedKeys.has(key)) traceKeyLeaks.push(nextPath);
-      scanTrace(item, nextPath);
+      if (rawFieldKeys.has(key)) rawFieldLeaks.push(nextPath);
+      scanRawFields(item, nextPath);
     }
   }
-  scanTrace(payload.trace_spine, "trace_spine");
-  traceKeyLeaks.forEach((item) => failures.push(`trace_spine raw field: ${item}`));
+  scanRawFields(payload, "overview");
+  rawFieldLeaks.forEach((item) => failures.push(`raw field: ${item}`));
   const privacy = payload.evidence_sources &&
     payload.evidence_sources.summary &&
     payload.evidence_sources.summary.privacy;
-  if (process.env.OLYMPUS_EXPOSE_LOCAL_LABELS !== "1" && privacy !== "local labels hidden") {
-    failures.push(`unexpected privacy state: ${privacy || "missing"}`);
+  if (privacy !== "local labels hidden") {
+    failures.push(`unexpected privacy state: ${privacy || "missing"} (run the security smoke with dashboard.olympus.expose_local_labels off)`);
   }
   return failures;
 }

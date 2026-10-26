@@ -1,16 +1,19 @@
-"""Read-only backend for the Olympus Hermes dashboard plugin."""
+"""Backend for the Olympus Hermes dashboard plugin. Reads Hermes stores read-only; never writes them."""
 from __future__ import annotations
 
 import json
 import hashlib
+import math
 import logging
 import os
 import re
 import sqlite3
+import statistics
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 try:
     from fastapi import APIRouter
@@ -18,6 +21,9 @@ except Exception:
     class APIRouter:  # type: ignore
         def get(self, *_args, **_kwargs):
             return lambda fn: fn
+
+        post = get
+        delete = get
 
 try:
     from hermes_constants import get_hermes_home
@@ -39,6 +45,9 @@ RECENT_SECONDS = 60 * 60
 ACTIVE_SECONDS = 60 * 10
 KANBAN_READY_STALE_SECONDS = 60 * 60 * 24
 KANBAN_HEARTBEAT_STALE_SECONDS = 60 * 60
+# Hermes closes a cron session, delivers, then stamps the job's last_run_at;
+# a session that ended longer before that stamp is not the last run.
+CRON_RUN_SETTLE_SECONDS = 5 * 60
 TOOL_HEAVY_THRESHOLD = 20
 LONG_THREAD_THRESHOLD = 40
 OVERLOADED_OPEN_THRESHOLD = 5
@@ -47,6 +56,14 @@ CONTEXT_PRESSURE_TOKENS = 50000
 RUNAWAY_TOOLS_THRESHOLD = 40
 EXPENSIVE_RUN_USD = 1.0
 MAX_TURNS_REVIEW_THRESHOLD = 80
+KANBAN_CLOSED_TASK_SAMPLE = 100
+# Session signals cover a fixed time window so every count means "in the last
+# week", capped so a very busy fleet keeps the scan inside its response budget.
+SESSION_WINDOW_DAYS = 7
+SESSION_SCAN_LIMIT = 200
+SPEND_WINDOW_SECONDS = 60 * 60 * 24
+KANBAN_FINISHED_RUN_SAMPLE = 100
+KANBAN_DISPLAY_SAMPLE = 16
 API_RESPONSE_BUDGET_MS = 750.0
 PAYLOAD_BUDGET_BYTES = 250_000
 CLIENT_RENDER_BUDGET_MS = 150.0
@@ -58,15 +75,33 @@ SKILLS_SH_AUDIT_CHECKS = ("agent-trust-hub", "socket", "snyk")
 SKILLS_SH_AUDIT_OK = {"pass", "passed", "ok", "clean"}
 SKILLS_SH_AUDIT_WARN = {"warn", "warning", "review"}
 SKILLS_SH_AUDIT_FAIL = {"fail", "failed", "error", "critical", "block"}
-EXPOSE_LOCAL_LABELS = os.environ.get("OLYMPUS_EXPOSE_LOCAL_LABELS", "").strip().lower() in {"1", "true", "yes", "on"}
+# Behavioral settings belong in config.yaml, not env vars, so the
+# private-machine label opt-in lives at dashboard.olympus.expose_local_labels.
+# Refreshed at the start of every request; fails closed (labels hidden) when
+# the config cannot be read.
+EXPOSE_LOCAL_LABELS = False
 REDACTION_PATTERNS = [
-    re.compile(r"(?i)['\"]?(?:api[_-]?key|token|secret|password|passwd)['\"]?\s*[:=]\s*['\"]?[^'\"\s,}]+['\"]?"),
-    re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd)\s*[:=]\s*['\"]?[^'\"\s]+"),
+    # Secret assignments are removed whole: a quoted value (including one cut
+    # off by truncation) is consumed up to its closing quote, so
+    # `password='two word secret'` cannot leak its trailing words.
+    re.compile(
+        r"(?i)(?:['\"]?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd)['\"]?\s*[:=]\s*)"
+        r"(?:\"(?:[^\"\\]|\\.)*(?:\"|$)|'(?:[^'\\]|\\.)*(?:'|$)|[^\s,;}&]+)"
+    ),
     re.compile(r"(?i)(bearer\s+)[a-z0-9._~+/=-]+"),
     re.compile(r"sk-[A-Za-z0-9_-]{12,}"),
     re.compile(r"github_pat_[A-Za-z0-9_]+"),
     re.compile(r"ghp_[A-Za-z0-9_]+"),
     re.compile(r"xox[baprs]-[A-Za-z0-9-]+"),
+]
+# Free-text error/log fields routinely embed absolute filesystem paths and
+# delivery URLs (worker tracebacks, handoff failures, webhook errors). The
+# privacy contract says local paths and base URLs are hidden by default, so
+# scrub them alongside secret-like strings before any error text is returned.
+URL_PATTERN = re.compile(r"(?i)\b(?:https?|ftp|wss?)://[^\s'\"<>]+")
+PATH_PATTERNS = [
+    re.compile(r"(?i)[a-z]:\\[^\s'\"|<>]+"),         # Windows: C:\Users\alice\...
+    re.compile(r"(?<![\w.])~?(?:/[\w.\-]+){2,}/?"),  # POSIX / home: /home/alice/.hermes, ~/x/y
 ]
 # Precise log failure signals (avoids false positives like "0 failed" / "failed: false").
 LOG_ERROR_PATTERNS = [
@@ -80,15 +115,52 @@ LOG_ERROR_PATTERNS = [
 ]
 
 
+def olympus_settings() -> Dict[str, Any]:
+    """The ``dashboard.olympus`` block of config.yaml (raises if unreadable)."""
+    try:
+        from hermes_cli.config import load_config_readonly
+        cfg: Any = load_config_readonly() or {}
+    except ImportError:
+        # Standalone loads (plugin unit tests) run without hermes_cli on
+        # sys.path; read the active HERMES_HOME config directly.
+        cfg = read_yaml(get_hermes_home() / "config.yaml")
+    dashboard_cfg = cfg.get("dashboard") if isinstance(cfg, dict) else None
+    olympus_cfg = dashboard_cfg.get("olympus") if isinstance(dashboard_cfg, dict) else None
+    return olympus_cfg if isinstance(olympus_cfg, dict) else {}
+
+
+def refresh_expose_local_labels() -> bool:
+    global EXPOSE_LOCAL_LABELS
+    try:
+        value = bool(olympus_settings().get("expose_local_labels", False))
+    except Exception as exc:
+        log_read_warning("expose_local_labels config read failed", exc)
+        value = False
+    EXPOSE_LOCAL_LABELS = value
+    return value
+
+
+def controls_enabled() -> bool:
+    """Whether the page may act through Hermes (dashboard.olympus.controls).
+
+    On by default; every action is still confirmed. Fails closed when the
+    config cannot be read.
+    """
+    try:
+        return _cfg_flag(olympus_settings().get("controls"), True)
+    except Exception as exc:
+        log_read_warning("controls config read failed", exc)
+        return False
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def redact_log_value(value: Any, limit: int = 180) -> str:
-    text = "" if value is None else str(value)
-    for pattern in REDACTION_PATTERNS:
-        text = pattern.sub(lambda m: m.group(1) + "[redacted]" if m.groups() else "[redacted]", text)
-    return text[:limit]
+    # Same redaction the API payloads use, so log warnings can't leak a path
+    # or secret that the response fields scrub.
+    return redact_text(value, limit)
 
 
 def log_read_warning(context: str, exc: BaseException) -> None:
@@ -126,10 +198,17 @@ def age_state(iso_or_ts: Any) -> str:
 
 
 def read_text(path: Path, limit: int = 12000) -> str:
+    """Return the last ``limit`` bytes of a file without reading the rest.
+
+    Hermes logs grow without bound; seeking keeps each scan O(limit) in time
+    and memory regardless of log size.
+    """
     try:
-        data = path.read_text(errors="replace")
-        return data[-limit:]
-    except Exception as exc:
+        with path.open("rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, size - limit))
+            return handle.read(limit).decode("utf-8", errors="replace")
+    except OSError as exc:
         if path.exists():
             log_read_warning(f"read_text failed for {path.name}", exc)
         return ""
@@ -168,7 +247,42 @@ def redact_text(value: Any, limit: int = 180) -> str:
     text = "" if value is None else str(value)
     for pattern in REDACTION_PATTERNS:
         text = pattern.sub(lambda m: m.group(1) + "[redacted]" if m.groups() else "[redacted]", text)
+    text = URL_PATTERN.sub("[redacted-url]", text)
+    for pattern in PATH_PATTERNS:
+        text = pattern.sub("[redacted-path]", text)
     return text[:limit]
+
+
+# Free-text failure messages can quote prompt text, task titles, or raw IDs that
+# no pattern can reliably scrub. By default only the failure class is returned;
+# the redacted text is shown only when local labels are enabled.
+ERROR_CATEGORIES = [
+    ("timeout", re.compile(r"(?i)timed?\s*out|timeout|deadline exceeded")),
+    ("rate limit", re.compile(r"(?i)rate[\s_-]?limit|\b429\b|too many requests")),
+    ("auth", re.compile(r"(?i)unauthori[sz]ed|forbidden|\b40[13]\b|invalid (?:api )?key|authenticat|permission denied|credential")),
+    ("quota", re.compile(r"(?i)quota|insufficient[_ ](?:funds|credit|balance)|billing|payment required|\b402\b")),
+    ("context limit", re.compile(r"(?i)context (?:length|window)|maximum context|too many tokens|prompt is too long")),
+    ("network", re.compile(r"(?i)connection (?:refused|reset|error|aborted)|unreachable|name resolution|dns|ssl|tls|network|econn")),
+    ("delivery", re.compile(r"(?i)deliver|webhook|send(?:ing)? (?:message|failed)|chat not found")),
+    ("not found", re.compile(r"(?i)not found|no such file|\b404\b|does not exist")),
+    ("crash", re.compile(r"(?i)traceback|exception|segmentation fault|killed|crash|exit(?:ed)? (?:code|status)")),
+]
+
+
+def error_category(value: Any) -> str:
+    text = "" if value is None else str(value)
+    for label, pattern in ERROR_CATEGORIES:
+        if pattern.search(text):
+            return label
+    return "error"
+
+
+def public_error(value: Any, limit: int = 180) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if EXPOSE_LOCAL_LABELS:
+        return redact_text(value, limit)
+    return f"{error_category(value)} (details hidden)"
 
 
 def safe_int(value: Any, default: int = 0) -> int:
@@ -179,8 +293,17 @@ def safe_int(value: Any, default: int = 0) -> int:
     except (TypeError, ValueError):
         try:
             return int(float(value))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return default
+
+
+def safe_float(value: Any, default: float = 0.0) -> float:
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def safe_id(value: Any, prefix: str = "item") -> str:
@@ -201,13 +324,6 @@ def public_label(raw: Any, fallback: str, prefix: str = "item") -> str:
     if EXPOSE_LOCAL_LABELS and raw:
         return redact_text(raw, 120)
     return fallback or safe_id(raw, prefix)
-
-
-def public_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
-    out = {k: v for k, v in profile.items() if k not in {"_path", "path", "_public_name"}}
-    if "_public_name" in profile:
-        out["name"] = profile["_public_name"]
-    return out
 
 
 def strip_internal(value: Any) -> Any:
@@ -305,6 +421,7 @@ def build_evidence_sources(profiles: List[Dict[str, Any]], sessions: List[Dict[s
     hub_lock = hermes_home / "skills" / ".hub" / "lock.json"
     boards = as_list(kanban.get("boards"))
     board_failures = sum(1 for board in boards if isinstance(board, dict) and board.get("error"))
+    boards_present = any(isinstance(board, dict) and board.get("db_exists") for board in boards)
 
     session_count = _sqlite_count(state_store, "sessions")
     message_count = _sqlite_count(state_store, "messages")
@@ -342,8 +459,8 @@ def build_evidence_sources(profiles: List[Dict[str, Any]], sessions: List[Dict[s
             "id": "hermes_kanban",
             "label": "Hermes Kanban store",
             "type": "sqlite",
-            "state": _source_state(bool(boards), board_failures),
-            "present": bool(boards),
+            "state": _source_state(boards_present, board_failures),
+            "present": boards_present,
             "counts": {
                 "boards_scanned": len(boards),
                 "open_tasks": int(kanban.get("open") or 0),
@@ -768,7 +885,7 @@ def build_skill_hygiene(skill_metadata: Dict[str, Any], skill_coverage: Dict[str
         )
 
     forced_skill_names: set[str] = set()
-    for task in kanban_items(kanban, "recent_tasks"):
+    for task in kanban_items(kanban, "_tasks"):
         for name in as_list(task.get("_skills")):
             if name:
                 forced_skill_names.add(str(name))
@@ -776,7 +893,7 @@ def build_skill_hygiene(skill_metadata: Dict[str, Any], skill_coverage: Dict[str
     if missing_forced:
         add_signal(
             "warning",
-            "Forced-skill Kanban work lacks local metadata",
+            "Kanban tasks require skills this machine does not have",
             "Kanban references skills that do not appear in local usage or hub metadata. Review the task or skill install.",
             ", ".join(_public_skill_label(name) for name in missing_forced[:4]),
             "/kanban",
@@ -872,6 +989,16 @@ def row_value(row: sqlite3.Row, key: str, default: Any = None) -> Any:
     except Exception:
         pass
     return default
+
+
+def recency_expr(columns: List[str], fallback: str = "rowid") -> str:
+    """Latest-of expression for the given timestamp columns.
+
+    SQLite's COALESCE needs at least two arguments, so one column is used as is.
+    """
+    if len(columns) > 1:
+        return f"COALESCE({', '.join(columns)})"
+    return columns[0] if columns else fallback
 
 
 def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -984,6 +1111,13 @@ def _cfg_value(config: Dict[str, Any], *keys: str) -> Any:
     return current
 
 
+def _cfg_flag(value: Any, default: bool) -> bool:
+    """A config boolean that falls back to Hermes' default when unset."""
+    if value in (None, ""):
+        return default
+    return _cfg_bool(value)
+
+
 def _cfg_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -1038,24 +1172,28 @@ def _config_max_turns(configs: List[Dict[str, Any]], kanban: Dict[str, Any]) -> 
             val = _cfg_int(_cfg_value(cfg, *path))
             if val is not None:
                 values.append(val)
-    for task in kanban_items(kanban, "recent_tasks"):
+    for task in kanban_items(kanban, "_tasks"):
         val = _cfg_int(task.get("goal_max_turns"))
         if val is not None:
             values.append(val)
     return values
 
 
-def _loop_guardrail_enabled(config: Dict[str, Any]) -> bool:
-    for path in (["tool_loop_guardrails"], ["tool_loop_guardrail"], ["agent", "tool_loop_guardrails"], ["agent", "loop_guardrails"]):
-        section = _cfg_value(config, *path)
-        if isinstance(section, dict):
-            if any(_cfg_bool(section.get(key)) for key in ("enabled", "hard_stop", "hard_stop_enabled", "stop_enabled")):
-                return True
-            if any(section.get(key) not in (None, "", 0, False) for key in ("max_repeats", "max_tool_repeats", "max_iterations", "max_tool_calls")):
-                return True
-        elif _cfg_bool(section):
-            return True
-    return False
+def _loop_guardrail_policy(config: Dict[str, Any]) -> Dict[str, bool]:
+    """Effective hard-stop coverage from Hermes' top-level ``tool_loop_guardrails``.
+
+    Mirrors agent/tool_guardrails.ToolCallGuardrailConfig: hard stops are off
+    for attended platforms (cli/tui/desktop) unless ``hard_stop_enabled``, and
+    on for unattended gateway/cron sessions unless
+    ``non_interactive_hard_stop_enabled`` is turned off. An absent section
+    means Hermes' defaults.
+    """
+    section = config.get("tool_loop_guardrails")
+    if not isinstance(section, dict):
+        section = {}
+    hard_stop = _cfg_flag(section.get("hard_stop_enabled"), False)
+    unattended = hard_stop or _cfg_flag(section.get("non_interactive_hard_stop_enabled"), True)
+    return {"interactive": hard_stop, "unattended": unattended}
 
 
 def _auxiliary_route_count(config: Dict[str, Any], env_names: set[str]) -> int:
@@ -1090,7 +1228,12 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
 
     max_turns_values = _config_max_turns(configs, kanban)
     max_turns = max(max_turns_values) if max_turns_values else 0
-    hard_loop_stop = any(_loop_guardrail_enabled(cfg) for cfg in configs)
+    # Each profile runs with its own config.yaml, so coverage holds only when
+    # every scanned config provides it.
+    loop_policies = [_loop_guardrail_policy(cfg) for cfg in configs]
+    hard_loop_stop = all(policy["unattended"] for policy in loop_policies)
+    interactive_hard_stop = all(policy["interactive"] for policy in loop_policies)
+    high_turn_limit = max_turns >= MAX_TURNS_REVIEW_THRESHOLD
     fallback_count = _cfg_any_count(root_config, [["fallback_providers"], ["model", "fallback_providers"], ["providers", "fallback"], ["providers", "fallback_providers"]])
     toolset_count = sum(_cfg_any_count(cfg, [["toolsets"], ["tools", "toolsets"], ["agent", "toolsets"]]) for cfg in configs)
     compression_enabled = any(_cfg_any_bool(cfg, [["compression", "enabled"], ["agent", "compression"], ["memory", "compression"]]) for cfg in configs)
@@ -1107,7 +1250,7 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
 
     def add(kind: str, severity: str, title: str, detail: str, evidence: str, view: str, basis: str, threshold: str = "") -> None:
         action = "Open Config" if view == "/config" else ("Open Sessions" if view == "/sessions" else "Open Analytics")
-        findings.append(_tuning_item(kind, severity, title, detail, evidence, view, action, "Athena", basis, threshold))
+        findings.append(_tuning_item(kind, severity, title, detail, evidence, view, action, "Olympus", basis, threshold))
 
     if root_config_path.exists() is False and not profile_configs:
         add(
@@ -1119,16 +1262,27 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
             "/config",
             "Hermes config.yaml presence",
         )
-    if max_turns >= MAX_TURNS_REVIEW_THRESHOLD and not hard_loop_stop:
+    if high_turn_limit and not hard_loop_stop:
         add(
             "policy",
             "warning",
-            "High turn limit lacks a visible loop stop",
-            "High agent turn limits need a visible hard loop guardrail so tool thrash stops before it burns time and tokens.",
-            f"max_turns {max_turns} / hard stop not visible",
+            "Unattended sessions have no loop hard stop",
+            "tool_loop_guardrails.non_interactive_hard_stop_enabled is off, so gateway and cron sessions only warn on tool loops while a high turn limit lets them run long. Nobody is present to stop them.",
+            f"max_turns {max_turns} / unattended hard stop off",
             "/config",
-            "Hermes agent.max_turns plus tool_loop_guardrails",
-            f"max_turns >= {MAX_TURNS_REVIEW_THRESHOLD} and hard loop stop disabled or missing",
+            "Turn limit and loop guardrail settings",
+            f"max_turns >= {MAX_TURNS_REVIEW_THRESHOLD} and non_interactive_hard_stop_enabled false",
+        )
+    elif high_turn_limit and not interactive_hard_stop:
+        add(
+            "policy",
+            "info",
+            "Interactive sessions only warn on tool loops",
+            "Gateway and cron sessions hard-stop on loops, but CLI, TUI and Desktop sessions only warn (Hermes' default). Enable hard_stop_enabled if long attended runs keep looping.",
+            f"max_turns {max_turns} / interactive hard stop off",
+            "/config",
+            "Turn limit and loop guardrail settings",
+            f"max_turns >= {MAX_TURNS_REVIEW_THRESHOLD} and hard_stop_enabled false",
         )
     if browser_private_urls:
         add(
@@ -1158,7 +1312,7 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
             "Auxiliary or background provider routes are configured, but recent sessions do not expose cost. Background work can hide spend without a usage signal.",
             f"{auxiliary_routes} auxiliary route signal(s) / 0 costed sessions",
             "/analytics",
-            "Hermes auxiliary route presence plus per-session cost fields",
+            "Auxiliary model routes and session costs",
         )
     if fallback_count and not route_audit_profiles:
         add(
@@ -1186,7 +1340,7 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
             "id": "max_turns",
             "label": "Max Turns",
             "value": max_turns,
-            "state": "warning" if max_turns >= MAX_TURNS_REVIEW_THRESHOLD and not hard_loop_stop else ("active" if max_turns else "unknown"),
+            "state": "warning" if high_turn_limit and not hard_loop_stop else ("active" if max_turns else "unknown"),
             "detail": "Highest configured agent or goal turn limit.",
             "source": "agent.max_turns and Kanban goal_max_turns",
             "recommended_view": "/config",
@@ -1194,9 +1348,9 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
         {
             "id": "loop_guard",
             "label": "Loop Stop",
-            "value": "visible" if hard_loop_stop else "not visible",
-            "state": "ok" if hard_loop_stop else ("warning" if max_turns >= MAX_TURNS_REVIEW_THRESHOLD else "unknown"),
-            "detail": "Hard loop guardrail or repeated-tool stop evidence.",
+            "value": "all sessions" if interactive_hard_stop else ("unattended only" if hard_loop_stop else "off"),
+            "state": "ok" if hard_loop_stop else ("warning" if high_turn_limit else "unknown"),
+            "detail": "Sessions where repeated failing tool calls hard-stop instead of only warning.",
             "source": "tool_loop_guardrails",
             "recommended_view": "/config",
         },
@@ -1248,6 +1402,7 @@ def collect_config_policy(profiles: List[Dict[str, Any]], sessions: List[Dict[st
             "profile_configs": len(profile_configs),
             "max_turns": max_turns,
             "hard_loop_stop": hard_loop_stop,
+            "interactive_hard_stop": interactive_hard_stop,
             "fallback_providers": fallback_count,
             "toolsets": toolset_count,
             "compression_enabled": compression_enabled,
@@ -1295,17 +1450,36 @@ def _process_cmdline(pid: int) -> Optional[str]:
 
 
 def gateway_process_state(profile_home: Path) -> str:
-    """Gateway liveness for a profile using Hermes' `gateway.pid` contract."""
-    pid_path = profile_home / "gateway.pid"
+    """Gateway liveness for a profile home.
+
+    Inside Hermes this is ``gateway.status.live_gateway_pid_for_home``: pid file
+    and runtime lock first, then the runtime record, so a launch-service
+    gateway whose ``gateway.pid`` was unlinked still reads as running. Outside
+    Hermes (unit tests) the ``gateway.pid`` record is checked directly.
+    """
+    try:
+        from gateway.status import live_gateway_pid_for_home  # type: ignore
+    except ImportError:
+        return _pid_file_gateway_state(profile_home / "gateway.pid")
+    return "running" if live_gateway_pid_for_home(profile_home) else "stopped"
+
+
+def multiplexed_profile_names(root: Path, root_gateway_state: str) -> set[str]:
+    """Named profiles the live default gateway serves as a multiplexer.
+
+    Such profiles have no gateway of their own; the default gateway records
+    them as ``served_profiles`` in its ``gateway_state.json`` (Hermes #97120).
+    """
+    if root_gateway_state != "running":
+        return set()
+    record = read_json(root / "gateway_state.json")
+    served = record.get("served_profiles") if isinstance(record, dict) else None
+    return {str(name) for name in as_list(served) if name and name != "default"}
+
+
+def _pid_file_gateway_state(pid_path: Path) -> str:
     if not pid_path.exists():
         return "stopped"
-    try:
-        from gateway.status import get_running_pid  # type: ignore
-
-        return "running" if get_running_pid(pid_path, cleanup_stale=False) else "stopped"
-    except Exception:
-        pass
-
     record = read_json(pid_path)
     pid: Optional[int] = None
     kind: Optional[str] = None
@@ -1331,20 +1505,76 @@ def gateway_process_state(profile_home: Path) -> str:
     return "running" if kind == "hermes-gateway" else "unknown"
 
 
+# Mirrors hermes_constants.PROFILE_ID_RE: named profiles live in
+# <root>/profiles/<id>; anything else in that folder (the .deleted tombstone,
+# stray files) is not a profile.
+PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+def hermes_root(home: Path) -> Path:
+    """Hermes root for a home, like Hermes' ``profile_root_for_env_home``.
+
+    The root is the ``default`` profile's home; a profile-shaped home
+    (``<root>/profiles/<name>``) belongs to the root two levels up.
+    """
+    return home.parent.parent if home.parent.name == "profiles" else home
+
+
+def profile_homes() -> List[tuple[str, Path]]:
+    """Every profile as (name, home), default first, named profiles sorted."""
+    root = hermes_root(get_hermes_home())
+    homes: List[tuple[str, Path]] = [("default", root)]
+    profiles_dir = root / "profiles"
+    if profiles_dir.is_dir():
+        for entry in sorted(profiles_dir.iterdir()):
+            if entry.is_dir() and entry.name != "default" and PROFILE_ID_RE.match(entry.name):
+                homes.append((entry.name, entry))
+    return homes
+
+
+def active_profile_name() -> str:
+    base = get_hermes_home().resolve()
+    for name, home in profile_homes():
+        if home.resolve() == base:
+            return name
+    return "default"
+
+
+def profile_stores(profiles: Optional[List[Dict[str, Any]]]) -> List[tuple[str, Path]]:
+    """(raw profile name, home) for each scanned profile, or the active home alone."""
+    stores = [
+        (str(profile["name"]), Path(str(profile["_path"])))
+        for profile in as_list(profiles)
+        if isinstance(profile, dict) and profile.get("name") and profile.get("_path")
+    ]
+    return stores or [(active_profile_name(), get_hermes_home())]
+
+
+def profile_role(home: Path) -> Dict[str, Any]:
+    """Role from Hermes' profile.yaml (what the Kanban decomposer routes by).
+
+    The description is the operator's own text, so like other labels it is
+    returned only when local labels are enabled; its state always is.
+    """
+    meta = read_yaml(home / "profile.yaml")
+    description = str(meta.get("description") or "").strip()
+    if not description:
+        state = "missing"
+    elif meta.get("description_auto"):
+        state = "auto"
+    else:
+        state = "described"
+    return {"role_state": state, "role": redact_text(description, 200) if EXPOSE_LOCAL_LABELS and description else None}
+
+
 def collect_profiles() -> List[Dict[str, Any]]:
-    base = get_hermes_home()
+    base = get_hermes_home().resolve()
     profiles: List[Dict[str, Any]] = []
+    homes = profile_homes()
+    root_gateway = gateway_process_state(homes[0][1])
+    multiplexed = multiplexed_profile_names(homes[0][1], root_gateway)
 
-    candidates = [("default", base)]
-    prof_dir = base / "profiles"
-    if not prof_dir.exists() and base.parent.name == "profiles":
-        prof_dir = base.parent
-    if prof_dir.exists():
-        for p in sorted(prof_dir.iterdir()):
-            if p.is_dir() and p.resolve() != base.resolve():
-                candidates.append((p.name, p))
-
-    for name, home in candidates:
+    for name, home in homes:
         cfg = profile_config(home)
         model = summarize_model(cfg)
         model_name = model.get("model")
@@ -1358,7 +1588,11 @@ def collect_profiles() -> List[Dict[str, Any]]:
                 skill_count = sum(1 for p in skills_dir.rglob("SKILL.md") if p.is_file())
             except Exception:
                 skill_count = 0
-        gstate = gateway_process_state(home)
+        gstate = root_gateway if name == "default" else gateway_process_state(home)
+        gateway_mode = "own" if gstate == "running" else None
+        if gstate != "running" and name in multiplexed:
+            gstate = "running"
+            gateway_mode = "multiplexed"
         trust = "primary" if name == "default" else "isolated"
         profile_number = len(profiles)
         public_name = name if (EXPOSE_LOCAL_LABELS or name == "default") else f"profile_{profile_number}"
@@ -1378,18 +1612,98 @@ def collect_profiles() -> List[Dict[str, Any]]:
             "has_soul": soul_exists,
             "skill_count": skill_count,
             "gateway_state": gstate,
+            "gateway_mode": gateway_mode,
+            "dashboard_home": home.resolve() == base,
+            **profile_role(home),
         })
     return profiles
 
 
+def cron_schedule_display(job: Dict[str, Any]) -> Optional[str]:
+    """Human-readable schedule for a cron job, tolerant of legacy shapes.
+
+    ``schedule`` may be a dict (current shape, carrying a ``display`` field), a
+    bare string (older / hand-edited ``jobs.json``), or absent. Mirrors Hermes'
+    own ``_schedule_display_for_job`` normalization so a string schedule doesn't
+    raise ``AttributeError`` on ``.get("display")`` and 500 the whole scan.
+    """
+    display = job.get("schedule_display")
+    if display:
+        return str(display)
+    schedule = job.get("schedule")
+    if isinstance(schedule, dict):
+        return schedule.get("display")
+    if schedule is not None:
+        return str(schedule)
+    return None
+
+
 def collect_cron(profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
-    base = get_hermes_home()
-    data = read_json(base / "cron" / "jobs.json") or {}
-    jobs = data.get("jobs") if isinstance(data, dict) else []
-    if not isinstance(jobs, list):
-        return []
+    # Cron is per-profile in Hermes: each profile home owns cron/jobs.json and
+    # runs those jobs under its own config, so the store a job came from is
+    # its profile.
     profile_public_names = profile_public_map(as_list(profiles))
     out: List[Dict[str, Any]] = []
+    for raw_profile, home in profile_stores(profiles):
+        data = read_json(home / "cron" / "jobs.json") or {}
+        jobs = as_list(data.get("jobs") if isinstance(data, dict) else [])
+        out.extend(_cron_rows(jobs, raw_profile, profile_public_names, _cron_last_run_tool_failures(home / "state.db", jobs)))
+    return out
+
+
+def _cron_last_run_tool_failures(db: Path, jobs: List[Any]) -> Dict[str, Dict[str, Any]]:
+    """Per job id: its last run, when Hermes recorded it OK but every tool call failed.
+
+    Hermes titles each cron session "<job name> · <time>" before closing it
+    and sets the job's last_run_at just after (cron/scheduler.py
+    _finalize_cron_session), so the last run is the newest session with that
+    title that ended shortly before last_run_at.
+    """
+    wanted: Dict[str, tuple[str, float]] = {}
+    for job in jobs:
+        if not isinstance(job, dict) or not job.get("id") or job.get("no_agent") or job.get("last_status") != "ok":
+            continue
+        last_run = parse_iso_ts(job.get("last_run_at"))
+        if last_run is None:
+            continue
+        job_id = str(job["id"])
+        base = " ".join(str(job.get("name") or job.get("prompt") or job_id).split())[:60].strip() or f"cron {job_id}"
+        wanted[job_id] = (f"{base} · ", last_run)
+    if not wanted or not db.exists():
+        return {}
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    out: Dict[str, Dict[str, Any]] = {}
+    try:
+        if not {"id", "source", "title", "started_at", "ended_at"}.issubset(table_columns(con, "sessions")):
+            return {}
+        for job_id, (prefix, last_run) in wanted.items():
+            row = con.execute(
+                "SELECT id, ended_at FROM sessions WHERE source = 'cron' AND started_at <= ? AND substr(title, 1, ?) = ? "
+                "ORDER BY started_at DESC LIMIT 1",
+                (last_run, len(prefix), prefix),
+            ).fetchone()
+            if row is None or not 0 <= last_run - safe_float(row["ended_at"]) <= CRON_RUN_SETTLE_SECONDS:
+                continue
+            failed = _sessions_with_every_tool_failed(con, "s.id = ?", (row["id"],)).get(str(row["id"]))
+            if failed:
+                out[job_id] = failed
+    except sqlite3.Error as exc:
+        log_read_warning("cron last-run scan failed", exc)
+        return {}
+    finally:
+        con.close()
+    return out
+
+
+def _cron_rows(
+    jobs: List[Any],
+    raw_profile: str,
+    profile_public_names: Dict[str, str],
+    tool_failures: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    public_name = public_profile_label(raw_profile, profile_public_names) or "default"
     for job in jobs:
         if not isinstance(job, dict):
             continue
@@ -1397,8 +1711,13 @@ def collect_cron(profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[s
         enabled = bool(job.get("enabled", True))
         error = job.get("last_error") or job.get("last_delivery_error")
         state = "error" if error or last_status == "error" else ("scheduled" if enabled else "paused")
-        raw_profile = str(job.get("profile") or "default")
-        public_name = public_profile_label(raw_profile, profile_public_names) or "default"
+        tools_failed = None if state == "error" else tool_failures.get(str(job.get("id")))
+        last_error = public_error(error)
+        if tools_failed:
+            state = "error"
+            calls = tools_failed["calls"]
+            which = "its only tool call" if calls == 1 else f"all {calls} of its tool calls"
+            last_error = f"Hermes recorded the run as OK, but {which} failed. {public_error(tools_failed['first'])}"
         job_ref = public_ref(job.get("id"), "cron") or "cron"
         out.append({
             "id": job_ref,
@@ -1407,11 +1726,12 @@ def collect_cron(profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[s
             "label": public_label(job.get("name"), job_ref, "cron"),
             "state": state,
             "enabled": enabled,
-            "schedule": job.get("schedule_display") or (job.get("schedule") or {}).get("display"),
+            "schedule": cron_schedule_display(job),
             "next_run_at": ts_to_iso(job.get("next_run_at")),
             "last_run_at": ts_to_iso(job.get("last_run_at")),
             "last_status": last_status,
-            "last_error": redact_text(error) if error else None,
+            "last_error": last_error,
+            "tools_failed": bool(tools_failed),
             "profile": public_name,
             "_profile": raw_profile,
             "no_agent": bool(job.get("no_agent")),
@@ -1419,8 +1739,28 @@ def collect_cron(profiles: Optional[List[Dict[str, Any]]] = None) -> List[Dict[s
     return out
 
 
-def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
-    db = get_hermes_home() / "state.db"
+def collect_sessions(
+    limit: int = 12,
+    profiles: Optional[List[Dict[str, Any]]] = None,
+    since: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """Most recently active sessions across every profile's state store.
+
+    ``since`` (epoch seconds) keeps only sessions active at or after it.
+    """
+    profile_public_names = profile_public_map(as_list(profiles))
+    rows: List[Dict[str, Any]] = []
+    for raw_profile, home in profile_stores(profiles):
+        public_name = public_profile_label(raw_profile, profile_public_names) or "default"
+        for session in _store_sessions(home / "state.db", limit, since):
+            session["profile"] = public_name
+            session["_profile"] = raw_profile
+            rows.append(session)
+    rows.sort(key=lambda s: float(s.get("_last_ts") or 0), reverse=True)
+    return rows[:limit]
+
+
+def _store_sessions(db: Path, limit: int, since: Optional[float] = None) -> List[Dict[str, Any]]:
     if not db.exists():
         return []
     con: Optional[sqlite3.Connection] = None
@@ -1431,21 +1771,25 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
         wanted = [
             "id", "source", "started_at", "ended_at", "end_reason", "message_count",
             "tool_call_count", "model", "title", "handoff_platform", "handoff_error",
-            "input_tokens", "output_tokens", "reasoning_tokens", "api_call_count",
-            "estimated_cost_usd", "actual_cost_usd",
+            "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+            "reasoning_tokens", "api_call_count", "estimated_cost_usd", "actual_cost_usd",
+            "last_activity_at",
         ]
         select = [c for c in wanted if c in cols]
         if "id" not in select:
             return []
-        if "ended_at" in cols and "started_at" in cols:
-            order = "COALESCE(ended_at, started_at)"
-        elif "started_at" in cols:
-            order = "started_at"
-        else:
-            order = "id"
+        # Most recent activity first: a long-running session that is still
+        # working must not sort behind newer, idle ones.
+        recency = [c for c in ("last_activity_at", "ended_at", "started_at") if c in cols]
+        order = recency_expr(recency, "id")
+        where = ""
+        params: tuple[Any, ...] = (limit,)
+        if since is not None and recency:
+            where = f" WHERE {order} >= ?"
+            params = (since, limit)
         rows = con.execute(
-            f"SELECT {', '.join(select)} FROM sessions ORDER BY {order} DESC LIMIT ?",
-            (limit,),
+            f"SELECT {', '.join(select)} FROM sessions{where} ORDER BY {order} DESC LIMIT ?",
+            params,
         ).fetchall()
     except Exception as exc:
         log_read_warning("session scan failed", exc)
@@ -1460,9 +1804,10 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
     for r in rows:
         ended = row_value(r, "ended_at")
         started = row_value(r, "started_at")
-        last_ts = ended or started
+        last_activity = row_value(r, "last_activity_at")
+        last_ts = last_activity or ended or started
         if ended is None:
-            state = "active" if age_state(started) in ("active", "recent") else "stale"
+            state = "active" if age_state(last_ts) in ("active", "recent") else "stale"
         else:
             state = "recent" if age_state(last_ts) in ("active", "recent") else "completed"
         handoff_error = row_value(r, "handoff_error")
@@ -1480,11 +1825,16 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
         tool_call_count = safe_int(row_value(r, "tool_call_count", 0))
         input_tokens = safe_int(row_value(r, "input_tokens", 0))
         output_tokens = safe_int(row_value(r, "output_tokens", 0))
-        reasoning_tokens = safe_int(row_value(r, "reasoning_tokens", 0))
+        cache_read_tokens = safe_int(row_value(r, "cache_read_tokens", 0))
+        cache_write_tokens = safe_int(row_value(r, "cache_write_tokens", 0))
         api_calls = safe_int(row_value(r, "api_call_count", 0))
-        # Average per API call is the context-pressure signal; cumulative tokens
-        # over-count chatty sessions.
-        avg_input_tokens = int(input_tokens / api_calls) if api_calls > 0 else 0
+        # Hermes' CanonicalUsage buckets: input_tokens is the uncached part of
+        # the prompt, so the prompt the model actually saw adds both cache
+        # buckets; reasoning is already inside output_tokens.
+        prompt_tokens = input_tokens + cache_read_tokens + cache_write_tokens
+        # Average prompt per API call is the context-pressure signal;
+        # cumulative tokens over-count chatty sessions.
+        avg_input_tokens = int(prompt_tokens / api_calls) if api_calls > 0 else 0
         actual_cost = row_value(r, "actual_cost_usd")
         estimated_cost = row_value(r, "estimated_cost_usd")
         cost_source = actual_cost if actual_cost not in (None, "") else estimated_cost
@@ -1506,16 +1856,21 @@ def collect_sessions(limit: int = 12) -> List[Dict[str, Any]]:
             "message_count": message_count,
             "tool_call_count": tool_call_count,
             "duration_seconds": duration_seconds,
+            "last_activity_at": ts_to_iso(last_ts),
+            "_last_ts": safe_float(last_ts),
             "input_tokens": input_tokens,
+            "cache_read_tokens": cache_read_tokens,
+            "cache_write_tokens": cache_write_tokens,
+            "prompt_tokens": prompt_tokens,
             "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens + reasoning_tokens,
+            "total_tokens": prompt_tokens + output_tokens,
             "avg_input_tokens": avg_input_tokens,
             "api_call_count": api_calls,
             "cost_usd": round(cost_usd, 4),
             "cost_estimated": cost_estimated,
             "model": model if EXPOSE_LOCAL_LABELS else ("configured" if model else None),
             "handoff_platform": row_value(r, "handoff_platform"),
-            "handoff_error": redact_text(handoff_error) if handoff_error else None,
+            "handoff_error": public_error(handoff_error),
         })
     return out
 
@@ -1578,8 +1933,8 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
     totals = {status: 0 for status in KANBAN_COLUMNS}
     attention: List[Dict[str, Any]] = []
     assignee_load: Dict[str, Dict[str, Any]] = {}
-    recent_tasks: List[Dict[str, Any]] = []
-    recent_runs: List[Dict[str, Any]] = []
+    tasks: List[Dict[str, Any]] = []
+    runs: List[Dict[str, Any]] = []
     active_workers: List[Dict[str, Any]] = []
 
     def add_attention(severity: str, label: str, detail: str, board: str, task_id: Optional[str] = None) -> None:
@@ -1605,8 +1960,15 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
             "diagnostic_count": 0,
             "active_workers": 0,
         })
-        if con is None:
+        if not db_path.exists():
+            board["state"] = "missing"
             continue
+        if con is None:
+            board["state"] = "error"
+            board["error"] = "unreadable (details hidden)" if not EXPOSE_LOCAL_LABELS else "SQLite could not open the board database read-only."
+            add_attention("warning", f"Could not read Kanban board {slug}", "The board database exists but could not be opened read-only.", slug)
+            continue
+        board["state"] = "ok"
         try:
             task_cols = table_columns(con, "tasks")
             run_cols = table_columns(con, "task_runs")
@@ -1623,15 +1985,47 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "consecutive_failures", "last_failure_error", "worker_pid", "claim_expires",
                 "last_heartbeat_at", "current_run_id", "max_runtime_seconds", "session_id",
                 "goal_mode", "goal_max_turns", "workspace_kind", "tenant", "skills", "model_override",
+                "block_kind", "block_recurrences",
             ]
             task_select = [c for c in task_select if c in task_cols]
+            task_rows = []
             if task_select:
-                task_rows = con.execute(
-                    f"SELECT {', '.join(task_select)} FROM tasks WHERE status != 'archived' "
-                    "ORDER BY COALESCE(completed_at, started_at, created_at) DESC LIMIT 400"
-                ).fetchall()
-            else:
-                task_rows = []
+                # Every open task is operational evidence (load, blocked,
+                # stale, unassigned); only closed history is sampled. A
+                # recency LIMIT over all tasks let newer completed work push
+                # an older running task out of the scan.
+                recency = recency_expr([c for c in ("completed_at", "started_at", "created_at") if c in task_cols])
+                open_marks = ", ".join("?" for _ in OPEN_KANBAN_STATUSES)
+                open_params = tuple(sorted(OPEN_KANBAN_STATUSES))
+                task_rows.extend(con.execute(
+                    f"SELECT {', '.join(task_select)} FROM tasks WHERE status IN ({open_marks})",
+                    open_params,
+                ).fetchall())
+                task_rows.extend(con.execute(
+                    f"SELECT {', '.join(task_select)} FROM tasks WHERE status NOT IN ({open_marks}) AND status != 'archived' "
+                    f"ORDER BY {recency} DESC LIMIT ?",
+                    open_params + (KANBAN_CLOSED_TASK_SAMPLE,),
+                ).fetchall())
+
+            # When each blocked task last blocked, and why (the agent's
+            # question for needs_input): the task row has neither, the
+            # latest "blocked" event in task_events does.
+            blocked_at: Dict[str, Any] = {}
+            block_reasons: Dict[str, Optional[str]] = {}
+            event_cols = table_columns(con, "task_events")
+            if {"task_id", "kind", "created_at"}.issubset(event_cols):
+                payload_col = "e.payload" if "payload" in event_cols else "NULL"
+                for r in con.execute(
+                    f"SELECT e.task_id, e.created_at AS at, {payload_col} AS payload FROM task_events e JOIN tasks t ON t.id = e.task_id "
+                    "WHERE t.status = 'blocked' AND e.kind = 'blocked' ORDER BY e.created_at, e.id"
+                ):
+                    blocked_at[str(r["task_id"])] = r["at"]
+                    try:
+                        payload = json.loads(r["payload"] or "{}")
+                    except ValueError:
+                        payload = {}
+                    reason = payload.get("reason") if isinstance(payload, dict) else None
+                    block_reasons[str(r["task_id"])] = redact_text(reason, 300) if EXPOSE_LOCAL_LABELS and isinstance(reason, str) and reason.strip() else None
 
             for t in task_rows:
                 status = str(row_value(t, "status", "unknown"))
@@ -1683,7 +2077,7 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                 if status == "blocked":
                     add_attention("warning", f"Blocked task: {title}", "Blocked Kanban work needs operator review or clearer acceptance criteria.", slug, public_task_id)
                 if failures > 0:
-                    add_attention("warning", f"Retry pressure: {title}", f"{failures} consecutive failure(s). {redact_text(row_value(t, 'last_failure_error'), 120)}", slug, public_task_id)
+                    add_attention("warning", f"Retry pressure: {title}", f"{failures} consecutive failure(s). {public_error(row_value(t, 'last_failure_error'), 120) or 'No failure text recorded.'}", slug, public_task_id)
                 if status in ("triage", "todo", "ready") and created_at:
                     try:
                         if now - int(created_at) > KANBAN_READY_STALE_SECONDS:
@@ -1691,40 +2085,46 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                     except Exception:
                         pass
 
-                if len(recent_tasks) < 16:
-                    forced_skills: List[str] = []
-                    raw_skills = row_value(t, "skills")
-                    if raw_skills:
-                        try:
-                            parsed_skills = json.loads(raw_skills)
-                            if isinstance(parsed_skills, list):
-                                forced_skills = [str(x) for x in parsed_skills if x]
-                        except Exception:
-                            forced_skills = []
-                    recent_tasks.append({
-                        "id": public_task_id,
-                        "board": slug,
-                        "title": title,
-                        "status": status,
-                        "assignee": public_assignee,
-                        "_assignee": assignee,
-                        "priority": row_value(t, "priority", 0),
-                        "created_at": ts_to_iso(created_at),
-                        "started_at": ts_to_iso(started_at),
-                        "completed_at": ts_to_iso(row_value(t, "completed_at")),
-                        "last_heartbeat_at": ts_to_iso(heartbeat),
-                        "claim_expires_at": ts_to_iso(claim_expires),
-                        "worker_ref": public_ref(row_value(t, "worker_pid"), "pid"),
-                        "current_run_ref": public_ref(row_value(t, "current_run_id"), "run"),
-                        "max_runtime_seconds": row_value(t, "max_runtime_seconds"),
-                        "consecutive_failures": failures,
-                        "goal_mode": bool(row_value(t, "goal_mode", 0)),
-                        "goal_max_turns": row_value(t, "goal_max_turns"),
-                        "_skills": forced_skills,
-                        "forced_skill_count": len(forced_skills),
-                        "model_override": row_value(t, "model_override") if EXPOSE_LOCAL_LABELS else ("override" if row_value(t, "model_override") else None),
-                        "session_ref": row_value(t, "session_id") if EXPOSE_LOCAL_LABELS else (safe_id(row_value(t, "session_id"), "session") if row_value(t, "session_id") else None),
-                    })
+                forced_skills: List[str] = []
+                raw_skills = row_value(t, "skills")
+                if raw_skills:
+                    try:
+                        parsed_skills = json.loads(raw_skills)
+                        if isinstance(parsed_skills, list):
+                            forced_skills = [str(x) for x in parsed_skills if x]
+                    except (TypeError, ValueError):
+                        forced_skills = []
+                tasks.append({
+                    "_sort_ts": max(safe_float(row_value(t, c)) for c in ("completed_at", "last_heartbeat_at", "started_at", "created_at")),
+                    "id": public_task_id,
+                    "board": slug,
+                    "title": title,
+                    "status": status,
+                    "assignee": public_assignee,
+                    "_assignee": assignee,
+                    "priority": row_value(t, "priority", 0),
+                    "created_at": ts_to_iso(created_at),
+                    "started_at": ts_to_iso(started_at),
+                    "completed_at": ts_to_iso(row_value(t, "completed_at")),
+                    "last_heartbeat_at": ts_to_iso(heartbeat),
+                    "claim_expires_at": ts_to_iso(claim_expires),
+                    "worker_ref": public_ref(row_value(t, "worker_pid"), "pid"),
+                    "current_run_ref": public_ref(row_value(t, "current_run_id"), "run"),
+                    "max_runtime_seconds": row_value(t, "max_runtime_seconds"),
+                    "consecutive_failures": failures,
+                    "goal_mode": bool(row_value(t, "goal_mode", 0)),
+                    "block_kind": row_value(t, "block_kind"),
+                    "block_recurrences": safe_int(row_value(t, "block_recurrences")),
+                    "blocked_at": ts_to_iso(blocked_at.get(task_id)),
+                    "block_reason": block_reasons.get(task_id),
+                    "last_failure_error": public_error(row_value(t, "last_failure_error"), 160),
+                    "_created_ts": safe_float(created_at),
+                    "goal_max_turns": row_value(t, "goal_max_turns"),
+                    "_skills": forced_skills,
+                    "forced_skill_count": len(forced_skills),
+                    "model_override": row_value(t, "model_override") if EXPOSE_LOCAL_LABELS else ("override" if row_value(t, "model_override") else None),
+                    "session_ref": row_value(t, "session_id") if EXPOSE_LOCAL_LABELS else (safe_id(row_value(t, "session_id"), "session") if row_value(t, "session_id") else None),
+                })
 
             if run_cols:
                 run_select = [
@@ -1732,9 +2132,20 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                     "last_heartbeat_at", "started_at", "ended_at", "error", "summary",
                 ]
                 run_select = [c for c in run_select if c in run_cols]
-                run_rows = con.execute(
-                    f"SELECT {', '.join(run_select)} FROM task_runs ORDER BY id DESC LIMIT 100"
-                ).fetchall() if run_select else []
+                run_rows = []
+                if run_select:
+                    # In-flight runs are always read; finished runs are a
+                    # recency sample ordered by time, not by id.
+                    run_recency = recency_expr([c for c in ("ended_at", "started_at") if c in run_cols])
+                    in_flight = "ended_at IS NULL" if "ended_at" in run_cols else "0"
+                    run_rows.extend(con.execute(
+                        f"SELECT {', '.join(run_select)} FROM task_runs WHERE {in_flight}"
+                    ).fetchall())
+                    run_rows.extend(con.execute(
+                        f"SELECT {', '.join(run_select)} FROM task_runs WHERE NOT ({in_flight}) "
+                        f"ORDER BY {run_recency} DESC LIMIT ?",
+                        (KANBAN_FINISHED_RUN_SAMPLE,),
+                    ).fetchall())
                 for r in run_rows:
                     run_status = str(row_value(r, "status", "unknown"))
                     outcome = row_value(r, "outcome")
@@ -1753,19 +2164,20 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
                             "last_heartbeat_at": ts_to_iso(heartbeat),
                         })
                     if is_failed_run({"status": run_status, "outcome": outcome}):
-                        add_attention("critical", f"Kanban worker {outcome or run_status}: {public_task_id}", redact_text(row_value(r, "error") or "Worker run failed", 200), slug, public_task_id)
-                    if len(recent_runs) < 16:
-                        recent_runs.append({
-                            "id": public_ref(row_value(r, "id"), "run"),
-                            "board": slug,
-                            "task_id": public_task_id,
-                            "profile": public_profile_label(row_value(r, "profile"), profile_public_names),
-                            "status": run_status,
-                            "outcome": outcome,
-                            "started_at": ts_to_iso(row_value(r, "started_at")),
-                            "ended_at": ts_to_iso(ended_at),
-                            "error": redact_text(row_value(r, "error"), 180),
-                        })
+                        add_attention("critical", f"Kanban worker {outcome or run_status}: {public_task_id}", public_error(row_value(r, "error"), 200) or "Worker run failed", slug, public_task_id)
+                    runs.append({
+                        "id": public_ref(row_value(r, "id"), "run"),
+                        "_sort_ts": max(safe_float(ended_at), safe_float(row_value(r, "started_at"))),
+                        "board": slug,
+                        "task_id": public_task_id,
+                        "profile": public_profile_label(row_value(r, "profile"), profile_public_names),
+                        "_profile": row_value(r, "profile"),
+                        "status": run_status,
+                        "outcome": outcome,
+                        "started_at": ts_to_iso(row_value(r, "started_at")),
+                        "ended_at": ts_to_iso(ended_at),
+                        "error": public_error(row_value(r, "error"), 180),
+                    })
 
             event_cols = table_columns(con, "task_events")
             recent_events: List[Dict[str, Any]] = board.setdefault("_recent_events", [])
@@ -1800,13 +2212,15 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
             board["active_workers"] = sum(1 for w in active_workers if w.get("board") == slug)
         except Exception as exc:
             log_read_warning(f"kanban board scan failed for {slug}", exc)
-            board["error"] = redact_text(exc, 200)
-            add_attention("warning", f"Could not read Kanban board {slug}", redact_text(exc), slug)
+            board["error"] = public_error(exc, 200)
+            add_attention("warning", f"Could not read Kanban board {slug}", public_error(exc), slug)
         finally:
             con.close()
 
     for load in assignee_load.values():
         load["boards"] = sorted(load["boards"])
+    tasks.sort(key=lambda item: item["_sort_ts"], reverse=True)
+    runs.sort(key=lambda item: item["_sort_ts"], reverse=True)
 
     all_events: List[Dict[str, Any]] = []
     for board in boards:
@@ -1823,8 +2237,12 @@ def collect_kanban(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
         "active_workers": active_workers[:12],
         "assignee_load": sorted(assignee_load.values(), key=lambda x: (-int(x.get("open") or 0), str(x.get("assignee")))),
         "attention": attention[:16],
-        "recent_tasks": recent_tasks,
-        "recent_runs": recent_runs,
+        # _tasks/_runs are the complete operational sets every builder reads;
+        # recent_* are display samples, newest first across all boards.
+        "_tasks": tasks,
+        "_runs": runs,
+        "recent_tasks": tasks[:KANBAN_DISPLAY_SAMPLE],
+        "recent_runs": runs[:KANBAN_DISPLAY_SAMPLE],
         "recent_events": all_events[:40],
     }
 
@@ -1869,34 +2287,6 @@ def collect_health(profiles: List[Dict[str, Any]], cron: List[Dict[str, Any]]) -
     }
 
 
-def build_attention(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]], cron: List[Dict[str, Any]], sessions: List[Dict[str, Any]], health: Dict[str, Any], kanban: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    items: List[Dict[str, Any]] = []
-    if health.get("status") == "error":
-        items.append({"severity": "critical", "label": "Health check reports errors", "detail": ", ".join(health.get("recent_error_terms") or []) or "Cron/log error detected"})
-    elif health.get("status") == "warning":
-        if not health.get("gateway_running"):
-            items.append({"severity": "warning", "label": "No running gateway process detected", "detail": "Gateway may be intentionally stopped or not visible to Olympus."})
-        else:
-            terms = ", ".join(health.get("recent_error_terms") or [])
-            items.append({"severity": "warning", "label": "Log-tail warnings detected", "detail": f"Hermes log tail contains failure terms: {terms}." if terms else (health.get("summary") or "Log tail contains failure terms.")})
-    for job in cron:
-        if job.get("state") == "error":
-            items.append({"severity": "critical", "label": f"Cron failed: {job.get('label')}", "detail": str(job.get("last_error") or "last_status=error")[:240]})
-    for sess in sessions:
-        if sess.get("state") == "error":
-            items.append({"severity": "warning", "label": f"Session handoff error: {sess.get('label')}", "detail": str(sess.get("handoff_error"))[:240]})
-    for item in as_list((kanban or {}).get("attention")):
-        if isinstance(item, dict):
-            items.append({
-                "severity": item.get("severity") or "warning",
-                "label": item.get("label") or "Kanban attention item",
-                "detail": item.get("detail") or "",
-                "recommended_view": item.get("recommended_view") or "/kanban",
-            })
-    items.sort(key=lambda item: _severity_rank(str(item.get("severity"))))
-    return items[:12]
-
-
 def _severity_rank(value: str) -> int:
     return {"critical": 0, "error": 1, "warning": 2, "info": 3, "ok": 4}.get(value, 3)
 
@@ -1914,21 +2304,30 @@ def _action_label_for_view(view: str) -> str:
     }.get(view, "Open Route")
 
 
-def _recommendation(severity: str, title: str, detail: str, evidence: str, view: str, owner: str, action: str, basis: str = "") -> Dict[str, Any]:
-    return {
-        "severity": severity,
-        "title": title,
-        "detail": detail,
-        "evidence": evidence,
-        "recommended_view": view,
-        "action_label": action,
-        "owner": owner,
-        "basis": basis,
-    }
+def session_targets(sessions: List[Dict[str, Any]], limit: int = 3) -> List[Dict[str, Any]]:
+    """Sessions a tuning item points at, openable through ``/open/session``."""
+    return [
+        {"kind": "session", "ref": s.get("session_ref"), "label": s.get("label"), "agent": f"profile:{s.get('profile') or 'default'}"}
+        for s in sessions[:limit]
+        if s.get("session_ref")
+    ]
 
 
-def _tuning_item(kind: str, severity: str, title: str, detail: str, evidence: str, view: str, action: str, owner: str = "Olympus", basis: str = "", threshold: str = "") -> Dict[str, Any]:
+def tuning_key(kind: str, title: str) -> str:
+    """Stable identity for a finding across scans, used by fix tracking."""
+    return re.sub(r"[^a-z0-9]+", "-", f"{kind} {title}".lower()).strip("-")
+
+
+def _tuning_item(kind: str, severity: str, title: str, detail: str, evidence: str, view: str, action: str, owner: str = "Olympus", basis: str = "", threshold: str = "", targets: Optional[List[Dict[str, Any]]] = None, count: Optional[int] = None, scope: str = "fleet") -> Dict[str, Any]:
+    # scope "entity": the Needs-you queue already lists each task behind this
+    # finding with its own action; scope "agent": the queue lists it per
+    # agent from that agent's own sessions. Either way the queue skips the
+    # fleet summary and Checks still shows it.
     return {
+        "key": tuning_key(kind, title),
+        "count": count,
+        "targets": targets or [],
+        "scope": scope,
         "kind": kind,
         "severity": severity,
         "title": title,
@@ -1975,27 +2374,124 @@ def group_cron_by_profile(cron: List[Dict[str, Any]]) -> Dict[str, List[Dict[str
     return grouped
 
 
-def group_gateways_by_profile(gateways: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    grouped: Dict[str, List[Dict[str, Any]]] = {}
-    for gateway in gateways:
-        grouped.setdefault(str(gateway.get("profile") or ""), []).append(gateway)
-    return grouped
+# Hermes' block kinds (hermes_cli/kanban_db.VALID_BLOCK_KINDS) say who has to
+# act. Olympus groups the backlog by them so a long blocked list becomes a few
+# decisions instead of a scroll.
+BACKLOG_GROUPS = [
+    ("needs_input", "Waiting on a human answer",
+     "These tasks are blocked on a decision or answer only a person can give. Answer them in Kanban, oldest first.", "critical"),
+    ("capability", "Missing a tool, skill or permission",
+     "The assignee could not do the work with what it has. Give it the tool, skill or permission, or reassign the task.", "warning"),
+    ("transient", "Temporary failures",
+     "Usually clears on the next attempt. Look at the ones blocked for more than a day.", "info"),
+    ("untyped", "Blocked without a reason kind",
+     "The agent blocked without saying why. Open each task to read the reason.", "warning"),
+    ("triage", "Sent to triage after repeat blocks",
+     "Hermes moved these to triage because they were unblocked and blocked again for the same reason.", "warning"),
+    ("dependency", "Waiting on parent tasks",
+     "Not actionable yet: these start when the tasks they depend on finish.", "info"),
+]
+BACKLOG_STALE_DAYS = 3
+BACKLOG_NEEDS_INPUT_WARNING = 3
+
+
+def backlog_group(task: Dict[str, Any]) -> Optional[str]:
+    status = task.get("status")
+    kind = task.get("block_kind")
+    if status == "triage":
+        return "triage"
+    if status == "todo" and kind == "dependency":
+        return "dependency"
+    if status != "blocked":
+        return None
+    return kind if kind in ("needs_input", "capability", "transient") else "untyped"
+
+
+def build_backlog_triage(kanban: Optional[Dict[str, Any]], now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    members: Dict[str, List[Dict[str, Any]]] = {}
+    for task in kanban_items(kanban, "_tasks"):
+        group = backlog_group(task)
+        if group:
+            members.setdefault(group, []).append(task)
+    groups: List[Dict[str, Any]] = []
+    for key, label, action, severity in BACKLOG_GROUPS:
+        tasks = members.get(key, [])
+        if not tasks:
+            continue
+        tasks.sort(key=lambda task: safe_float(task.get("_created_ts")) or now)
+        oldest = safe_float(tasks[0].get("_created_ts"))
+        assignees: Dict[str, int] = {}
+        for task in tasks:
+            assignees[str(task.get("assignee") or "unassigned")] = assignees.get(str(task.get("assignee") or "unassigned"), 0) + 1
+        groups.append({
+            "kind": key,
+            "label": label,
+            "action": action,
+            "severity": severity,
+            "count": len(tasks),
+            "oldest_days": int((now - oldest) // 86400) if oldest else None,
+            "stale": sum(1 for task in tasks if safe_float(task.get("_created_ts")) and now - safe_float(task.get("_created_ts")) > BACKLOG_STALE_DAYS * 86400),
+            "repeat_blocks": sum(1 for task in tasks if int(task.get("block_recurrences") or 0) > 1),
+            "assignees": [{"assignee": name, "count": count} for name, count in sorted(assignees.items(), key=lambda kv: -kv[1])[:3]],
+            "samples": [{"title": task.get("title"), "board": task.get("board")} for task in tasks[:3]],
+        })
+    return {
+        "summary": {
+            "groups": len(groups),
+            "tasks": sum(group["count"] for group in groups),
+            "needs_you": sum(group["count"] for group in groups if group["kind"] in ("needs_input", "capability", "untyped", "triage")),
+        },
+        "groups": groups,
+        "recommended_view": "/kanban",
+    }
+
+
+def backlog_findings(triage: Dict[str, Any]) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    for group in triage["groups"]:
+        if group["kind"] == "needs_input" and (group["count"] >= BACKLOG_NEEDS_INPUT_WARNING or (group["oldest_days"] or 0) >= BACKLOG_STALE_DAYS):
+            findings.append(_tuning_item(
+                "kanban",
+                "warning",
+                f"{group['count']} Kanban task{'s are' if group['count'] != 1 else ' is'} waiting on your answer",
+                "Agents blocked these on a question or decision only a person can give. Until someone answers, the work and anything depending on it stays stuck.",
+                f"oldest waiting {group['oldest_days']} day(s); " + ", ".join(f"{a['assignee']}: {a['count']}" for a in group["assignees"]),
+                "/kanban",
+                "Open Kanban",
+                "Olympus",
+                "Hermes records why a task blocked (block_kind needs_input).",
+                f">= {BACKLOG_NEEDS_INPUT_WARNING} needs-input tasks or one waiting >= {BACKLOG_STALE_DAYS} days",
+                count=group["count"],
+                scope="entity",
+            ))
+        if group["kind"] == "capability" and group["count"]:
+            findings.append(_tuning_item(
+                "kanban",
+                "warning",
+                "Agents are blocked on missing tools or permissions",
+                "The assignee could not finish because it lacks a tool, skill or permission. Granting it, or routing the work elsewhere, unblocks every task in this group.",
+                ", ".join(f"{a['assignee']}: {a['count']}" for a in group["assignees"]),
+                "/kanban",
+                "Open Kanban",
+                "Olympus",
+                "Hermes records why a task blocked (block_kind capability).",
+                "any task blocked with kind capability",
+                count=group["count"],
+                scope="entity",
+            ))
+    return findings
 
 
 def kanban_items(kanban: Optional[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
     return [x for x in as_list((kanban or {}).get(key)) if isinstance(x, dict)]
 
 
-def session_matches_profile(session: Dict[str, Any], raw_name: str, public_name: Any) -> bool:
-    labels = {str(raw_name).lower(), str(public_name or "").lower()}
-    labels.discard("")
-    if not labels:
-        return False
-    for key in ("profile", "source", "label"):
-        value = str(session.get(key) or "").lower()
-        if value in labels or any(label and label in value for label in labels):
-            return True
-    return False
+def session_matches_profile(session: Dict[str, Any], raw_name: str) -> bool:
+    # Sessions carry the profile whose state store they were read from;
+    # matching on source/title substrings mislabelled "cli" sessions as a
+    # profile named "li" and missed ordinary default-profile sessions.
+    return str(session.get("_profile") or "") == str(raw_name)
 
 
 def is_failed_run(run: Dict[str, Any]) -> bool:
@@ -2025,201 +2521,229 @@ def task_stale_reason(task: Dict[str, Any], now: Optional[float] = None) -> Opti
     return None
 
 
-def score_state(score: int) -> str:
-    if score < 55:
-        return "critical"
-    if score < 75:
-        return "warning"
-    if score < 90:
-        return "info"
-    return "ok"
+CRON_AUDIT_TAIL_BYTES = 2_000_000
+COST_FINDING_FLOOR_USD = 1.0
+CRON_CONCENTRATION_SHARE = 0.5
+BACKGROUND_SHARE_WARNING = 0.3
 
 
-def collect_usage_rollup(profiles: Optional[List[Dict[str, Any]]] = None, days: int = 30) -> Dict[str, Any]:
-    """Aggregate Hermes usage counters from configured profile state stores.
+def parse_iso_ts(value: Any) -> Optional[float]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
-    Olympus uses this only as operational evidence. Hermes Analytics owns the
-    usage ledger, daily bars, model leaderboards, skill leaderboards, and raw
-    cost totals.
-    """
-    cutoff = time.time() - max(1, int(days)) * 86400
-    sources = profiles or [{"label": "Default", "_public_name": "default", "_path": str(get_hermes_home())}]
-    totals = {
-        "sessions": 0,
-        "messages": 0,
-        "tool_calls": 0,
-        "api_calls": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "reasoning_tokens": 0,
-        "cache_read_tokens": 0,
-        "cache_write_tokens": 0,
-        "total_tokens": 0,
-        "estimated_cost_usd": 0.0,
-        "actual_cost_usd": 0.0,
-        "costed_sessions": 0,
-        "actual_costed_sessions": 0,
-        "estimated_costed_sessions": 0,
-        "zero_usage_suspect_sessions": 0,
-        "zero_cost_token_sessions": 0,
-        "completed_sessions": 0,
-        "errored_sessions": 0,
-        "stale_or_open_sessions": 0,
-    }
-    profile_rollups: List[Dict[str, Any]] = []
-    read_failures = 0
-    stores_seen = 0
 
-    def sum_expr(col: str, alias: Optional[str] = None) -> str:
-        alias = alias or col
-        return f"COALESCE(SUM({col}), 0) AS {alias}"
-
-    for idx, profile in enumerate(sources):
-        raw_path = profile.get("_path")
-        if not raw_path:
-            continue
-        db = Path(str(raw_path)) / "state.db"
-        label = str(profile.get("label") or f"Profile {idx}")
-        public_name = str(profile.get("_public_name") or profile.get("id") or f"profile_{idx}")
-        roll = {
-            "profile": public_name,
-            "label": label,
-            "state_store": "missing",
-            "sessions": 0,
-            "tool_calls": 0,
-            "api_calls": 0,
-            "total_tokens": 0,
-            "costed_sessions": 0,
-            "zero_usage_suspect_sessions": 0,
-            "zero_cost_token_sessions": 0,
-        }
-        if not db.exists():
-            profile_rollups.append(roll)
-            continue
-        con: Optional[sqlite3.Connection] = None
+def cron_audit_fires(path: Path, since: float) -> Dict[str, Dict[str, Any]]:
+    """Per-job totals from Hermes' cron/usage_audit.jsonl (one line per fire)."""
+    if not path.exists():
+        return {}
+    text = read_text(path, CRON_AUDIT_TAIL_BYTES)
+    lines = text.splitlines()
+    if path.stat().st_size > CRON_AUDIT_TAIL_BYTES and lines:
+        lines = lines[1:]  # the first line of a tail read is usually cut
+    fires: Dict[str, Dict[str, Any]] = {}
+    for line in lines:
         try:
-            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
-            con.row_factory = sqlite3.Row
-            cols = table_columns(con, "sessions")
-            if not cols:
-                raise RuntimeError("sessions table missing")
-            stores_seen += 1
-            terms = ["COUNT(*) AS sessions"]
-            for col, alias in [
-                ("message_count", "messages"),
-                ("tool_call_count", "tool_calls"),
-                ("api_call_count", "api_calls"),
-                ("input_tokens", "input_tokens"),
-                ("output_tokens", "output_tokens"),
-                ("reasoning_tokens", "reasoning_tokens"),
-                ("cache_read_tokens", "cache_read_tokens"),
-                ("cache_write_tokens", "cache_write_tokens"),
-                ("estimated_cost_usd", "estimated_cost_usd"),
-                ("actual_cost_usd", "actual_cost_usd"),
-            ]:
-                terms.append(sum_expr(col, alias) if col in cols else f"0 AS {alias}")
-            if "actual_cost_usd" in cols:
-                terms.append("SUM(CASE WHEN COALESCE(actual_cost_usd, 0) > 0 THEN 1 ELSE 0 END) AS actual_costed_sessions")
-            else:
-                terms.append("0 AS actual_costed_sessions")
-            if "estimated_cost_usd" in cols:
-                terms.append("SUM(CASE WHEN COALESCE(estimated_cost_usd, 0) > 0 THEN 1 ELSE 0 END) AS estimated_costed_sessions")
-            else:
-                terms.append("0 AS estimated_costed_sessions")
-            token_expr = " + ".join(f"COALESCE({c}, 0)" for c in ("input_tokens", "output_tokens", "reasoning_tokens") if c in cols) or "0"
-            work_expr = " + ".join(f"COALESCE({c}, 0)" for c in ("message_count", "tool_call_count", "api_call_count") if c in cols) or "0"
-            terms.append(f"SUM(CASE WHEN ({work_expr}) > 0 AND ({token_expr}) = 0 THEN 1 ELSE 0 END) AS zero_usage_suspect_sessions")
-            cost_expr = " + ".join(f"COALESCE({c}, 0)" for c in ("actual_cost_usd", "estimated_cost_usd") if c in cols) or "0"
-            terms.append(f"SUM(CASE WHEN ({token_expr}) > 0 AND ({cost_expr}) = 0 THEN 1 ELSE 0 END) AS zero_cost_token_sessions")
-            if "end_reason" in cols:
-                terms.append("SUM(CASE WHEN end_reason IN ('completed', 'end', 'user_exit') THEN 1 ELSE 0 END) AS completed_sessions")
-                terms.append("SUM(CASE WHEN end_reason IS NOT NULL AND end_reason NOT IN ('completed', 'end', 'user_exit') THEN 1 ELSE 0 END) AS errored_sessions")
-            else:
-                terms.append("0 AS completed_sessions")
-                terms.append("0 AS errored_sessions")
-            if "ended_at" in cols:
-                terms.append("SUM(CASE WHEN ended_at IS NULL THEN 1 ELSE 0 END) AS stale_or_open_sessions")
-            else:
-                terms.append("0 AS stale_or_open_sessions")
-            where = ""
-            params: tuple[Any, ...] = ()
-            if "started_at" in cols:
-                where = " WHERE started_at >= ?"
-                params = (cutoff,)
-            row = con.execute(f"SELECT {', '.join(terms)} FROM sessions{where}", params).fetchone()
-            if row is None:
-                profile_rollups.append(roll)
-                continue
-            token_total = safe_int(row_value(row, "input_tokens")) + safe_int(row_value(row, "output_tokens")) + safe_int(row_value(row, "reasoning_tokens"))
-            actual_costed = safe_int(row_value(row, "actual_costed_sessions"))
-            estimated_costed = safe_int(row_value(row, "estimated_costed_sessions"))
-            roll.update({
-                "state_store": "ok",
-                "sessions": safe_int(row_value(row, "sessions")),
-                "tool_calls": safe_int(row_value(row, "tool_calls")),
-                "api_calls": safe_int(row_value(row, "api_calls")),
-                "total_tokens": token_total,
-                "costed_sessions": actual_costed + estimated_costed,
-                "zero_usage_suspect_sessions": safe_int(row_value(row, "zero_usage_suspect_sessions")),
-                "zero_cost_token_sessions": safe_int(row_value(row, "zero_cost_token_sessions")),
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict) or not record.get("job_id"):
+            continue
+        ts = parse_iso_ts(record.get("ts"))
+        if ts is None or ts < since:
+            continue
+        job = fires.setdefault(str(record["job_id"]), {"fires": 0, "tokens": 0, "duration_ms": 0, "errors": 0, "silent": 0})
+        job["fires"] += 1
+        job["tokens"] += safe_int(record.get("total_tokens")) or safe_int(record.get("prompt_tokens")) + safe_int(record.get("completion_tokens"))
+        job["duration_ms"] += safe_int(record.get("duration_ms"))
+        job["errors"] += 1 if record.get("error") else 0
+        job["silent"] += 1 if record.get("response_silent") else 0
+    return fires
+
+
+def _store_cost_breakdown(db: Path, since: float) -> Dict[str, Any]:
+    """Cron-session cost and per-task background usage from one state.db."""
+    out: Dict[str, Any] = {"cron_cost": 0.0, "cron_sessions": 0, "tasks": {}}
+    if not db.exists():
+        return out
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        cols = table_columns(con, "sessions")
+        recency = [c for c in ("last_activity_at", "ended_at", "started_at") if c in cols]
+        cost_cols = [c for c in ("actual_cost_usd", "estimated_cost_usd") if c in cols]
+        if "source" in cols and recency and cost_cols:
+            row = con.execute(
+                f"SELECT COALESCE(SUM(COALESCE({', '.join(cost_cols)}, 0)), 0) AS cost, COUNT(*) AS n "
+                f"FROM sessions WHERE source = 'cron' AND {recency_expr(recency)} >= ?",
+                (since,),
+            ).fetchone()
+            out["cron_cost"] = float(row["cost"] or 0.0)
+            out["cron_sessions"] = int(row["n"] or 0)
+        usage_cols = table_columns(con, "session_model_usage")
+        if {"task", "api_call_count", "actual_cost_usd", "estimated_cost_usd"}.issubset(usage_cols):
+            seen = "COALESCE(last_seen, first_seen, 0)" if {"last_seen", "first_seen"}.issubset(usage_cols) else "0"
+            token_cols = [c for c in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens") if c in usage_cols]
+            tokens = " + ".join(token_cols) or "0"
+            for row in con.execute(
+                f"SELECT task, SUM(api_call_count) AS calls, SUM({tokens}) AS tokens, "
+                "SUM(CASE WHEN actual_cost_usd > 0 THEN actual_cost_usd ELSE estimated_cost_usd END) AS cost "
+                f"FROM session_model_usage WHERE task != '' AND {seen} >= ? GROUP BY task",
+                (since,),
+            ):
+                out["tasks"][str(row["task"])] = {
+                    "calls": int(row["calls"] or 0),
+                    "tokens": int(row["tokens"] or 0),
+                    "cost": float(row["cost"] or 0.0),
+                }
+    except sqlite3.Error as exc:
+        log_read_warning("cost breakdown scan failed", exc)
+    finally:
+        con.close()
+    return out
+
+
+def collect_cost_attribution(
+    profiles: List[Dict[str, Any]],
+    cron: List[Dict[str, Any]],
+    sessions: List[Dict[str, Any]],
+    since: float,
+) -> Dict[str, Any]:
+    """Where scheduled and background spend goes, per cron job and per task.
+
+    Hermes records cost per session, not per cron fire, so each profile's cron
+    session cost is shared across its jobs by token share from
+    cron/usage_audit.jsonl. Background tasks come from session_model_usage.
+    """
+    rows_by_job = {(job.get("_profile"), job.get("id")): job for job in cron}
+    jobs: List[Dict[str, Any]] = []
+    tasks: Dict[str, Dict[str, Any]] = {}
+    cron_total = 0.0
+    for raw_profile, home in profile_stores(profiles):
+        breakdown = _store_cost_breakdown(home / "state.db", since)
+        fires = cron_audit_fires(home / "cron" / "usage_audit.jsonl", since)
+        cron_total += breakdown["cron_cost"]
+        token_total = sum(job["tokens"] for job in fires.values())
+        for job_id, stats in fires.items():
+            row = rows_by_job.get((raw_profile, public_ref(job_id, "cron")), {})
+            share = stats["tokens"] / token_total if token_total else 0.0
+            jobs.append({
+                "job_ref": row.get("id") or public_ref(job_id, "cron"),
+                "label": row.get("label") or public_label(None, public_ref(job_id, "cron") or "cron job", "cron"),
+                "profile": row.get("profile") or public_profile_label(raw_profile, profile_public_map(profiles)),
+                "schedule": row.get("schedule"),
+                "fires": stats["fires"],
+                "tokens": stats["tokens"],
+                "avg_duration_seconds": round(stats["duration_ms"] / stats["fires"] / 1000, 1) if stats["fires"] else 0,
+                "errors": stats["errors"],
+                "silent_runs": stats["silent"],
+                "est_cost_usd": round(breakdown["cron_cost"] * share, 4),
             })
-            for key in totals:
-                if key in ("estimated_cost_usd", "actual_cost_usd"):
-                    totals[key] += float(row_value(row, key, 0) or 0)
-                elif key == "total_tokens":
-                    totals[key] += token_total
-                elif key == "costed_sessions":
-                    totals[key] += actual_costed + estimated_costed
-                elif key in row.keys():
-                    totals[key] += safe_int(row_value(row, key))
-            profile_rollups.append(roll)
-        except Exception as exc:
-            read_failures += 1
-            log_read_warning("usage rollup failed", exc)
-            roll["state_store"] = "warning"
-            profile_rollups.append(roll)
-        finally:
-            if con is not None:
-                try:
-                    con.close()
-                except Exception:
-                    pass
-
-    cost_confidence = "unknown"
-    if totals["actual_costed_sessions"]:
-        cost_confidence = "actual"
-    elif totals["estimated_costed_sessions"] and totals["zero_cost_token_sessions"]:
-        cost_confidence = "partial"
-    elif totals["estimated_costed_sessions"]:
-        cost_confidence = "estimated"
-    elif totals["total_tokens"]:
-        cost_confidence = "missing"
-
+        for task, usage in breakdown["tasks"].items():
+            merged = tasks.setdefault(task, {"task": task, "calls": 0, "tokens": 0, "cost_usd": 0.0})
+            merged["calls"] += usage["calls"]
+            merged["tokens"] += usage["tokens"]
+            merged["cost_usd"] += usage["cost"]
+    jobs.sort(key=lambda job: (job["est_cost_usd"], job["tokens"]), reverse=True)
+    task_rows = sorted(tasks.values(), key=lambda task: task["cost_usd"], reverse=True)
+    for task in task_rows:
+        task["cost_usd"] = round(task["cost_usd"], 4)
+    window_total = round(sum(_session_cost(s) for s in sessions), 4)
+    background_total = round(sum(task["cost_usd"] for task in task_rows), 4)
     return {
-        "window_days": max(1, int(days)),
-        "state": "warning" if read_failures or totals["zero_usage_suspect_sessions"] or cost_confidence in {"partial", "missing"} else ("active" if totals["sessions"] else "unknown"),
-        "stores_seen": stores_seen,
-        "read_failures": read_failures,
-        "cost_confidence": cost_confidence,
-        **totals,
-        "estimated_cost_usd": round(float(totals["estimated_cost_usd"]), 4),
-        "actual_cost_usd": round(float(totals["actual_cost_usd"]), 4),
-        "profiles": profile_rollups[:12],
+        "window_days": SESSION_WINDOW_DAYS,
+        "window_cost_usd": window_total,
+        "cron": {
+            "total_cost_usd": round(cron_total, 4),
+            "jobs": jobs[:12],
+            "allocation": "Each profile's cron-session cost is shared across its jobs by token share from cron/usage_audit.jsonl.",
+        },
+        "background": {
+            "total_cost_usd": background_total,
+            "tasks": task_rows[:8],
+            "note": "Background task cost is part of the session cost it ran in.",
+        },
         "recommended_view": "/analytics",
     }
+
+
+def cost_findings(attribution: Dict[str, Any]) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    cron_block = attribution["cron"]
+    jobs = cron_block["jobs"]
+    cron_total = float(cron_block["total_cost_usd"])
+    if jobs and cron_total >= COST_FINDING_FLOOR_USD:
+        top = jobs[0]
+        share = top["est_cost_usd"] / cron_total if cron_total else 0.0
+        if share >= CRON_CONCENTRATION_SHARE:
+            findings.append(_tuning_item(
+                "cost",
+                "warning",
+                "One scheduled job drives most cron spend",
+                f"{top['label']} accounts for about {share:.0%} of scheduled spend over {attribution['window_days']} days. "
+                "Check its schedule, model and prompt size, or whether it needs an agent at all (a no-agent script costs nothing).",
+                f"{top['label']}: ~${top['est_cost_usd']:.2f} of ${cron_total:.2f} across {top['fires']} runs",
+                "/cron",
+                "Open Cron",
+                "Olympus",
+                "Cron run tokens from Hermes' usage audit, priced with the cost Hermes recorded for cron sessions.",
+                f"one job >= {CRON_CONCENTRATION_SHARE:.0%} of cron spend and cron spend >= ${COST_FINDING_FLOOR_USD:.2f}",
+                count=1,
+            ))
+    background_total = float(attribution["background"]["total_cost_usd"])
+    window_total = float(attribution["window_cost_usd"])
+    if background_total >= COST_FINDING_FLOOR_USD and window_total and background_total / window_total >= BACKGROUND_SHARE_WARNING:
+        top_task = attribution["background"]["tasks"][0]
+        findings.append(_tuning_item(
+            "cost",
+            "info",
+            "Background tasks are a large share of spend",
+            f"Background model calls cost ${background_total:.2f} of ${window_total:.2f} over {attribution['window_days']} days. "
+            f"The largest is {top_task['task']}. Review whether it needs this model or this frequency.",
+            f"{top_task['task']}: ${top_task['cost_usd']:.2f} across {top_task['calls']} calls",
+            "/config",
+            "Open Config",
+            "Olympus",
+            "Hermes records model usage per background task in session_model_usage.",
+            f"background spend >= {BACKGROUND_SHARE_WARNING:.0%} of session spend and >= ${COST_FINDING_FLOOR_USD:.2f}",
+            count=len(attribution["background"]["tasks"]),
+        ))
+    return findings
+
+
+def session_window_label(count: int) -> str:
+    if count >= SESSION_SCAN_LIMIT:
+        return f"last {SESSION_WINDOW_DAYS} days, most recent {SESSION_SCAN_LIMIT} sessions"
+    return f"last {SESSION_WINDOW_DAYS} days, {count} session{'s' if count != 1 else ''}"
 
 
 def build_metrics(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Window rollup of the performance signals Hermes already records."""
     kanban = kanban or {}
     durations = sorted(float(s["duration_seconds"]) for s in sessions if isinstance(s.get("duration_seconds"), (int, float)))
-    median_duration = durations[len(durations) // 2] if durations else None
-    p90_duration = durations[min(len(durations) - 1, int(len(durations) * 0.9))] if durations else None
+    median_duration = statistics.median(durations) if durations else None
+    # Nearest-rank p90: the smallest duration at or above 90% of the sample.
+    p90_duration = durations[math.ceil(len(durations) * 0.9) - 1] if durations else None
     total_tools = sum(int(s.get("tool_call_count") or 0) for s in sessions)
     total_tokens = sum(int(s.get("total_tokens") or 0) for s in sessions)
     total_api_calls = sum(int(s.get("api_call_count") or 0) for s in sessions)
-    failed_runs = [r for r in kanban_items(kanban, "recent_runs") if is_failed_run(r)]
+    failed_runs = [r for r in kanban_items(kanban, "_runs") if is_failed_run(r)]
+    # Spend is attributed to the day a session was last active; Hermes
+    # Analytics owns the exact per-call ledger.
+    spend_cutoff = time.time() - SPEND_WINDOW_SECONDS
+    recent = [s for s in sessions if safe_float(s.get("_last_ts")) >= spend_cutoff]
     return {
+        "window": {
+            "days": SESSION_WINDOW_DAYS,
+            "sessions": len(sessions),
+            "capped": len(sessions) >= SESSION_SCAN_LIMIT,
+            "label": session_window_label(len(sessions)),
+        },
+        "spend_24h_usd": round(sum(_session_cost(s) for s in recent), 4),
+        "sessions_24h": len(recent),
         "window_sessions": len(sessions),
         "total_cost_usd": round(sum(_session_cost(s) for s in sessions), 4),
         "total_tokens": total_tokens,
@@ -2240,135 +2764,6 @@ def build_metrics(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any
     }
 
 
-def build_performance_tracking(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Operator-facing performance lanes from first-party Hermes evidence."""
-    kanban = kanban or {}
-    metrics = build_metrics(sessions, kanban)
-    looping = [s for s in sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD]
-    tool_heavy = [
-        s for s in sessions
-        if TOOL_HEAVY_THRESHOLD <= int(s.get("tool_call_count") or 0) < RUNAWAY_TOOLS_THRESHOLD
-    ]
-    context_pressure = [s for s in sessions if int(s.get("avg_input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS]
-    stale_sessions = [s for s in sessions if s.get("state") == "stale"]
-    errored_sessions = [s for s in sessions if s.get("state") == "error"]
-    failed_runs = [r for r in kanban_items(kanban, "recent_runs") if is_failed_run(r)]
-    total_cost = float(metrics.get("total_cost_usd") or 0)
-    expensive_sessions = int(metrics.get("expensive_sessions") or 0)
-    median_duration = metrics.get("median_duration_seconds")
-    p90_duration = metrics.get("p90_duration_seconds")
-
-    speed_state = "idle"
-    if sessions:
-        speed_state = "warning" if (p90_duration and p90_duration > 1800) or (median_duration and median_duration > 900) else "active"
-    tool_state = "warning" if looping or tool_heavy else ("active" if metrics.get("total_tool_calls") else "idle")
-    context_state = "warning" if context_pressure else ("active" if metrics.get("avg_tokens_per_call") else "idle")
-    reliability_state = "warning" if failed_runs or stale_sessions or errored_sessions else ("ok" if sessions or kanban.get("open") else "unknown")
-    cost_state = "warning" if expensive_sessions else ("ok" if sessions else "unknown")
-
-    lanes = [
-        {
-            "id": "speed",
-            "label": "Speed",
-            "value": p90_duration,
-            "unit": "seconds",
-            "state": speed_state,
-            "detail": f"median {int(median_duration or 0)}s / p90 {int(p90_duration or 0)}s" if sessions else "no session duration data",
-            "source": "Hermes sessions duration_seconds",
-            "recommended_view": "/sessions",
-        },
-        {
-            "id": "tools",
-            "label": "Tool Pressure",
-            "value": metrics.get("total_tool_calls"),
-            "state": tool_state,
-            "detail": f"{len(looping)} looping / {len(tool_heavy)} tool-heavy",
-            "source": "Hermes sessions tool_call_count",
-            "recommended_view": "/sessions",
-        },
-        {
-            "id": "context",
-            "label": "Context",
-            "value": metrics.get("avg_tokens_per_call"),
-            "state": context_state,
-            "detail": f"{len(context_pressure)} pressure session(s)",
-            "source": "Hermes sessions input_tokens/api_call_count",
-            "recommended_view": "/sessions",
-        },
-        {
-            "id": "reliability",
-            "label": "Reliability",
-            "value": len(failed_runs) + len(stale_sessions) + len(errored_sessions),
-            "state": reliability_state,
-            "detail": f"{len(failed_runs)} failed runs / {len(stale_sessions)} stale / {len(errored_sessions)} errored",
-            "source": "Hermes task_runs and sessions",
-            "recommended_view": "/kanban" if failed_runs else "/sessions",
-        },
-        {
-            "id": "cost_risk",
-            "label": "Cost Risk",
-            "value": expensive_sessions,
-            "state": cost_state,
-            "detail": f"{expensive_sessions} session(s) over ${EXPENSIVE_RUN_USD:.2f}" if sessions else "no session cost evidence",
-            "source": "Hermes per-session cost fields; Usage/Analytics owns totals",
-            "recommended_view": "/analytics",
-        },
-    ]
-
-    signals: List[Dict[str, Any]] = []
-    if looping:
-        signals.append({
-            "severity": "warning",
-            "label": "Looping sessions",
-            "detail": ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in looping[:3]),
-            "recommended_view": "/sessions",
-        })
-    if tool_heavy:
-        signals.append({
-            "severity": "info",
-            "label": "Tool-heavy sessions",
-            "detail": ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in tool_heavy[:3]),
-            "recommended_view": "/skills",
-        })
-    if context_pressure:
-        signals.append({
-            "severity": "info",
-            "label": "Context pressure",
-            "detail": ", ".join(f"{s.get('label')}: {int(s.get('avg_input_tokens') or 0):,} avg in-tokens/call" for s in context_pressure[:3]),
-            "recommended_view": "/sessions",
-        })
-    if failed_runs:
-        signals.append({
-            "severity": "warning",
-            "label": "Kanban worker failures",
-            "detail": f"{len(failed_runs)} recent failed run(s)",
-            "recommended_view": "/kanban",
-        })
-    if stale_sessions:
-        signals.append({
-            "severity": "warning",
-            "label": "Stale sessions",
-            "detail": f"{len(stale_sessions)} stale session(s)",
-            "recommended_view": "/sessions",
-        })
-
-    return {
-        "summary": {
-            "state": "warning" if any(lane["state"] == "warning" for lane in lanes) else ("active" if sessions else "unknown"),
-            "window_sessions": metrics.get("window_sessions"),
-            "completed_sessions": metrics.get("completed_sessions"),
-            "total_tokens": metrics.get("total_tokens"),
-            "total_tool_calls": metrics.get("total_tool_calls"),
-            "avg_tools_per_session": metrics.get("avg_tools_per_session"),
-            "avg_tokens_per_call": metrics.get("avg_tokens_per_call"),
-            "total_cost_usd": total_cost,
-        },
-        "lanes": lanes,
-        "signals": signals[:8],
-        "metrics": metrics,
-    }
-
-
 def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Tuning signals for loops, runaway cost, and context pressure."""
     findings: List[Dict[str, Any]] = []
@@ -2385,9 +2780,12 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
             ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in looping[:3]),
             "/sessions",
             "Open Sessions",
-            "Hephaestus",
-            "Hermes records tool_call_count per session; runaway tool use without termination is a known failure signature.",
+            "Olympus",
+            "Hermes records tool calls per session; runaway tool use without termination is a known failure signature.",
             f">= {RUNAWAY_TOOLS_THRESHOLD} tool calls in one run",
+            session_targets(looping),
+            count=len(looping),
+            scope="agent",
         ))
     if expensive:
         total = sum(_session_cost(s) for s in expensive)
@@ -2399,9 +2797,12 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
             ", ".join(f"{s.get('label')}: ${_session_cost(s):.2f}" for s in expensive[:3]),
             "/analytics",
             "Open Analytics",
-            "Athena",
-            "Hermes records per-session token cost (estimated/actual_cost_usd); cost concentration is a routing signal.",
+            "Olympus",
+            "Hermes records each session's estimated or actual cost; cost concentration is a routing signal.",
             f"single-run cost >= ${EXPENSIVE_RUN_USD:.2f}",
+            session_targets(expensive),
+            count=len(expensive),
+            scope="agent",
         ))
     if context_pressure:
         findings.append(_tuning_item(
@@ -2413,8 +2814,11 @@ def detect_friction(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, A
             "/sessions",
             "Open Sessions",
             "Mnemosyne",
-            "Hermes records cumulative input_tokens and api_call_count per session; their ratio estimates the per-call context size.",
+            "Hermes records prompt tokens and model calls per session; their ratio is the average context sent per call.",
             f">= {CONTEXT_PRESSURE_TOKENS:,} average input tokens per API call",
+            session_targets(context_pressure),
+            count=len(context_pressure),
+            scope="agent",
         ))
     return findings
 
@@ -2434,13 +2838,13 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
     message_heavy = [s for s in sessions if int(s.get("message_count") or 0) >= LONG_THREAD_THRESHOLD]
     active_sessions = [s for s in sessions if s.get("state") in ("active", "recent")]
     stale_sessions = [s for s in sessions if s.get("state") == "stale"]
-    failed_runs = [r for r in kanban_items(kanban, "recent_runs") if is_failed_run(r)]
+    failed_runs = [r for r in kanban_items(kanban, "_runs") if is_failed_run(r)]
     ready_unassigned = [
-        t for t in kanban_items(kanban, "recent_tasks")
+        t for t in kanban_items(kanban, "_tasks")
         if t.get("status") == "ready" and (not t.get("assignee") or t.get("assignee") == "unassigned")
     ]
     blocked_tasks = [
-        t for t in kanban_items(kanban, "recent_tasks")
+        t for t in kanban_items(kanban, "_tasks")
         if t.get("status") == "blocked"
     ]
 
@@ -2500,9 +2904,12 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in tool_heavy[:3]),
             "/skills",
             "Open Skills",
-            "Hephaestus",
-            "Hermes records tool_call_count. Use traces, tool counts, outcomes, and repeatable evidence before changing routes.",
+            "Olympus",
+            "Hermes records tool calls per session. Use traces, tool counts, outcomes, and repeatable evidence before changing routes.",
             f">= {TOOL_HEAVY_THRESHOLD} tool calls in a session",
+            session_targets(tool_heavy),
+            count=len(tool_heavy),
+            scope="agent",
         ))
     if message_heavy:
         tuning_items.append(_tuning_item(
@@ -2514,8 +2921,9 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "/sessions",
             "Open Sessions",
             "Mnemosyne",
-            "Hermes records message_count. Long threads can hide context drift.",
+            "Hermes records messages per session. Long threads can hide context drift.",
             f">= {LONG_THREAD_THRESHOLD} messages in a session",
+            count=len(message_heavy),
         ))
     if overloaded:
         tuning_items.append(_tuning_item(
@@ -2529,6 +2937,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Hermes",
             "Kanban assignee load shows route concentration.",
             f">= {OVERLOADED_OPEN_THRESHOLD} open or >= {OVERLOADED_RUNNING_THRESHOLD} running tasks",
+            count=len(overloaded),
         ))
     if blocked_tasks:
         tuning_items.append(_tuning_item(
@@ -2539,9 +2948,11 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             ", ".join(str(t.get("title") or t.get("id")) for t in blocked_tasks[:4]),
             "/kanban",
             "Open Kanban",
-            "Athena",
+            "Olympus",
             "Kanban blocked status is first-party orchestration evidence.",
             "task status = blocked",
+            count=len(blocked_tasks),
+            scope="entity",
         ))
     if ready_unassigned:
         tuning_items.append(_tuning_item(
@@ -2555,6 +2966,8 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Hermes",
             "Kanban ready tasks need an assignee before worker routing can run.",
             "task status = ready and assignee is empty/unassigned",
+            count=len(ready_unassigned),
+            scope="entity",
         ))
     if failed_runs:
         tuning_items.append(_tuning_item(
@@ -2565,9 +2978,11 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             ", ".join(f"{r.get('task_id')}: {r.get('outcome') or r.get('status')}" for r in failed_runs[:4]),
             "/kanban",
             "Open Kanban",
-            "Argus",
+            "Olympus",
             "Kanban task_runs record worker failures, crashes, and timeouts.",
             "task_run status/outcome indicates failure",
+            count=len(failed_runs),
+            scope="entity",
         ))
     if missing_models:
         tuning_items.append(_tuning_item(
@@ -2578,9 +2993,10 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             ", ".join(str(a.get("label")) for a in missing_models[:4]),
             "/profiles",
             "Open Profiles",
-            "Athena",
+            "Olympus",
             "Profile route metadata makes behavior changes auditable.",
             "profile route metadata is unset",
+            count=len(missing_models),
         ))
     if zero_skill_profiles:
         tuning_items.append(_tuning_item(
@@ -2594,6 +3010,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Apollo",
             "Hermes skills are reusable operating instructions.",
             "profile skill_count = 0",
+            count=len(zero_skill_profiles),
         ))
     if stale_sessions:
         tuning_items.append(_tuning_item(
@@ -2607,6 +3024,9 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Chronos",
             "Hermes sessions without an end time and recent activity are stale.",
             "session has no end time and is older than the freshness window",
+            session_targets(stale_sessions),
+            count=len(stale_sessions),
+            scope="agent",
         ))
     metrics = build_metrics(sessions, kanban)
     tuning_items = detect_friction(sessions, kanban) + tuning_items
@@ -2619,7 +3039,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
             "Current cross-surface scan is clean.",
             "/analytics",
             "Open Analytics",
-            "Athena",
+            "Olympus",
         ))
 
     tuning_items.sort(key=lambda x: _severity_rank(str(x.get("severity"))))
@@ -2645,7 +3065,7 @@ def build_agent_hq(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]
 
 def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     kanban = kanban or {}
-    tasks = kanban_items(kanban, "recent_tasks")
+    tasks = kanban_items(kanban, "_tasks")
     forced_skill_tasks = [t for t in tasks if int(t.get("forced_skill_count") or 0) > 0]
     forced_skill_total = sum(int(t.get("forced_skill_count") or 0) for t in forced_skill_tasks)
     looping = [s for s in sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD]
@@ -2662,7 +3082,7 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
         raw_name = str(profile.get("name") or "default")
         profile_tasks = [t for t in tasks if str(t.get("_assignee") or t.get("assignee")) == raw_name]
         profile_forced = [t for t in profile_tasks if int(t.get("forced_skill_count") or 0) > 0]
-        profile_sessions = [s for s in sessions if session_matches_profile(s, raw_name, profile.get("label"))]
+        profile_sessions = [s for s in sessions if session_matches_profile(s, raw_name)]
         profile_looping = [s for s in profile_sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD]
         profile_tool_heavy = [
             s for s in profile_sessions
@@ -2713,8 +3133,8 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
             ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in looping[:3]),
             "/skills",
             "Open Skills",
-            "Hephaestus",
-            "Hermes session tool_call_count is first-party trace evidence.",
+            "Olympus",
+            "Tool-call counts come straight from Hermes' own session records.",
             f">= {RUNAWAY_TOOLS_THRESHOLD} tool calls in one session",
         ))
     if tool_heavy:
@@ -2726,7 +3146,7 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
             ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in tool_heavy[:3]),
             "/skills",
             "Open Skills",
-            "Hephaestus",
+            "Olympus",
             "Hermes records tool calls per session.",
             f"{TOOL_HEAVY_THRESHOLD}-{RUNAWAY_TOOLS_THRESHOLD - 1} tool calls in one session",
         ))
@@ -2740,7 +3160,7 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
             "/skills",
             "Open Skills",
             "Mnemosyne",
-            "Hermes records message_count and average input tokens per API call.",
+            "Hermes records messages per session and the prompt size of each model call.",
             f">= {LONG_THREAD_THRESHOLD} messages or >= {CONTEXT_PRESSURE_TOKENS:,} avg input tokens/call",
         ))
     if zero_skill_profiles:
@@ -2765,7 +3185,7 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
             ", ".join(str(t.get("title") or t.get("id")) for t in forced_skill_tasks[:4]),
             "/kanban",
             "Open Kanban",
-            "Athena",
+            "Olympus",
             "Kanban task metadata exposes forced skill counts.",
             "task forced_skill_count > 0",
         ))
@@ -2780,7 +3200,7 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
             "Current skill coverage scan is clean.",
             "/skills",
             "Open Skills",
-            "Athena",
+            "Olympus",
         ))
 
     summary_state = "warning" if looping or zero_skill_profiles else ("info" if tool_heavy or long_threads or context_pressure else "ok")
@@ -2802,114 +3222,11 @@ def build_skill_coverage(profiles: List[Dict[str, Any]], sessions: List[Dict[str
     }
 
 
-def build_profile_fitness(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]], cron: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    kanban = kanban or {}
-    assignee_load = {
-        str(a.get("_assignee") or a.get("assignee")): a
-        for a in as_list(kanban.get("assignee_load"))
-        if isinstance(a, dict) and (a.get("_assignee") or a.get("assignee"))
-    }
-    tasks = kanban_items(kanban, "recent_tasks")
-    runs = kanban_items(kanban, "recent_runs")
-    cron_by_profile = group_cron_by_profile(cron)
-    gateways_by_profile = group_gateways_by_profile(gateways)
-
-    rows: List[Dict[str, Any]] = []
-    now = time.time()
-    for profile in profiles:
-        raw_name = str(profile.get("name") or "default")
-        public_name = str(profile.get("_public_name") or raw_name)
-        load = assignee_load.get(raw_name, {})
-        profile_tasks = [t for t in tasks if str(t.get("_assignee") or t.get("assignee")) == raw_name]
-        profile_runs = [r for r in runs if str(r.get("profile") or "") == public_name]
-        failed_runs = [r for r in profile_runs if is_failed_run(r)]
-        stale_tasks = [t for t in profile_tasks if task_stale_reason(t, now)]
-        profile_cron = cron_by_profile.get(raw_name, [])
-        profile_gateways = gateways_by_profile.get(public_name, [])
-        open_work = int(load.get("open") or 0)
-        running_work = int(load.get("running") or 0)
-        ready_work = int(load.get("ready") or 0)
-        blocked_work = int(load.get("blocked") or 0)
-        skill_count = int(profile.get("skill_count") or 0)
-        score = 100
-        reasons: List[Dict[str, Any]] = []
-
-        def deduct(points: int, label: str, detail: str, view: str) -> None:
-            nonlocal score
-            score -= points
-            reasons.append({
-                "label": label,
-                "points": points,
-                "detail": detail,
-                "recommended_view": view,
-            })
-
-        if not profile.get("model"):
-            deduct(12, "Route metadata unset", "Explicit profile routes make behavior changes auditable.", "/profiles")
-        if skill_count == 0:
-            deduct(18, "No local skills", "A bare profile has no reusable operating procedure to tune.", "/skills")
-        if profile.get("gateway_state") != "running" and (ready_work or running_work or profile_gateways):
-            deduct(16, "Gateway not running", "Assigned or gateway-backed work may not dispatch reliably.", "/profiles")
-        if open_work >= OVERLOADED_OPEN_THRESHOLD:
-            deduct(14, "Open work concentrated", f"{open_work} open Kanban task(s) are assigned here.", "/kanban")
-        if running_work >= OVERLOADED_RUNNING_THRESHOLD:
-            deduct(16, "Concurrent worker pressure", f"{running_work} running task(s) are assigned here.", "/kanban")
-        if blocked_work:
-            deduct(min(18, blocked_work * 6), "Blocked work", f"{blocked_work} blocked task(s) need review.", "/kanban")
-        if failed_runs:
-            deduct(min(24, len(failed_runs) * 12), "Worker failures", f"{len(failed_runs)} recent failed run(s) for this profile.", "/kanban")
-        if stale_tasks:
-            deduct(min(20, len(stale_tasks) * 10), "Possible stale worker", "Running work has heartbeat or claim data that needs review.", "/kanban")
-        if profile_cron and skill_count < 3:
-            deduct(8, "Scheduled work has thin skill coverage", "Cron-backed agents benefit from explicit runbooks.", "/skills")
-
-        score = max(0, score)
-        state = score_state(score)
-        if reasons:
-            top = reasons[0]
-            top_issue = top.get("label")
-            recommended_view = top.get("recommended_view")
-        else:
-            top_issue = "No profile fitness issue found."
-            recommended_view = "/profiles"
-        rows.append({
-            "id": profile.get("id") or f"profile:{public_name}",
-            "label": profile.get("label") or public_name,
-            "state": state,
-            "score": score,
-            "top_issue": top_issue,
-            "recommended_view": recommended_view,
-            "reasons": reasons[:4],
-            "metrics": {
-                "skills": skill_count,
-                "cron": len(profile_cron),
-                "gateways": len(profile_gateways),
-                "open": open_work,
-                "ready": ready_work,
-                "running": running_work,
-                "blocked": blocked_work,
-                "failed_runs": len(failed_runs),
-            },
-        })
-
-    rows.sort(key=lambda row: (int(row.get("score") or 0), str(row.get("label") or "")))
-    needs_review = [row for row in rows if row.get("state") in ("critical", "warning")]
-    return {
-        "summary": {
-            "profiles": len(rows),
-            "needs_review": len(needs_review),
-            "average_score": int(sum(int(r.get("score") or 0) for r in rows) / len(rows)) if rows else 0,
-            "lowest_score": int(rows[0].get("score") or 0) if rows else 0,
-        },
-        "profiles": rows,
-    }
-
-
 def build_orchestration(kanban: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     kanban = kanban or {}
     totals = kanban.get("totals") if isinstance(kanban.get("totals"), dict) else {}
-    tasks = kanban_items(kanban, "recent_tasks")
-    runs = kanban_items(kanban, "recent_runs")
+    tasks = kanban_items(kanban, "_tasks")
+    runs = kanban_items(kanban, "_runs")
     workers = kanban_items(kanban, "active_workers")
     now = time.time()
 
@@ -2949,1088 +3266,1759 @@ def build_orchestration(kanban: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def build_party(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]], cron: List[Dict[str, Any]], sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]], orchestration: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    kanban = kanban or {}
-    orchestration = orchestration or {}
-    assignee_load = {
-        str(a.get("_assignee") or a.get("assignee")): a
-        for a in as_list(kanban.get("assignee_load"))
-        if isinstance(a, dict) and (a.get("_assignee") or a.get("assignee"))
-    }
-    tasks = kanban_items(kanban, "recent_tasks")
-    runs = kanban_items(kanban, "recent_runs")
-    cron_by_profile = group_cron_by_profile(cron)
-    gateways_by_profile = group_gateways_by_profile(gateways)
-
-    members: List[Dict[str, Any]] = []
-    for idx, profile in enumerate(profiles):
-        raw_name = str(profile.get("name") or "default")
-        public_name = str(profile.get("_public_name") or raw_name)
-        load = assignee_load.get(raw_name, {})
-        profile_tasks = [t for t in tasks if str(t.get("_assignee") or t.get("assignee")) == raw_name]
-        active_tasks = [t for t in profile_tasks if t.get("status") == "running"]
-        queued_tasks = [t for t in profile_tasks if t.get("status") in ("triage", "todo", "scheduled", "ready", "review")]
-        blocked_tasks = [t for t in profile_tasks if t.get("status") == "blocked"]
-        profile_runs = [r for r in runs if str(r.get("profile") or "") == public_name]
-        failed_runs = [r for r in profile_runs if is_failed_run(r)]
-        profile_cron = cron_by_profile.get(raw_name, [])
-        profile_gateways = gateways_by_profile.get(public_name, [])
-        flags: List[str] = []
-        if active_tasks:
-            flags.append("working")
-        if queued_tasks:
-            flags.append("queued")
-        if blocked_tasks:
-            flags.append("blocked")
-        if failed_runs:
-            flags.append("worker failures")
-        if profile.get("gateway_state") != "running" and (active_tasks or queued_tasks):
-            flags.append("gateway route")
-        if not profile.get("model"):
-            flags.append("route metadata")
-        if int(profile.get("skill_count") or 0) == 0:
-            flags.append("skill coverage")
-        if profile_cron:
-            flags.append("scheduled")
-
-        if failed_runs or blocked_tasks:
-            state = "warning"
-        elif active_tasks:
-            state = "running"
-        elif queued_tasks:
-            state = "active"
-        elif profile.get("gateway_state") == "running":
-            state = "ready"
-        else:
-            state = profile.get("state") or "idle"
-
-        current_task = active_tasks[0] if active_tasks else (queued_tasks[0] if queued_tasks else None)
-        last_event_at = None
-        for candidate in [current_task, *(profile_runs[:3]), *(profile_cron[:2])]:
-            if not isinstance(candidate, dict):
-                continue
-            for key in ("last_heartbeat_at", "started_at", "ended_at", "last_run_at", "created_at"):
-                if candidate.get(key):
-                    last_event_at = candidate.get(key)
-                    break
-            if last_event_at:
-                break
-
-        members.append({
-            "id": profile.get("id") or f"profile:{public_name}",
-            "label": profile.get("label") or public_name,
-            "state": state,
-            "trust_boundary": profile.get("trust_boundary"),
-            "model": profile.get("model"),
-            "provider": profile.get("provider"),
-            "skill_count": int(profile.get("skill_count") or 0),
-            "gateway_state": profile.get("gateway_state"),
-            "gateway_count": len(profile_gateways),
-            "cron_jobs": len(profile_cron),
-            "open_work": int(load.get("open") or 0),
-            "ready_work": int(load.get("ready") or 0),
-            "running_work": int(load.get("running") or 0),
-            "blocked_work": int(load.get("blocked") or 0),
-            "active_tasks": active_tasks[:4],
-            "queued_tasks": queued_tasks[:4],
-            "failed_runs": failed_runs[:4],
-            "current_task": current_task,
-            "last_event_at": last_event_at,
-            "flags": flags or ["stable"],
-            "position": {
-                "x": 22 + (idx % 3) * 28,
-                "y": 34 + (idx // 3) * 24,
-            },
-        })
-
-    summary = {
-        "members": len(members),
-        "working": sum(1 for m in members if m.get("state") == "running"),
-        "queued": sum(1 for m in members if int(m.get("ready_work") or 0) > 0 or int(m.get("open_work") or 0) > 0),
-        "blocked": sum(int(m.get("blocked_work") or 0) for m in members),
-        "workers": int((orchestration.get("summary") or {}).get("active_workers") or 0),
-        "warnings": sum(1 for m in members if m.get("state") == "warning"),
-    }
-    return {
-        "summary": summary,
-        "members": members,
-    }
-
-
-def _event(kind: str, label: str, detail: str, state: str, at: Any, source: str, profile: Optional[str] = None, link: Optional[str] = None) -> Dict[str, Any]:
-    return {
-        "kind": kind,
-        "label": label,
-        "detail": detail,
-        "state": state,
-        "at": at,
-        "source": source,
-        "profile": profile,
-        "link": link,
-    }
-
-
-def build_activity_events(sessions: List[Dict[str, Any]], cron: List[Dict[str, Any]], gateways: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    events: List[Dict[str, Any]] = []
-    for item in as_list((kanban or {}).get("recent_events")):
-        if not isinstance(item, dict):
-            continue
-        kind = str(item.get("kind") or "kanban")
-        profile = item.get("assignee")
-        state = "warning" if kind in ("blocked", "reclaimed", "timed_out", "crashed", "gave_up", "spawn_failed") else ("running" if kind in ("claimed", "heartbeat") else "active")
-        detail = " / ".join(str(x) for x in [item.get("task_title"), item.get("task_status"), item.get("board")] if x)
-        events.append(_event(
-            f"kanban:{kind}",
-            kind.replace("_", " ").title(),
-            detail,
-            state,
-            item.get("created_at"),
-            "Kanban",
-            str(profile) if profile else None,
-            "/kanban",
-        ))
-    for session in sessions[:12]:
-        if not isinstance(session, dict):
-            continue
-        events.append(_event(
-            "session",
-            f"Session {session.get('state') or 'updated'}",
-            " / ".join(str(x) for x in [session.get("label"), f"{session.get('tool_call_count') or 0} tools", f"{session.get('message_count') or 0} msgs"] if x),
-            str(session.get("state") or "unknown"),
-            session.get("ended_at") or session.get("started_at"),
-            "Sessions",
-            None,
-            "/sessions",
-        ))
-    for job in cron[:8]:
-        if not isinstance(job, dict) or not job.get("last_run_at"):
-            continue
-        events.append(_event(
-            "cron",
-            "Cron fired",
-            " / ".join(str(x) for x in [job.get("label"), job.get("schedule")] if x),
-            str(job.get("state") or "scheduled"),
-            job.get("last_run_at"),
-            "Cron",
-            str(job.get("profile") or "default"),
-            "/cron",
-        ))
-    for gateway in gateways:
-        if not isinstance(gateway, dict):
-            continue
-        events.append(_event(
-            "gateway",
-            f"{gateway.get('label') or 'Gateway'} {gateway.get('state') or 'unknown'}",
-            str(gateway.get("platform") or ""),
-            str(gateway.get("state") or "unknown"),
-            None,
-            "Gateway",
-            str(gateway.get("profile") or ""),
-            "/logs",
-        ))
-    events.sort(key=lambda x: str(x.get("at") or ""), reverse=True)
-    return events[:24]
-
-
-def build_trace_spine(sessions: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    kanban = kanban or {}
-    session_by_ref = {
-        str(session.get("session_ref") or session.get("id")): session
-        for session in sessions
-        if isinstance(session, dict) and (session.get("session_ref") or session.get("id"))
-    }
-    tasks = kanban_items(kanban, "recent_tasks")
-    runs_by_task: Dict[str, List[Dict[str, Any]]] = {}
-    events_by_task: Dict[str, List[Dict[str, Any]]] = {}
-    for run in kanban_items(kanban, "recent_runs"):
-        task_ref = str(run.get("task_id") or "")
-        if task_ref:
-            runs_by_task.setdefault(task_ref, []).append(run)
-    for event in kanban_items(kanban, "recent_events"):
-        task_ref = str(event.get("task_id") or "")
-        if task_ref:
-            events_by_task.setdefault(task_ref, []).append(event)
-
-    def trace_signal(task: Dict[str, Any], session: Optional[Dict[str, Any]], runs: List[Dict[str, Any]], events: List[Dict[str, Any]]) -> Dict[str, Any]:
-        signals: List[str] = []
-        failed_runs = [run for run in runs if is_failed_run(run) or str(run.get("status") or "").lower() in {"failed", "failure"}]
-        failed_events = [
-            event for event in events
-            if str(event.get("kind") or "").lower() in {"failed", "failure", "crashed", "timed_out", "spawn_failed", "gave_up"}
-        ]
-        if task.get("status") == "blocked":
-            signals.append("blocked")
-        if task.get("status") == "ready" and str(task.get("assignee") or "") == "unassigned":
-            signals.append("unassigned")
-        if int(task.get("consecutive_failures") or 0) > 0:
-            signals.append("retry")
-        if task_stale_reason(task):
-            signals.append("stale")
-        if failed_runs:
-            signals.append("failed_run")
-        if failed_events:
-            signals.append("failed_event")
-        if session and session.get("handoff_error"):
-            signals.append("handoff_failure")
-        tool_count = int((session or {}).get("tool_call_count") or 0)
-        if tool_count >= RUNAWAY_TOOLS_THRESHOLD:
-            signals.append("tool_pressure")
-
-        if "blocked" in signals:
-            return {
-                "severity": "warning",
-                "label": "Clarify blocked task",
-                "detail": "Blocked work needs a decision, dependency, or acceptance criteria before more worker runs add noise.",
-                "signals": signals,
-                "recommended_view": "/kanban",
-            }
-        if "failed_run" in signals or "failed_event" in signals or "retry" in signals:
-            return {
-                "severity": "warning",
-                "label": "Review failed task run",
-                "detail": "Task run or event history shows failure pressure. Inspect the Kanban item before rerouting.",
-                "signals": signals,
-                "recommended_view": "/kanban",
-            }
-        if "stale" in signals:
-            return {
-                "severity": "warning",
-                "label": "Recover stale running work",
-                "detail": "The running task has stale worker evidence. Reclaim, close, or resume it in Kanban.",
-                "signals": signals,
-                "recommended_view": "/kanban",
-            }
-        if "unassigned" in signals:
-            return {
-                "severity": "warning",
-                "label": "Assign ready work",
-                "detail": "Ready work without an assignee cannot be claimed by a profile-specific worker.",
-                "signals": signals,
-                "recommended_view": "/kanban",
-            }
-        if "handoff_failure" in signals:
-            return {
-                "severity": "warning",
-                "label": "Review session handoff",
-                "detail": "The linked session reports handoff trouble. Check delivery or cancellation behavior.",
-                "signals": signals,
-                "recommended_view": "/sessions",
-            }
-        if "tool_pressure" in signals:
-            return {
-                "severity": "info",
-                "label": "Reduce trace tool pressure",
-                "detail": "The linked session crossed the runaway tool threshold. Add a checklist, split the task, or tighten the route.",
-                "signals": signals,
-                "recommended_view": "/sessions",
-            }
-        return {
-            "severity": "ok",
-            "label": "Trace linked",
-            "detail": "Task, run, event, and session evidence are linked without an urgent threshold.",
-            "signals": signals,
-            "recommended_view": "/kanban",
-        }
-
-    items: List[Dict[str, Any]] = []
-    failure_points = 0
-    for task in tasks[:24]:
-        task_ref = str(task.get("id") or "")
-        if not task_ref:
-            continue
-        session_ref = task.get("session_ref")
-        session = session_by_ref.get(str(session_ref or "")) if session_ref else None
-        runs = runs_by_task.get(task_ref, [])
-        events = events_by_task.get(task_ref, [])
-        signal = trace_signal(task, session, runs, events)
-        failure_points += sum(1 for name in signal["signals"] if name in {"blocked", "retry", "stale", "failed_run", "failed_event", "handoff_failure", "unassigned"})
-        item = {
-            "task_ref": task_ref,
-            "board": task.get("board"),
-            "title": task.get("title") or task_ref,
-            "status": task.get("status") or "unknown",
-            "assignee": task.get("assignee") or "unassigned",
-            "session_ref": session_ref,
-            "session_state": session.get("state") if session else None,
-            "session_tools": int(session.get("tool_call_count") or 0) if session else 0,
-            "session_messages": int(session.get("message_count") or 0) if session else 0,
-            "run_refs": [run.get("id") for run in runs[:4] if run.get("id")],
-            "event_refs": [event.get("id") for event in events[:6] if event.get("id")],
-            "run_count": len(runs),
-            "event_count": len(events),
-            "signals": signal["signals"],
-            "severity": signal["severity"],
-            "recommendation": signal["label"],
-            "detail": signal["detail"],
-            "recommended_view": signal["recommended_view"],
-            "action_label": _action_label_for_view(str(signal["recommended_view"])),
-            "basis": "Hermes sessions, Kanban tasks, task_runs, and task_events",
-        }
-        items.append(item)
-
-    items.sort(key=lambda item: (_severity_rank(str(item.get("severity"))), -len(as_list(item.get("signals"))), str(item.get("task_ref"))))
-    correlated = sum(1 for item in items if item.get("session_ref") or item.get("run_count") or item.get("event_count"))
-    state = "warning" if any(item.get("severity") == "warning" for item in items) else ("active" if items else "unknown")
-    return {
-        "summary": {
-            "state": state,
-            "tasks": len(tasks),
-            "correlated_tasks": correlated,
-            "sessions": len(session_by_ref),
-            "runs": sum(len(value) for value in runs_by_task.values()),
-            "events": sum(len(value) for value in events_by_task.values()),
-            "failure_points": failure_points,
-        },
-        "items": items[:8],
-    }
-
-
-def build_ops_evals(
-    sessions: List[Dict[str, Any]],
-    kanban: Optional[Dict[str, Any]],
-    skill_coverage: Dict[str, Any],
-    skill_hygiene: Dict[str, Any],
-    config_policy: Dict[str, Any],
-) -> Dict[str, Any]:
-    kanban = kanban or {}
-    kanban_totals = kanban.get("totals") if isinstance(kanban.get("totals"), dict) else {}
-    coverage_summary = skill_coverage.get("summary") if isinstance(skill_coverage.get("summary"), dict) else {}
-    hygiene_summary = skill_hygiene.get("summary") if isinstance(skill_hygiene.get("summary"), dict) else {}
-    policy_summary = config_policy.get("summary") if isinstance(config_policy.get("summary"), dict) else {}
-    has_evidence = bool(
-        sessions or
-        kanban.get("open") or
-        kanban.get("totals") or
-        kanban_items(kanban, "recent_runs") or
-        kanban_items(kanban, "recent_tasks") or
-        coverage_summary or
-        hygiene_summary or
-        policy_summary
-    )
-    if not has_evidence:
-        return {
-            "summary": {"state": "unknown", "score": 0, "checks": 0, "passed": 0, "warnings": 0, "failures": 0},
-            "items": [],
-        }
-
-    failed_runs = [item for item in kanban_items(kanban, "recent_runs") if is_failed_run(item)]
-    stale_sessions = [item for item in sessions if item.get("state") == "stale"]
-    errored_sessions = [item for item in sessions if item.get("state") == "error"]
-    blocked_tasks = int(kanban_totals.get("blocked") or 0)
-    ready_unassigned = [
-        item for item in kanban_items(kanban, "recent_tasks")
-        if item.get("status") == "ready" and (not item.get("assignee") or item.get("assignee") == "unassigned")
-    ]
-    overloaded_assignees = [
-        item for item in as_list(kanban.get("assignee_load"))
-        if isinstance(item, dict) and (
-            int(item.get("open") or 0) >= OVERLOADED_OPEN_THRESHOLD or
-            int(item.get("running") or 0) >= OVERLOADED_RUNNING_THRESHOLD or
-            int(item.get("blocked") or 0) >= 2
-        )
-    ]
-    looping_sessions = [item for item in sessions if int(item.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD]
-    tool_heavy = [
-        item for item in sessions
-        if TOOL_HEAVY_THRESHOLD <= int(item.get("tool_call_count") or 0) < RUNAWAY_TOOLS_THRESHOLD
-    ]
-    context_pressure = [item for item in sessions if int(item.get("avg_input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS]
-    long_threads = [item for item in sessions if int(item.get("message_count") or 0) >= LONG_THREAD_THRESHOLD]
-    high_turn_limit = int(policy_summary.get("max_turns") or 0) >= MAX_TURNS_REVIEW_THRESHOLD and not policy_summary.get("hard_loop_stop")
-
-    def item_state(critical: int, warning: int) -> str:
-        if critical:
-            return "critical"
-        if warning:
-            return "warning"
-        return "ok"
-
-    reliability_state = item_state(len(failed_runs), len(stale_sessions) + len(errored_sessions))
-    routing_state = item_state(0, len(overloaded_assignees) + len(ready_unassigned) + blocked_tasks)
-    skill_state = item_state(
-        int(hygiene_summary.get("hub_audit_fail") or 0),
-        int(coverage_summary.get("zero_skill_profiles") or 0) +
-        int(coverage_summary.get("forced_skill_tasks") or 0) +
-        int(hygiene_summary.get("forced_skill_metadata_gaps") or 0) +
-        int(hygiene_summary.get("hub_audit_warn") or 0),
-    )
-    efficiency_state = item_state(len(looping_sessions), len(tool_heavy) + len(context_pressure) + len(long_threads) + int(high_turn_limit))
-
-    reliability_view = "/kanban" if failed_runs else "/sessions"
-    items = [
-        {
-            "id": "reliability",
-            "label": "Reliability",
-            "state": reliability_state,
-            "score": 100 - min(60, len(failed_runs) * 30 + len(stale_sessions) * 10 + len(errored_sessions) * 12),
-            "detail": "Worker and session health from recent Hermes evidence.",
-            "evidence": f"{len(failed_runs)} failed run(s), {len(stale_sessions)} stale session(s), {len(errored_sessions)} errored session(s)",
-            "basis": "Hermes task_runs and session state",
-            "signals": [
-                f"failed runs: {len(failed_runs)}",
-                f"stale sessions: {len(stale_sessions)}",
-                f"errored sessions: {len(errored_sessions)}",
-            ],
-            "recommended_view": reliability_view,
-            "action_label": _action_label_for_view(reliability_view),
-        },
-        {
-            "id": "routing",
-            "label": "Routing",
-            "state": routing_state,
-            "score": 100 - min(55, len(overloaded_assignees) * 20 + len(ready_unassigned) * 15 + blocked_tasks * 5),
-            "detail": "Kanban ownership, blocked work, and unassigned ready work.",
-            "evidence": f"{len(overloaded_assignees)} loaded assignee(s), {len(ready_unassigned)} unassigned ready task(s), {blocked_tasks} blocked task(s)",
-            "basis": "Hermes Kanban assignee load and task status",
-            "signals": [
-                f"loaded assignees: {len(overloaded_assignees)}",
-                f"unassigned ready: {len(ready_unassigned)}",
-                f"blocked tasks: {blocked_tasks}",
-            ],
-            "recommended_view": "/kanban",
-            "action_label": _action_label_for_view("/kanban"),
-        },
-        {
-            "id": "skill_use",
-            "label": "Skill Use",
-            "state": skill_state,
-            "score": 100 - min(
-                55,
-                int(coverage_summary.get("zero_skill_profiles") or 0) * 18 +
-                int(hygiene_summary.get("forced_skill_metadata_gaps") or 0) * 16 +
-                int(hygiene_summary.get("hub_audit_fail") or 0) * 25 +
-                int(hygiene_summary.get("hub_audit_warn") or 0) * 12 +
-                int(coverage_summary.get("forced_skill_tasks") or 0) * 3,
-            ),
-            "detail": "Coverage, forced-skill metadata, and stored audit results.",
-            "evidence": (
-                f"{int(coverage_summary.get('zero_skill_profiles') or 0)} bare profile(s), "
-                f"{int(hygiene_summary.get('forced_skill_metadata_gaps') or 0)} forced-skill gap(s), "
-                f"{int(hygiene_summary.get('hub_audit_warn') or 0)} audit warning(s), "
-                f"{int(hygiene_summary.get('hub_audit_fail') or 0)} audit fail(s)"
-            ),
-            "basis": "Hermes skill coverage, skill usage metadata, and hub lock metadata",
-            "signals": [
-                f"bare profiles: {int(coverage_summary.get('zero_skill_profiles') or 0)}",
-                f"forced-skill tasks: {int(coverage_summary.get('forced_skill_tasks') or 0)}",
-                f"metadata gaps: {int(hygiene_summary.get('forced_skill_metadata_gaps') or 0)}",
-            ],
-            "recommended_view": "/skills",
-            "action_label": _action_label_for_view("/skills"),
-        },
-        {
-            "id": "efficiency",
-            "label": "Efficiency",
-            "state": efficiency_state,
-            "score": 100 - min(60, len(looping_sessions) * 25 + len(tool_heavy) * 10 + len(context_pressure) * 14 + len(long_threads) * 6 + int(high_turn_limit) * 10),
-            "detail": "Tool pressure, context pressure, long threads, and visible loop guardrails.",
-            "evidence": (
-                f"{len(looping_sessions)} looping session(s), {len(tool_heavy)} tool-heavy session(s), "
-                f"{len(context_pressure)} context-pressure session(s), {len(long_threads)} long thread(s)"
-            ),
-            "basis": "Hermes session counters plus safe config policy",
-            "signals": [
-                f"looping: {len(looping_sessions)}",
-                f"tool-heavy: {len(tool_heavy)}",
-                f"context pressure: {len(context_pressure)}",
-                f"loop stop visible: {'no' if high_turn_limit else 'yes'}",
-            ],
-            "recommended_view": "/sessions",
-            "action_label": _action_label_for_view("/sessions"),
-        },
-    ]
-
-    warnings = sum(1 for item in items if item["state"] == "warning")
-    failures = sum(1 for item in items if item["state"] == "critical")
-    score = max(0, int(sum(int(item["score"]) for item in items) / len(items))) if items else 100
-    state = "critical" if failures else ("warning" if warnings else "ok")
-    return {
-        "summary": {
-            "state": state,
-            "score": score,
-            "checks": len(items),
-            "passed": sum(1 for item in items if item["state"] == "ok"),
-            "warnings": warnings,
-            "failures": failures,
-        },
-        "items": items,
-    }
-
-
-def build_metrics_spine(
-    profiles: List[Dict[str, Any]],
-    sessions: List[Dict[str, Any]],
-    kanban: Optional[Dict[str, Any]],
-    skill_metadata: Dict[str, Any],
-    skill_coverage: Dict[str, Any],
-    skill_hygiene: Dict[str, Any],
-    profile_fitness: Dict[str, Any],
-    performance: Dict[str, Any],
-    ops_evals: Dict[str, Any],
-    config_policy: Dict[str, Any],
-    usage_rollup: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Hermes-grounded operational metrics for tuning, not a usage ledger."""
-    kanban = kanban or {}
-    rollup = usage_rollup or collect_usage_rollup(profiles)
-    skill_summary = skill_metadata.get("summary") if isinstance(skill_metadata.get("summary"), dict) else {}
-    coverage_summary = skill_coverage.get("summary") if isinstance(skill_coverage.get("summary"), dict) else {}
-    hygiene_summary = skill_hygiene.get("summary") if isinstance(skill_hygiene.get("summary"), dict) else {}
-    fitness_summary = profile_fitness.get("summary") if isinstance(profile_fitness.get("summary"), dict) else {}
-    performance_summary = performance.get("summary") if isinstance(performance.get("summary"), dict) else {}
-    ops_summary = ops_evals.get("summary") if isinstance(ops_evals.get("summary"), dict) else {}
-    policy_summary = config_policy.get("summary") if isinstance(config_policy.get("summary"), dict) else {}
-    kanban_totals = kanban.get("totals") if isinstance(kanban.get("totals"), dict) else {}
-    active_profiles = sum(1 for profile in profiles if profile.get("state") == "active")
-    idle_profiles = sum(1 for profile in profiles if profile.get("state") == "idle")
-    profiles_with_skills = sum(1 for profile in profiles if int(profile.get("skill_count") or 0) > 0)
-    profile_rows = as_list(skill_metadata.get("profile_usage"))[:8]
-    usage_state = rollup.get("state") or "unknown"
-    cost_confidence = rollup.get("cost_confidence") or "unknown"
-
-    signals: List[Dict[str, Any]] = []
-    def add_signal(kind: str, severity: str, title: str, detail: str, evidence: str, view: str) -> None:
-        signals.append({
-            "kind": kind,
-            "severity": severity,
-            "title": title,
-            "detail": detail,
-            "evidence": evidence,
-            "recommended_view": view,
-            "action_label": _action_label_for_view(view),
-        })
-
-    if int(rollup.get("zero_usage_suspect_sessions") or 0):
-        add_signal(
-            "usage",
-            "warning",
-            "Token accounting has gaps",
-            "Some Hermes sessions have work evidence but zero recorded token usage. Treat usage and cost totals as lower-bound evidence.",
-            f"{rollup.get('zero_usage_suspect_sessions')} zero-usage suspect session(s)",
-            "/analytics",
-        )
-    if cost_confidence in {"partial", "missing"}:
-        add_signal(
-            "cost",
-            "warning",
-            "Cost visibility is incomplete",
-            "Hermes recorded tokens without reliable cost on some routes. Olympus should use cost as a risk signal, not a spend ledger.",
-            f"cost confidence: {cost_confidence}",
-            "/analytics",
-        )
-    if int(hygiene_summary.get("never_used") or 0):
-        add_signal(
-            "skill",
-            "info",
-            "Unused skills need review",
-            "Skills with no use evidence may be stale, over-specific, or created before the workflow repeated.",
-            f"{hygiene_summary.get('never_used')} never-used skill record(s)",
-            "/skills",
-        )
-    if int(performance_summary.get("avg_tools_per_session") or 0) >= TOOL_HEAVY_THRESHOLD:
-        add_signal(
-            "efficiency",
-            "warning",
-            "Tool pressure is high",
-            "High tool calls per session usually means missing procedure, weak routing, or too-broad tasks.",
-            f"avg {performance_summary.get('avg_tools_per_session')} tools/session",
-            "/sessions",
-        )
-    if int(kanban_totals.get("blocked") or 0) or int(kanban.get("stale_workers") or 0):
-        add_signal(
-            "work",
-            "warning",
-            "Work reliability needs review",
-            "Blocked work or stale workers reduce agent usability even when usage volume looks healthy.",
-            f"{kanban_totals.get('blocked') or 0} blocked / {kanban.get('stale_workers') or 0} stale worker(s)",
-            "/kanban",
-        )
-
-    return {
-        "schema_version": "olympus.metrics_spine.v1",
-        "generated_at": now_iso(),
-        "window": {
-            "days": int(rollup.get("window_days") or 30),
-            "session_sample_limit": len(sessions),
-            "ledger_owner": "/analytics",
-        },
-        "ownership": {
-            "olympus": "operational metrics, risk, readiness, usability signals, and handoff evidence",
-            "hermes_analytics": "usage ledger, daily token bars, top models, top skills, and raw cost totals",
-        },
-        "coverage": {
-            "state_store": usage_state,
-            "state_stores_seen": rollup.get("stores_seen") or 0,
-            "skill_usage": "warning" if skill_summary.get("read_failures") else ("ok" if skill_summary.get("usage_present") else "missing"),
-            "skill_usage_sources": skill_summary.get("usage_sources") or 0,
-            "kanban": "warning" if any(isinstance(board, dict) and board.get("error") for board in as_list(kanban.get("boards"))) else ("ok" if kanban.get("boards") else "missing"),
-            "cost_visibility": cost_confidence,
-            "config_grounding": {
-                "toolsets": policy_summary.get("toolsets") or 0,
-                "enabled_toolsets": policy_summary.get("enabled_toolsets") or 0,
-                "max_turns": policy_summary.get("max_turns") or 0,
-                "auxiliary_routes": policy_summary.get("aux_configured") or 0,
-            },
-        },
-        "usage": {
-            "sessions": rollup.get("sessions") or 0,
-            "api_calls": rollup.get("api_calls") or 0,
-            "total_tokens": rollup.get("total_tokens") or 0,
-            "tool_calls": rollup.get("tool_calls") or 0,
-            "costed_sessions": rollup.get("costed_sessions") or 0,
-            "estimated_cost_usd": rollup.get("estimated_cost_usd") or 0,
-            "actual_cost_usd": rollup.get("actual_cost_usd") or 0,
-            "cost_confidence": cost_confidence,
-            "zero_usage_suspect_sessions": rollup.get("zero_usage_suspect_sessions") or 0,
-            "zero_cost_token_sessions": rollup.get("zero_cost_token_sessions") or 0,
-            "recommended_view": "/analytics",
-            "note": "Operational evidence only. Hermes Analytics owns raw usage and cost ledgers.",
-        },
-        "agents": {
-            "profiles": len(profiles),
-            "active_profiles": active_profiles,
-            "idle_profiles": idle_profiles,
-            "profiles_with_skills": profiles_with_skills,
-            "needs_review": fitness_summary.get("needs_review") or 0,
-            "average_score": fitness_summary.get("average_score") or 0,
-            "cohorts": strip_internal(rollup.get("profiles") or []),
-            "recommended_view": "/profiles",
-        },
-        "skills": {
-            "recorded": skill_summary.get("total_skills") or 0,
-            "created_30d": skill_summary.get("created_30d") or 0,
-            "agent_created": skill_summary.get("agent_created") or 0,
-            "used": skill_summary.get("used") or 0,
-            "never_used": hygiene_summary.get("never_used") or skill_summary.get("never_used") or 0,
-            "stale": hygiene_summary.get("stale") or skill_summary.get("stale") or 0,
-            "archived": hygiene_summary.get("archived") or skill_summary.get("archived") or 0,
-            "recently_patched": hygiene_summary.get("recently_patched") or skill_summary.get("recently_patched") or 0,
-            "forced_skill_tasks": coverage_summary.get("forced_skill_tasks") or 0,
-            "metadata_gaps": hygiene_summary.get("forced_skill_metadata_gaps") or 0,
-            "by_profile": strip_internal(profile_rows),
-            "recommended_view": "/skills",
-        },
-        "work": {
-            "open": kanban.get("open") or 0,
-            "ready": kanban_totals.get("ready") or 0,
-            "running": kanban_totals.get("running") or 0,
-            "blocked": kanban_totals.get("blocked") or 0,
-            "failed_runs": performance.get("metrics", {}).get("failed_kanban_runs") if isinstance(performance.get("metrics"), dict) else 0,
-            "stale_workers": kanban.get("stale_workers") or 0,
-            "recommended_view": "/kanban",
-        },
-        "evals": {
-            "state": ops_summary.get("state") or "unknown",
-            "score": ops_summary.get("score") or 0,
-            "reliability": next((item.get("state") for item in as_list(ops_evals.get("items")) if isinstance(item, dict) and item.get("id") == "reliability"), "unknown"),
-            "routing": next((item.get("state") for item in as_list(ops_evals.get("items")) if isinstance(item, dict) and item.get("id") == "routing"), "unknown"),
-            "skill_use": next((item.get("state") for item in as_list(ops_evals.get("items")) if isinstance(item, dict) and item.get("id") == "skill_use"), "unknown"),
-            "efficiency": next((item.get("state") for item in as_list(ops_evals.get("items")) if isinstance(item, dict) and item.get("id") == "efficiency"), "unknown"),
-            "recommended_view": "/sessions",
-        },
-        "signals": signals[:8],
-    }
-
-
-def build_tuning(profiles: List[Dict[str, Any]], gateways: List[Dict[str, Any]], cron: List[Dict[str, Any]], sessions: List[Dict[str, Any]], health: Dict[str, Any], attention: List[Dict[str, Any]], kanban: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    failed_cron = [j for j in cron if j.get("state") == "error"]
-    paused_cron = [j for j in cron if j.get("state") == "paused"]
-    stale_sessions = [s for s in sessions if s.get("state") == "stale"]
-    errored_sessions = [s for s in sessions if s.get("state") == "error"]
-    active_sessions = [s for s in sessions if s.get("state") in ("active", "recent")]
-    looping_sessions = [s for s in sessions if int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD]
-    tool_heavy = [
-        s for s in sessions
-        if TOOL_HEAVY_THRESHOLD <= int(s.get("tool_call_count") or 0) < RUNAWAY_TOOLS_THRESHOLD
-    ]
-    message_heavy = [s for s in sessions if int(s.get("message_count") or 0) >= LONG_THREAD_THRESHOLD]
-    context_pressure = [s for s in sessions if int(s.get("avg_input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS]
-    missing_models = [p for p in profiles if not p.get("model")]
-    idle_profiles = [p for p in profiles if p.get("state") == "idle"]
-    running_gateways = [g for g in gateways if g.get("state") == "running"]
-    kanban = kanban or {}
-    kanban_totals = kanban.get("totals") if isinstance(kanban.get("totals"), dict) else {}
-    kanban_attention = [x for x in as_list(kanban.get("attention")) if isinstance(x, dict)]
-    kanban_open = int(kanban.get("open") or 0)
-    kanban_blocked = int(kanban_totals.get("blocked") or 0)
-    active_workers = as_list(kanban.get("active_workers"))
-    overloaded_assignees = [
-        a for a in as_list(kanban.get("assignee_load"))
-        if isinstance(a, dict) and (int(a.get("open") or 0) >= 5 or int(a.get("blocked") or 0) >= 2 or int(a.get("running") or 0) >= 2)
-    ]
-
-    metrics = build_metrics(sessions, kanban)
-    recommendations: List[Dict[str, Any]] = []
-    if failed_cron:
-        recommendations.append(_recommendation(
-            "critical",
-            "Tune failing scheduled work",
-            f"{len(failed_cron)} cron job(s) report errors. Review cadence, prompt, profile, approvals, and delivery target.",
-            ", ".join(str(j.get("label") or j.get("job_id")) for j in failed_cron[:3]),
-            "/cron",
-            "Apollo",
-            "Open Cron",
-            "Cron failures are direct runtime evidence. Fix scheduled work first.",
-        ))
-    if errored_sessions:
-        recommendations.append(_recommendation(
-            "warning",
-            "Review handoff failures",
-            f"{len(errored_sessions)} recent session(s) contain handoff errors. Check delivery and cancellation behavior.",
-            ", ".join(str(s.get("label") or s.get("session_ref")) for s in errored_sessions[:3]),
-            "/sessions",
-            "Hermes",
-            "Open Sessions",
-            "Session handoff_error comes from Hermes session metadata and indicates delivery or cancellation trouble.",
-        ))
-    if stale_sessions:
-        recommendations.append(_recommendation(
-            "warning",
-            "Inspect stale work",
-            f"{len(stale_sessions)} recent session(s) are stale. Close, resume, or annotate them.",
-            ", ".join(str(s.get("label") or s.get("session_ref")) for s in stale_sessions[:3]),
-            "/sessions",
-            "Chronos",
-            "Open Sessions",
-            "Stale sessions are open-ended records with no recent activity; they make agent performance review noisy.",
-        ))
-    if looping_sessions:
-        recommendations.append(_recommendation(
-            "warning",
-            "Stop looping or tool-thrashing runs",
-            f"{len(looping_sessions)} session(s) crossed {RUNAWAY_TOOLS_THRESHOLD} tool calls. Add a checklist skill, reduce max turns, or split the task.",
-            ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in looping_sessions[:3]),
-            "/sessions",
-            "Hephaestus",
-            "Open Sessions",
-            "Runaway tool_call_count is a trace-level signal for loops, unclear plans, or missing procedures.",
-        ))
-    if tool_heavy:
-        recommendations.append(_recommendation(
-            "info",
-            "Tune tool-heavy routes",
-            f"{len(tool_heavy)} session(s) used 20 or more tool calls. Add skills, narrower prompts, or decomposition.",
-            ", ".join(f"{s.get('label')}: {s.get('tool_call_count')} tools" for s in tool_heavy[:3]),
-            "/analytics",
-            "Hephaestus",
-            "Open Analytics",
-            "High tool_call_count is a trace-level signal for workflow friction, missing skills, or poor decomposition.",
-        ))
-    if context_pressure:
-        recommendations.append(_recommendation(
-            "info",
-            "Reduce per-call context pressure",
-            f"{len(context_pressure)} session(s) averaged {CONTEXT_PRESSURE_TOKENS:,}+ input tokens per API call. Add recap, memory pruning, or task splits.",
-            ", ".join(f"{s.get('label')}: {int(s.get('avg_input_tokens') or 0):,} avg in-tokens/call" for s in context_pressure[:3]),
-            "/sessions",
-            "Mnemosyne",
-            "Open Sessions",
-            "Large repeated prompts increase latency, cost, and drift risk.",
-        ))
-    if message_heavy:
-        recommendations.append(_recommendation(
-            "info",
-            "Watch long conversations",
-            f"{len(message_heavy)} session(s) crossed 40 messages. Add recap, memory, or task splits.",
-            ", ".join(f"{s.get('label')}: {s.get('message_count')} messages" for s in message_heavy[:3]),
-            "/sessions",
-            "Mnemosyne",
-            "Open Sessions",
-            "High message_count is a context-pressure signal; summaries, memory, or task splitting can improve follow-up quality.",
-        ))
-    if missing_models:
-        recommendations.append(_recommendation(
-            "warning",
-            "Set explicit profile routes",
-            f"{len(missing_models)} profile(s) do not expose a default route in config.",
-            ", ".join(str(p.get("label") or p.get("name")) for p in missing_models[:4]),
-            "/profiles",
-            "Athena",
-            "Open Profiles",
-            "Explicit route metadata makes changes auditable and keeps profile behavior intentional.",
-        ))
-    if not running_gateways and gateways:
-        recommendations.append(_recommendation(
-            "warning",
-            "Check gateway process state",
-            "Gateway markers exist, but no running gateway was detected.",
-            ", ".join(str(g.get("label")) for g in gateways[:4]),
-            "/logs",
-            "Iris",
-            "Open Logs",
-            "Gateway process state determines whether platform-delivered work can be routed.",
-        ))
-    if health.get("recent_error_terms"):
-        recommendations.append(_recommendation(
-            "critical",
-            "Investigate log-tail errors",
-            "Gateway or error log tails contain failure terms.",
-            ", ".join(str(x) for x in health.get("recent_error_terms", [])[:5]),
-            "/logs",
-            "Argus",
-            "Open Logs",
-            "Olympus scans the last 8KB of each Hermes log file; timestamp recency is not inferred.",
-        ))
-    if kanban_attention:
-        recommendations.append(_recommendation(
-            str(kanban_attention[0].get("severity") or "warning"),
-            "Review Kanban attention",
-            f"{len(kanban_attention)} Kanban issue(s) need review.",
-            ", ".join(str(x.get("label") or "Kanban issue") for x in kanban_attention[:3]),
-            "/kanban",
-            "Athena",
-            "Open Kanban",
-            "Kanban attention is derived from task status, heartbeats, retries, assignees, and task_runs.",
-        ))
-    if overloaded_assignees:
-        recommendations.append(_recommendation(
-            "warning",
-            "Balance agent workload",
-            f"{len(overloaded_assignees)} assignee(s) show Kanban pressure. Split work, clarify blockers, or reroute specialist tasks.",
-            ", ".join(f"{a.get('assignee')}: {a.get('open')} open" for a in overloaded_assignees[:4]),
-            "/kanban",
-            "Hermes",
-            "Open Kanban",
-            "Assignee load comes from Kanban task ownership and is the right signal for route balancing.",
-        ))
-    if not recommendations:
-        recommendations.append(_recommendation(
-            "ok",
-            "No urgent tuning pressure",
-            "Olympus did not detect failing cron jobs, stale sessions, handoff errors, or missing profile routes.",
-            "Current metadata scan is clean.",
-            "/analytics",
-            "Athena",
-            "Open Analytics",
-            "No current heuristic crossed its threshold.",
-        ))
-
-    score = 100
-    deductions: List[Dict[str, Any]] = []
-
-    def deduct(label: str, amount: int, reason: str, evidence: str, source: str) -> None:
-        nonlocal score
-        if amount <= 0:
-            return
-        score -= amount
-        deductions.append({
-            "label": label,
-            "points": amount,
-            "reason": reason,
-            "evidence": evidence,
-            "source": source,
-        })
-
-    deduct(
-        "Runtime health",
-        25 if health.get("status") == "error" else 10 if health.get("status") == "warning" else 0,
-        "Gateway, cron, or log evidence needs operator review.",
-        health.get("summary") or "",
-        "Hermes logs, cron metadata, and gateway process state",
-    )
-    deduct("Cron failures", min(25, len(failed_cron) * 8), "Scheduled agent work is failing.", f"{len(failed_cron)} failed job(s)", "Hermes cron jobs")
-    deduct("Handoff failures", min(20, len(errored_sessions) * 6), "Recent sessions contain handoff errors.", f"{len(errored_sessions)} session(s)", "Hermes sessions")
-    deduct("Stale sessions", min(15, len(stale_sessions) * 3), "Open-ended stale sessions make performance review noisy.", f"{len(stale_sessions)} stale session(s)", "Hermes sessions")
-    deduct("Looping/tool thrash", min(20, len(looping_sessions) * 3), "Runaway tool use wastes time and tokens.", f"{len(looping_sessions)} session(s)", "Hermes sessions tool_call_count")
-    deduct("Context pressure", min(12, len(context_pressure) * 6), "Large repeated context increases latency, cost, and drift risk.", f"{len(context_pressure)} session(s)", "Hermes sessions input_tokens/api_call_count")
-    deduct("Tool-heavy work", min(10, len(tool_heavy) * 2), "Repeated tool work may need a skill, narrower prompt, or task split.", f"{len(tool_heavy)} session(s)", "Hermes sessions tool_call_count")
-    deduct("Long threads", min(8, len(message_heavy)), "Long conversations need recap, memory, or task split discipline.", f"{len(message_heavy)} session(s)", "Hermes sessions message_count")
-    deduct("Unset profile routes", min(15, len(missing_models) * 4), "Implicit routing makes tuning harder to audit.", f"{len(missing_models)} profile(s)", "Hermes profile config")
-    deduct("Kanban attention", min(20, len(kanban_attention) * 4), "Kanban has blocked, stale, failed, or unassigned work.", f"{len(kanban_attention)} attention item(s)", "Hermes Kanban tasks/task_runs")
-    deduct("Blocked Kanban work", min(12, kanban_blocked * 3), "Blocked work usually needs a human decision, dependency, or clearer acceptance criteria.", f"{kanban_blocked} blocked task(s)", "Hermes Kanban tasks")
-    deduct("Worker failures", min(20, int(metrics.get("failed_kanban_runs") or 0) * 6), "Kanban worker failures show reliability risk.", f"{metrics.get('failed_kanban_runs') or 0} failed run(s)", "Hermes Kanban task_runs")
-    if health.get("status") == "error":
-        score = min(score, 54)
-    elif health.get("status") == "warning":
-        score = min(score, 84)
-    score = max(0, score)
-
-    if score >= 85:
-        score_label = "Stable"
-    elif score >= 70:
-        score_label = "Watch"
-    elif score >= 55:
-        score_label = "Needs review"
-    else:
-        score_label = "Needs action"
-
-    signals = [
-        {"id": "attention", "label": "Attention Items", "value": len(attention), "state": "warning" if attention else "ok", "hint": "Cross-system findings ranked before inventory."},
-        {"id": "kanban_open", "label": "Open Kanban Work", "value": kanban_open, "state": "active" if kanban_open else "idle", "hint": "Open task load across Kanban boards."},
-        {"id": "kanban_blocked", "label": "Blocked Tasks", "value": kanban_blocked, "state": "warning" if kanban_blocked else "ok", "hint": "Kanban cards needing decisions or clearer specs."},
-        {"id": "kanban_workers", "label": "Active Workers", "value": len(active_workers), "state": "running" if active_workers else "idle", "hint": "Kanban task runs currently in flight."},
-        {"id": "active_sessions", "label": "Active/Recent Work", "value": len(active_sessions), "state": "active" if active_sessions else "idle", "hint": "Sessions that still look fresh."},
-        {"id": "failed_cron", "label": "Cron Failures", "value": len(failed_cron), "state": "error" if failed_cron else "ok", "hint": "Scheduled work that needs review."},
-        {"id": "tool_heavy", "label": "Tool-Heavy Runs", "value": len(tool_heavy), "state": "warning" if tool_heavy else "ok", "hint": "Sessions with 20+ tool calls."},
-        {"id": "looping", "label": "Looping Runs", "value": len(looping_sessions), "state": "warning" if looping_sessions else "ok", "hint": "Sessions with 40+ tool calls."},
-        {"id": "context_pressure", "label": "Context Pressure", "value": len(context_pressure), "state": "warning" if context_pressure else "ok", "hint": "Sessions averaging 50k+ input tokens per API call."},
-        {"id": "message_heavy", "label": "Long Threads", "value": len(message_heavy), "state": "warning" if message_heavy else "ok", "hint": "Sessions with 40+ messages."},
-        {"id": "missing_routes", "label": "Unset Routes", "value": len(missing_models), "state": "warning" if missing_models else "ok", "hint": "Profiles without explicit route metadata."},
-        {"id": "paused_cron", "label": "Paused Cron", "value": len(paused_cron), "state": "idle" if paused_cron else "ok", "hint": "Paused scheduled jobs."},
-        {"id": "idle_profiles", "label": "Idle Profiles", "value": len(idle_profiles), "state": "idle" if idle_profiles else "active", "hint": "Profiles without visible gateway activity."},
-    ]
-
-    agent_hq = build_agent_hq(profiles, gateways, cron, sessions, kanban)
-    recommendations.sort(key=lambda x: _severity_rank(str(x.get("severity"))))
-    return {
-        "score": score,
-        "score_breakdown": {
-            "base": 100,
-            "score": score,
-            "label": score_label,
-            "deductions": deductions,
-            "explanation": "A transparent heuristic readiness score. It prioritizes current operational risks, not absolute agent intelligence.",
-        },
-        "methodology": {
-            "thresholds": [
-                {"signal": "Looping session", "threshold": f">= {RUNAWAY_TOOLS_THRESHOLD} tool calls", "why": "Runaway tool use is a direct signal for loops, unclear plans, or missing procedures."},
-                {"signal": "Tool-heavy session", "threshold": f"{TOOL_HEAVY_THRESHOLD}-{RUNAWAY_TOOLS_THRESHOLD - 1} tool calls", "why": "Repeated tool use can indicate missing skills, unclear prompts, or poor decomposition."},
-                {"signal": "Context pressure", "threshold": f">= {CONTEXT_PRESSURE_TOKENS:,} average input tokens per API call", "why": "Large repeated prompts increase latency, cost, and drift risk."},
-                {"signal": "Long thread", "threshold": f">= {LONG_THREAD_THRESHOLD} messages", "why": "Long conversations can create context pressure and benefit from summaries, memory rules, or task splits."},
-                {"signal": "Overloaded assignee", "threshold": f">= {OVERLOADED_OPEN_THRESHOLD} open or >= {OVERLOADED_RUNNING_THRESHOLD} running Kanban tasks", "why": "Load concentration suggests route balancing or a specialist profile may help."},
-                {"signal": "Stale session", "threshold": "open session older than the freshness window", "why": "Unresolved stale work makes performance evidence unreliable."},
-            ],
-            "sources": [
-                {"label": "Hermes session store", "detail": "Uses local runtime metadata, message_count, tool_call_count, handoff_error, and timestamps from the Hermes state store."},
-                {"label": "Hermes Kanban", "detail": "Uses first-party task status, assignee load, worker heartbeats, retries, and task_runs."},
-                {"label": "HermesOS profiles and skills", "detail": "Uses profile runtime-route metadata, gateway state, and local SKILL.md counts."},
-                {"label": "Provider-neutral agent evaluation", "detail": "Uses traces, tool calls, outcomes, and repeatable signals before changing agents or routes."},
-            ],
-        },
-        "summary": "Read-only tuning scan generated from Hermes profile, gateway, cron, session, and log metadata.",
-        "recommendations": recommendations[:8],
-        "signals": signals,
-        "agent_hq": agent_hq,
-        "metrics": agent_hq.get("metrics", {}),
-    }
-
-
+# Routes are plain ``def`` on purpose: every collector does blocking SQLite and
+# file I/O, and FastAPI runs sync endpoints in its threadpool instead of on the
+# event loop the rest of the Hermes dashboard shares.
 @router.get("/health")
-async def health() -> Dict[str, Any]:
+def health() -> Dict[str, Any]:
+    refresh_expose_local_labels()
     profiles = collect_profiles()
     cron = collect_cron(profiles)
     h = collect_health(profiles, cron)
     return {"ok": h.get("status") != "error", "generated_at": now_iso(), **h}
 
 
-@router.get("/overview")
-async def overview() -> Dict[str, Any]:
-    started_at = time.perf_counter()
+SESSION_RESOLVE_SCAN = 5000
+
+
+def resolve_session_ref(ref: str) -> Optional[Dict[str, str]]:
+    """Find the session behind a public ``session_ref`` across every profile.
+
+    Payloads carry hashed refs so raw session IDs never appear on screen; the
+    raw ID is looked up only when the operator clicks through to the session.
+    """
+    for raw_profile, home in profile_stores(collect_profiles()):
+        db = home / "state.db"
+        if not db.exists():
+            continue
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+        except sqlite3.Error as exc:
+            log_read_warning("session resolve open failed", exc)
+            continue
+        con.row_factory = sqlite3.Row
+        try:
+            cols = table_columns(con, "sessions")
+            recency = [c for c in ("last_activity_at", "ended_at", "started_at") if c in cols]
+            order = recency_expr(recency)
+            ids = [row["id"] for row in con.execute(f"SELECT id FROM sessions ORDER BY {order} DESC LIMIT ?", (SESSION_RESOLVE_SCAN,))]
+        except sqlite3.Error as exc:
+            log_read_warning("session resolve scan failed", exc)
+            continue
+        finally:
+            con.close()
+        for session_id in ids:
+            if ref in (safe_id(session_id, "session"), str(session_id) if EXPOSE_LOCAL_LABELS else None):
+                return {"session_id": str(session_id), "profile": raw_profile}
+    return None
+
+
+@router.get("/open/session")
+def open_session(ref: str) -> Dict[str, Any]:
+    """Hermes chat URL for a session ref, or ``href: null`` when it is gone."""
+    refresh_expose_local_labels()
+    found = resolve_session_ref(ref)
+    if found is None:
+        return {"href": None}
+    query = f"resume={quote(found['session_id'], safe='')}&profile={quote(found['profile'], safe='')}"
+    # Desktop opens sessions natively (host.openSession) and needs the id and
+    # profile; the web dashboard follows href. Both exist only at click time.
+    return {"href": f"/chat?{query}", "session_id": found["session_id"], "profile": found["profile"]}
+
+
+def scan_hermes() -> Dict[str, Any]:
+    """One read of local Hermes state plus every Olympus synthesis built on it."""
     profiles = collect_profiles()
     cron = collect_cron(profiles)
-    sessions = collect_sessions(60)
+    sessions = collect_sessions(SESSION_SCAN_LIMIT, profiles, since=time.time() - SESSION_WINDOW_DAYS * 86400)
     gateways = collect_gateways(profiles)
     kanban = collect_kanban(profiles)
     orchestration = build_orchestration(kanban)
-    party = build_party(profiles, gateways, cron, sessions, kanban, orchestration)
-    activity_events = build_activity_events(sessions, cron, gateways, kanban)
     skill_coverage = build_skill_coverage(profiles, sessions, kanban)
     skill_metadata = collect_skill_metadata(profiles)
     skill_hygiene = build_skill_hygiene(skill_metadata, skill_coverage, kanban)
-    profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
-    performance = build_performance_tracking(sessions, kanban)
-    trace_spine = build_trace_spine(sessions, kanban)
-    evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
     config_policy = collect_config_policy(profiles, sessions, kanban)
-    ops_evals = build_ops_evals(sessions, kanban, skill_coverage, skill_hygiene, config_policy)
-    usage_rollup = collect_usage_rollup(profiles)
-    metrics_spine = build_metrics_spine(
-        profiles,
-        sessions,
-        kanban,
-        skill_metadata,
-        skill_coverage,
-        skill_hygiene,
-        profile_fitness,
-        performance,
-        ops_evals,
-        config_policy,
-        usage_rollup,
-    )
     health = collect_health(profiles, cron)
-    attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
-    tuning = build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)
-    payload = {
-        "generated_at": now_iso(),
-        "health": health,
-        "attention": attention,
-        "tuning": strip_internal(tuning),
-        "profiles": [public_profile(p) for p in profiles],
-        "gateways": gateways,
-        "cron": strip_internal(cron),
+    cost_attribution = collect_cost_attribution(profiles, cron, sessions, time.time() - SESSION_WINDOW_DAYS * 86400)
+    backlog = build_backlog_triage(kanban)
+    tuning = {"agent_hq": build_agent_hq(profiles, gateways, cron, sessions, kanban)}
+    add_findings(tuning, cost_findings(cost_attribution) + backlog_findings(backlog))
+    agent_activity = collect_agent_activity(profiles)
+    needs_you = build_needs_you(profiles, cron, kanban, tuning, sessions)
+    return {
+        "agents": build_agents(profiles, sessions, cron, kanban, agent_activity, needs_you, gateways),
+        "needs_you": needs_you,
+        "agent_activity": agent_activity,
+        "backlog": backlog,
+        "cost_attribution": cost_attribution,
+        "profiles": profiles,
+        "cron": cron,
         "sessions": sessions,
-        "kanban": strip_internal(kanban),
-        "orchestration": strip_internal(orchestration),
-        "party": strip_internal(party),
-        "activity_events": strip_internal(activity_events),
-        "skill_coverage": strip_internal(skill_coverage),
-        "skill_hygiene": strip_internal(skill_hygiene),
-        "profile_fitness": strip_internal(profile_fitness),
-        "performance": strip_internal(performance),
-        "trace_spine": strip_internal(trace_spine),
-        "ops_evals": strip_internal(ops_evals),
-        "metrics_spine": strip_internal(metrics_spine),
-        "evidence_sources": strip_internal(evidence_sources),
-        "config_policy": strip_internal(config_policy),
-    }
-    payload["diagnostics"] = runtime_diagnostics("/overview", started_at, payload, profiles, sessions, kanban)
-    return payload
-
-
-@router.get("/tuning")
-async def tuning() -> Dict[str, Any]:
-    started_at = time.perf_counter()
-    profiles = collect_profiles()
-    cron = collect_cron(profiles)
-    sessions = collect_sessions(60)
-    gateways = collect_gateways(profiles)
-    kanban = collect_kanban(profiles)
-    orchestration = build_orchestration(kanban)
-    party = build_party(profiles, gateways, cron, sessions, kanban, orchestration)
-    activity_events = build_activity_events(sessions, cron, gateways, kanban)
-    skill_coverage = build_skill_coverage(profiles, sessions, kanban)
-    skill_metadata = collect_skill_metadata(profiles)
-    skill_hygiene = build_skill_hygiene(skill_metadata, skill_coverage, kanban)
-    profile_fitness = build_profile_fitness(profiles, gateways, cron, kanban)
-    performance = build_performance_tracking(sessions, kanban)
-    trace_spine = build_trace_spine(sessions, kanban)
-    evidence_sources = build_evidence_sources(profiles, sessions, cron, gateways, kanban)
-    config_policy = collect_config_policy(profiles, sessions, kanban)
-    ops_evals = build_ops_evals(sessions, kanban, skill_coverage, skill_hygiene, config_policy)
-    usage_rollup = collect_usage_rollup(profiles)
-    metrics_spine = build_metrics_spine(
-        profiles,
-        sessions,
-        kanban,
-        skill_metadata,
-        skill_coverage,
-        skill_hygiene,
-        profile_fitness,
-        performance,
-        ops_evals,
-        config_policy,
-        usage_rollup,
-    )
-    health = collect_health(profiles, cron)
-    attention = build_attention(profiles, gateways, cron, sessions, health, kanban)
-    payload = {
-        "generated_at": now_iso(),
+        "kanban": kanban,
+        "orchestration": orchestration,
+        "skill_hygiene": skill_hygiene,
+        "evidence_sources": build_evidence_sources(profiles, sessions, cron, gateways, kanban),
+        "config_policy": config_policy,
         "health": health,
-        "attention": attention,
-        "kanban": strip_internal(kanban),
-        "orchestration": strip_internal(orchestration),
-        "party": strip_internal(party),
-        "activity_events": strip_internal(activity_events),
-        "skill_coverage": strip_internal(skill_coverage),
-        "skill_hygiene": strip_internal(skill_hygiene),
-        "profile_fitness": strip_internal(profile_fitness),
-        "performance": strip_internal(performance),
-        "trace_spine": strip_internal(trace_spine),
-        "ops_evals": strip_internal(ops_evals),
-        "metrics_spine": strip_internal(metrics_spine),
-        "evidence_sources": strip_internal(evidence_sources),
-        "config_policy": strip_internal(config_policy),
-        "tuning": strip_internal(build_tuning(profiles, gateways, cron, sessions, health, attention, kanban)),
+        "tuning": tuning,
     }
-    payload["diagnostics"] = runtime_diagnostics("/tuning", started_at, payload, profiles, sessions, kanban)
+
+
+def add_findings(tuning: Dict[str, Any], findings: List[Dict[str, Any]]) -> None:
+    """Merge extra findings into the ranked tuning queue."""
+    if not findings:
+        return
+    hq = tuning.setdefault("agent_hq", {})
+    items = [item for item in as_list(hq.get("recommendations")) if item.get("severity") != "ok"] + findings
+    items.sort(key=lambda item: _severity_rank(str(item.get("severity"))))
+    hq["recommendations"] = items[:8]
+    hq.setdefault("summary", {})["recommendations"] = len(items)
+
+
+# ---------------------------------------------------------------------------
+# Agents: the roster, the one Needs-you queue and the agent inspector.
+#
+# An agent is a Hermes profile. Its status is one word derived from what
+# Hermes recorded, and everything that needs a person becomes one queue item
+# carrying the action that resolves it. Actions run through Hermes' own
+# endpoints from the page; Olympus resolves a public ref to the raw id only at
+# click time and keeps its own log of what was done.
+# ---------------------------------------------------------------------------
+
+AGENT_STATUS_LABELS = {
+    "waiting": "Waiting on you",
+    "stalled": "Stalled",
+    "failed": "Failed",
+    "offline": "Offline",
+    "working": "Working",
+    "idle": "Idle",
+}
+AGENT_STATUS_ORDER = list(AGENT_STATUS_LABELS)
+AGENT_ACTIVITY_DAYS = 7
+FAILING_TASK_ATTEMPTS = 2
+QUEUE_KIND_ORDER = ("answer", "stalled", "cron_failed", "failing", "blocked", "offline", "cron_overdue", "unassigned", "behaviour", "finding")
+ACTION_LABELS = {
+    "answer": "Answer",
+    "retry": "Retry",
+    "reclaim": "Reclaim",
+    "reassign": "Reassign",
+    "assign": "Assign",
+    "pause": "Pause",
+    "resume": "Resume",
+    "run_now": "Run now",
+    "fix": "I fixed this",
+}
+SUCCESS_RUN_OUTCOMES = {"completed", "review_requested"}
+CLOSED_KANBAN_STATUSES = {"done", "archived"}
+AGENT_TIMELINE_LIMIT = 40
+AGENT_TIMELINE_SESSIONS = 8
+AGENT_TIMELINE_TOOLS = 60
+AGENT_TOP_TOOLS = 5
+TASK_EVENT_TEXT = {
+    "created": "Task created",
+    "claimed": "Claimed",
+    "spawned": "Worker started",
+    "worker_bound": "Worker attached",
+    "worker_result": "Worker reported back",
+    "completed": "Finished",
+    "blocked": "Blocked",
+    "unblocked": "Unblocked",
+    "crashed": "Worker crashed",
+    "timed_out": "Worker timed out",
+    "gave_up": "Gave up",
+    "reclaimed": "Reclaimed",
+    "reassigned": "Reassigned",
+    "commented": "Comment added",
+    "review_requested": "Sent for review",
+    "status": "Status changed",
+}
+TASK_EVENT_STATE = {
+    "crashed": "error", "timed_out": "error", "gave_up": "error", "spawn_failed": "error",
+    "blocked": "waiting", "completed": "ok",
+}
+
+
+def agent_ref(profile: Dict[str, Any]) -> Dict[str, str]:
+    return {"id": str(profile["id"]), "label": str(profile["label"])}
+
+
+def agent_avatar(label: str) -> str:
+    """Initial for the avatar; hidden profiles ("Profile 3") show their number."""
+    match = re.fullmatch(r"Profile (\d+)", label)
+    return match.group(1) if match else (label[:1].upper() or "?")
+
+
+def display_name(label: Any, ref: str, noun: str) -> str:
+    """A hidden label reads as "Task 5408" instead of its hashed ref."""
+    if str(label) != ref or ":" not in ref:
+        return str(label)
+    return f"{noun} {ref.rsplit(':', 1)[1][:4]}"
+
+
+def _action(action_id: str, target: Dict[str, Any], effect: str) -> Dict[str, Any]:
+    return {"id": action_id, "label": ACTION_LABELS[action_id], "target": target, "effect": effect}
+
+
+def _queue_item(
+    key: str,
+    kind: str,
+    severity: str,
+    agent: Optional[Dict[str, str]],
+    title: str,
+    detail: str,
+    since: Optional[str],
+    actions: List[Dict[str, Any]],
+    link: str,
+    targets: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    return {
+        "key": key,
+        "kind": kind,
+        "severity": severity,
+        "agent": agent,
+        "title": title,
+        "detail": detail,
+        "since": since,
+        "actions": actions,
+        "link": link,
+        "link_label": _action_label_for_view(link),
+        "targets": targets or [],
+    }
+
+
+def gateway_start_command(raw_profile: str) -> str:
+    if raw_profile == "default":
+        return "hermes gateway start"
+    return f"hermes -p {raw_profile} gateway start" if EXPOSE_LOCAL_LABELS else "hermes -p <profile> gateway start"
+
+
+def task_actions(task: Dict[str, Any], who: str, now: float) -> List[Dict[str, Any]]:
+    """The safe controls that fit a Kanban task in its current state."""
+    title = display_name(task["title"], task["id"], "Task")
+    target = {"kind": "task", "ref": task["id"], "board": task["board"], "status": task.get("status"), "name": title}
+    status = task.get("status")
+    if status == "blocked" and task.get("block_kind") == "needs_input":
+        return [{**_action("answer", target, f"Post your answer on {title} as a comment and move it back to ready for {who}."),
+                 "question": task.get("block_reason")}]
+    if status == "blocked":
+        return [
+            _action("retry", target, f"Move {title} from blocked back to ready so {who} picks it up again."),
+            _action("reassign", target, f"Give {title} to another agent. It keeps its history and goes to their queue."),
+        ]
+    if status == "running":
+        stale = task_stale_reason(task, now)
+        return [
+            _action("reclaim", target, f"Stop {who}'s worker on {title}{' (' + stale + ')' if stale else ''} and put the task back to ready."),
+            _action("reassign", target, f"Stop the current worker and give {title} to another agent."),
+        ]
+    if status == "ready" and task.get("_assignee") in (None, "", "unassigned"):
+        return [_action("assign", target, f"Give {title} to an agent so the dispatcher can run it.")]
+    if status in ("ready", "todo", "triage", "review"):
+        return [_action("reassign", target, f"Give {title} to another agent.")]
+    return []
+
+
+def cron_actions(job: Dict[str, Any], who: str) -> List[Dict[str, Any]]:
+    label = display_name(job["label"], job["id"], "Job")
+    target = {"kind": "cron", "ref": job["id"], "name": label}
+    toggle = (
+        _action("pause", target, f"Pause {label} for {who}. It will not run until you resume it.")
+        if job.get("enabled")
+        else _action("resume", target, f"Resume {label} for {who} on its schedule ({job.get('schedule') or 'as configured'}).")
+    )
+    return [_action("run_now", target, f"Run {label} for {who} once, now. Its schedule does not change."), toggle]
+
+
+# How an agent's own sessions behave: what Kanban cannot show. Each signal
+# reads the sessions Olympus scanned for that agent; warnings join the
+# Needs-you queue on that agent, notes stay in its inspector.
+BEHAVIOUR_SIGNALS = (
+    ("looping", "warning", "/sessions", "Looping or tool-thrashing",
+     f"Runs passed {RUNAWAY_TOOLS_THRESHOLD} tool calls. Add a checklist skill, lower max turns, or split the task.",
+     lambda s: int(s.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD),
+    ("expensive", "warning", "/analytics", "Expensive runs",
+     f"Each cost over ${EXPENSIVE_RUN_USD:.2f}. A cheaper model, a tighter prompt or a task split usually helps.",
+     lambda s: _session_cost(s) >= EXPENSIVE_RUN_USD),
+    ("context", "info", "/sessions", "Very large context per call",
+     f"Runs averaged over {CONTEXT_PRESSURE_TOKENS:,} prompt tokens per model call. A recap or a task split keeps it down.",
+     lambda s: int(s.get("avg_input_tokens") or 0) >= CONTEXT_PRESSURE_TOKENS),
+    ("tool_heavy", "info", "/skills", "Tool-heavy runs",
+     f"{TOOL_HEAVY_THRESHOLD} to {RUNAWAY_TOOLS_THRESHOLD - 1} tool calls in a run. A skill for the repeated steps would shorten them.",
+     lambda s: TOOL_HEAVY_THRESHOLD <= int(s.get("tool_call_count") or 0) < RUNAWAY_TOOLS_THRESHOLD),
+    ("long_thread", "info", "/sessions", "Long conversations",
+     f"{LONG_THREAD_THRESHOLD}+ messages in a session. Recaps or memory keep follow-ups accurate.",
+     lambda s: int(s.get("message_count") or 0) >= LONG_THREAD_THRESHOLD),
+    ("stale", "info", "/sessions", "Sessions left open",
+     "Open with no activity for over a day. Close or resume them so this view stays accurate.",
+     lambda s: s.get("state") == "stale"),
+)
+
+
+def agent_behaviour(sessions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Behaviour signals for one agent's sessions, warnings first."""
+    signals: List[Dict[str, Any]] = []
+    for kind, severity, view, label, detail, matches in BEHAVIOUR_SIGNALS:
+        hits = [s for s in sessions if matches(s)]
+        if hits:
+            signals.append({
+                "kind": kind,
+                "severity": severity,
+                "label": label,
+                "detail": detail,
+                "count": len(hits),
+                "cost_usd": round(sum(_session_cost(s) for s in hits), 2),
+                "sessions": session_targets(hits),
+                "link": view,
+            })
+    return signals
+
+
+def build_needs_you(
+    profiles: List[Dict[str, Any]],
+    cron: List[Dict[str, Any]],
+    kanban: Dict[str, Any],
+    tuning: Dict[str, Any],
+    sessions: List[Dict[str, Any]],
+    now: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """Everything that needs a person, once, with the action that resolves it.
+
+    Tasks and cron jobs become one item each and session behaviour one item
+    per agent; Olympus' fleet-level findings join them unless those items
+    already cover them (scope "entity" or "agent").
+    """
+    now = time.time() if now is None else now
+    agents = {str(p["name"]): agent_ref(p) for p in profiles}
+    offline = {str(p["name"]) for p in profiles if p.get("gateway_state") != "running"}
+    queue: List[Dict[str, Any]] = []
+
+    for profile in profiles:
+        own = [s for s in sessions if session_matches_profile(s, str(profile["name"]))]
+        for signal in agent_behaviour(own):
+            if signal["severity"] != "warning":
+                continue
+            runs = f"{signal['count']} session{'s' if signal['count'] != 1 else ''}"
+            queue.append(_queue_item(
+                f"behaviour:{signal['kind']}:{profile['id']}", "behaviour", "warning", agent_ref(profile),
+                f"{signal['label']} in {runs}" + (f" (${signal['cost_usd']:.2f})" if signal["kind"] == "expensive" else ""),
+                signal["detail"], None, [], signal["link"], signal["sessions"],
+            ))
+
+    for task in kanban_items(kanban, "_tasks"):
+        status = task.get("status")
+        if status in CLOSED_KANBAN_STATUSES:
+            continue
+        raw = str(task.get("_assignee") or "unassigned")
+        agent = agents.get(raw)
+        who = agent["label"] if agent else "its agent"
+        title = display_name(task["title"], task["id"], "Task")
+        actions = task_actions(task, who, now)
+        kind = task.get("block_kind")
+        failures = int(task.get("consecutive_failures") or 0)
+        stale = task_stale_reason(task, now)
+        if status == "blocked" and kind == "needs_input":
+            queue.append(_queue_item(
+                f"answer:{task['id']}", "answer", "critical", agent,
+                f"{title} is waiting on your answer",
+                task.get("block_reason") or "The agent stopped on a question only you can answer. Open the task in Kanban to read it.",
+                task.get("blocked_at") or task.get("created_at"), actions, "/kanban",
+            ))
+        elif status == "running" and stale:
+            queue.append(_queue_item(
+                f"stalled:{task['id']}", "stalled", "critical", agent,
+                f"Worker stalled on {title}",
+                f"The worker's {stale}. Reclaim it to free the task, or give the task to another agent.",
+                task.get("last_heartbeat_at") or task.get("started_at"), actions, "/kanban",
+            ))
+        elif status == "blocked" and kind == "capability":
+            queue.append(_queue_item(
+                f"blocked:{task['id']}", "blocked", "warning", agent,
+                f"{title} is missing a tool, skill or permission",
+                "Give the agent what it needs and retry, or reassign the task to an agent that has it.",
+                task.get("blocked_at") or task.get("created_at"), actions, "/kanban",
+            ))
+        elif status == "blocked" and kind not in ("transient", "dependency"):
+            queue.append(_queue_item(
+                f"blocked:{task['id']}", "blocked", "warning", agent,
+                f"{title} is blocked without a reason",
+                "Open the task to read why it stopped, then retry it or reassign it.",
+                task.get("blocked_at") or task.get("created_at"), actions, "/kanban",
+            ))
+        elif status in ("ready", "running") and failures >= FAILING_TASK_ATTEMPTS:
+            queue.append(_queue_item(
+                f"failing:{task['id']}", "failing", "warning", agent,
+                f"{title} failed {failures} times in a row",
+                task.get("last_failure_error") or "Hermes keeps retrying it. Reassign it if this agent cannot do it.",
+                task.get("started_at") or task.get("created_at"), actions, "/kanban",
+            ))
+        elif status == "ready" and raw == "unassigned":
+            queue.append(_queue_item(
+                f"unassigned:{task['id']}", "unassigned", "warning", None,
+                f"{title} is ready but has no agent",
+                "The dispatcher only runs ready tasks that have an assignee.",
+                task.get("created_at"), actions, "/kanban",
+            ))
+
+    for raw, jobs in group_cron_by_profile(cron).items():
+        agent = agents.get(raw)
+        who = agent["label"] if agent else "this agent"
+        for job in jobs:
+            label = display_name(job["label"], job["id"], "Job")
+            if job.get("state") == "error":
+                queue.append(_queue_item(
+                    f"cron_failed:{job['id']}", "cron_failed", "critical", agent,
+                    f"{label} ran, but every tool call failed" if job.get("tools_failed") else f"{label} failed on its last run",
+                    job.get("last_error") or "Its last run reported an error.",
+                    job.get("last_run_at"), cron_actions(job, who), "/cron",
+                ))
+                continue
+            due = parse_iso_ts(job.get("next_run_at"))
+            if job.get("enabled") and due is not None and now - due > CRON_OVERDUE_SECONDS and raw not in offline:
+                queue.append(_queue_item(
+                    f"cron_overdue:{job['id']}", "cron_overdue", "critical", agent,
+                    f"{label} is {int((now - due) // 60)} min overdue",
+                    "Hermes runs scheduled jobs from the gateway's cron ticker. An overdue job means the ticker is not running for this agent.",
+                    job.get("next_run_at"), cron_actions(job, who)[:1], "/cron",
+                ))
+
+    cron_by_profile = group_cron_by_profile(cron)
+    tasks = kanban_items(kanban, "_tasks")
+    for profile in profiles:
+        raw = str(profile["name"])
+        if raw not in offline:
+            continue
+        jobs = sum(1 for job in cron_by_profile.get(raw, []) if job.get("enabled"))
+        ready = sum(1 for task in tasks if task.get("_assignee") == raw and task.get("status") == "ready")
+        if not (jobs or ready):
+            continue
+        waiting = " and ".join(part for part in (
+            f"{jobs} scheduled job{'s' if jobs != 1 else ''}" if jobs else "",
+            f"{ready} ready task{'s' if ready != 1 else ''}" if ready else "",
+        ) if part)
+        queue.append(_queue_item(
+            f"offline:{profile['id']}", "offline", "warning", agent_ref(profile),
+            f"Gateway is not running for {profile['label']}",
+            f"{waiting} {'waits' if jobs + ready == 1 else 'wait'} on it. Start it with: {gateway_start_command(raw)}",
+            None, [], "/profiles",
+        ))
+
+    agent_ids = {a["id"]: a for a in agents.values()}
+    for finding in as_list((tuning.get("agent_hq") or {}).get("recommendations")):
+        if finding.get("severity") not in ("critical", "warning") or finding.get("scope") in ("entity", "agent"):
+            continue
+        owners = {t.get("agent") for t in as_list(finding.get("targets")) if t.get("agent")}
+        agent = agent_ids.get(next(iter(owners))) if len(owners) == 1 else None
+        queue.append(_queue_item(
+            str(finding["key"]), "finding", str(finding["severity"]), agent,
+            str(finding["title"]), str(finding.get("detail") or ""), None,
+            [_action("fix", {"kind": "finding", "ref": finding["key"], "name": str(finding["title"])}, "Olympus notes the current count and tells you on later scans whether it cleared.")],
+            str(finding.get("recommended_view") or "/analytics"),
+            as_list(finding.get("targets")),
+        ))
+
+    queue.sort(key=lambda item: (
+        _severity_rank(item["severity"]),
+        QUEUE_KIND_ORDER.index(item["kind"]),
+        parse_iso_ts(item["since"]) or now,
+    ))
+    return queue
+
+
+def _store_daily_activity(db: Path, since: float, now: float) -> Dict[str, Any]:
+    """Sessions, tokens and cost per UTC day (by session start) from one state.db."""
+    out: Dict[str, Any] = {"days": {}, "last_active_ts": None, "live_tool": None}
+    if not db.exists():
+        return out
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        cols = table_columns(con, "sessions")
+        if "started_at" not in cols:
+            return out
+
+        def summed(*names: str) -> str:
+            present = [f"COALESCE({name}, 0)" for name in names if name in cols]
+            return f"SUM({' + '.join(present)})" if present else "0"
+
+        cost_cols = [c for c in ("actual_cost_usd", "estimated_cost_usd") if c in cols]
+        cost = f"SUM(COALESCE({', '.join(cost_cols)}, 0))" if cost_cols else "0"
+        for row in con.execute(
+            f"SELECT date(started_at, 'unixepoch') AS day, COUNT(*) AS sessions, "
+            f"{summed('input_tokens')} AS input, {summed('cache_read_tokens', 'cache_write_tokens')} AS cache, "
+            f"{summed('output_tokens')} AS output, {cost} AS cost "
+            "FROM sessions WHERE started_at >= ? GROUP BY day",
+            (since,),
+        ):
+            out["days"][str(row["day"])] = {
+                "sessions": int(row["sessions"] or 0),
+                "input_tokens": int(row["input"] or 0),
+                "cache_tokens": int(row["cache"] or 0),
+                "output_tokens": int(row["output"] or 0),
+                "cost_usd": round(float(row["cost"] or 0.0), 4),
+            }
+        recency = [c for c in ("last_activity_at", "ended_at", "started_at") if c in cols]
+        row = con.execute(f"SELECT MAX({recency_expr(recency)}) AS ts FROM sessions").fetchone()
+        out["last_active_ts"] = safe_float(row["ts"]) or None
+        out["live_tool"] = _live_tool(con, cols, now)
+    except sqlite3.Error as exc:
+        log_read_warning("agent activity scan failed", exc)
+    finally:
+        con.close()
+    return out
+
+
+def _live_tool(con: sqlite3.Connection, session_cols: set[str], now: float) -> Optional[Dict[str, Any]]:
+    """The last tool any still-open, recently active session called."""
+    message_cols = table_columns(con, "messages")
+    if not {"session_id", "tool_name", "timestamp"}.issubset(message_cols) or not {"id", "ended_at"}.issubset(session_cols):
+        return None
+    activity = recency_expr([f"s.{c}" for c in ("last_activity_at", "started_at") if c in session_cols], "0")
+    role = " AND m.role = 'tool'" if "role" in message_cols else ""
+    row = con.execute(
+        f"SELECT m.tool_name, m.timestamp FROM sessions s JOIN messages m ON m.session_id = s.id "
+        f"WHERE s.ended_at IS NULL AND {activity} >= ?{role} "
+        "AND m.tool_name IS NOT NULL AND m.tool_name != '' ORDER BY m.timestamp DESC LIMIT 1",
+        (now - ACTIVE_SECONDS,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"tool": redact_text(row["tool_name"], 60), "at": ts_to_iso(row["timestamp"])}
+
+
+def activity_days(now: float) -> List[str]:
+    return [
+        datetime.fromtimestamp(now - offset * 86400, tz=timezone.utc).date().isoformat()
+        for offset in range(AGENT_ACTIVITY_DAYS - 1, -1, -1)
+    ]
+
+
+def collect_agent_activity(profiles: List[Dict[str, Any]], now: Optional[float] = None) -> Dict[str, Dict[str, Any]]:
+    """Per profile: the last seven UTC days of sessions, tokens and cost."""
+    now = time.time() if now is None else now
+    days = activity_days(now)
+    since = datetime.fromisoformat(days[0]).replace(tzinfo=timezone.utc).timestamp()
+    out: Dict[str, Dict[str, Any]] = {}
+    for raw_profile, home in profile_stores(profiles):
+        store = _store_daily_activity(home / "state.db", since, now)
+        empty = {"sessions": 0, "input_tokens": 0, "cache_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+        out[raw_profile] = {
+            "days": [{"day": day, **store["days"].get(day, empty)} for day in days],
+            "last_active_ts": store["last_active_ts"],
+            "live_tool": store["live_tool"],
+            "runs": run_glance(_store_runs(home / "state.db", since), days),
+        }
+    return out
+
+
+def run_glance(runs: List[Dict[str, Any]], days: List[str]) -> Dict[str, Any]:
+    """The roster's seven days: runs and unsuccessful runs per day, and the success rate."""
+    top = [r for r in runs if not r["subagent"] and not r["rotated"]]
+    finished = [r for r in top if r["outcome"] != "open"]
+    succeeded = sum(1 for r in finished if r["outcome"] == "succeeded")
+    per_day = {day: {"runs": 0, "unsuccessful": 0} for day in days}
+    for run in top:
+        day = per_day.get(datetime.fromtimestamp(run["started"], tz=timezone.utc).date().isoformat())
+        if day is not None:
+            day["runs"] += 1
+            day["unsuccessful"] += 1 if run["outcome"] in ("failed", "cut_off") else 0
+    return {
+        "days": [per_day[day] for day in days],
+        "runs": len(top),
+        "finished": len(finished),
+        "succeeded": succeeded,
+        "success_rate": round(succeeded / len(finished), 3) if finished else None,
+    }
+
+
+def agent_status(kinds: set[str], live: bool) -> str:
+    if kinds & {"answer", "blocked"}:
+        return "waiting"
+    if "stalled" in kinds:
+        return "stalled"
+    if kinds & {"cron_failed", "failing"}:
+        return "failed"
+    if "offline" in kinds:
+        return "offline"
+    return "working" if live else "idle"
+
+
+LOOP_STOP_TEXT = {(True, True): "all sessions", (False, True): "unattended only", (False, False): "off"}
+
+
+def agent_setup(profile: Dict[str, Any], gateways: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """How the agent is set up: route, skills, gateway, platforms, loop limits."""
+    config = profile_config(Path(str(profile["_path"])))
+    guard = _loop_guardrail_policy(config)
+    public_name = profile.get("_public_name") or profile.get("name")
+    if profile.get("gateway_mode") == "multiplexed":
+        gateway = "shared"
+    else:
+        gateway = "own" if profile.get("gateway_state") == "running" else "stopped"
+    return {
+        "route": "configured" if profile.get("model") or profile.get("provider") else "inherited",
+        "model": profile.get("model") if EXPOSE_LOCAL_LABELS else None,
+        "skills": int(profile.get("skill_count") or 0),
+        "gateway": gateway,
+        "platforms": sorted({str(g["label"]) for g in gateways if g.get("profile") == public_name}),
+        "max_turns": _cfg_int(_cfg_value(config, "agent", "max_turns")),
+        "loop_stop": LOOP_STOP_TEXT[(guard["interactive"], guard["unattended"])],
+    }
+
+
+def build_agents(
+    profiles: List[Dict[str, Any]],
+    sessions: List[Dict[str, Any]],
+    cron: List[Dict[str, Any]],
+    kanban: Dict[str, Any],
+    activity: Dict[str, Dict[str, Any]],
+    queue: List[Dict[str, Any]],
+    gateways: List[Dict[str, Any]],
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """One roster row per agent: status, current work, helpers and issues."""
+    now = time.time() if now is None else now
+    cron_by_profile = group_cron_by_profile(cron)
+    tasks = kanban_items(kanban, "_tasks")
+    rows: List[Dict[str, Any]] = []
+    for profile in profiles:
+        raw = str(profile["name"])
+        own_items = [item for item in queue if item["agent"] and item["agent"]["id"] == profile["id"]]
+        live_sessions = [
+            s for s in sessions
+            if session_matches_profile(s, raw) and not s.get("ended_at") and now - safe_float(s.get("_last_ts")) <= ACTIVE_SECONDS
+        ]
+        running = sorted(
+            (t for t in tasks if t.get("_assignee") == raw and t.get("status") == "running"),
+            key=lambda t: parse_iso_ts(t.get("started_at")) or 0.0,
+            reverse=True,
+        )
+        working = [t for t in running if not task_stale_reason(t, now)]
+        own_live = [s for s in live_sessions if s.get("source") != "subagent"]
+        waiting = next((t for t in tasks if t.get("_assignee") == raw and t.get("status") == "blocked" and t.get("block_kind") == "needs_input"), None)
+        if running:
+            current = {"kind": "task", "label": display_name(running[0]["title"], running[0]["id"], "Task"), "since": running[0].get("started_at"), "ref": running[0]["id"], "board": running[0]["board"]}
+        elif own_live:
+            current = {"kind": "session", "label": own_live[0]["label"], "since": own_live[0].get("started_at"), "ref": own_live[0].get("session_ref")}
+        elif waiting:
+            current = {"kind": "waiting", "label": display_name(waiting["title"], waiting["id"], "Task"), "since": waiting.get("blocked_at") or waiting.get("created_at")}
+        else:
+            current = None
+        tool = activity.get(raw, {}).get("live_tool")
+        if current and current["kind"] != "waiting" and tool:
+            current.update({"tool": tool["tool"], "tool_at": tool["at"]})
+        stamps = [
+            safe_float(activity.get(raw, {}).get("last_active_ts")),
+            *(parse_iso_ts(t.get("last_heartbeat_at")) or 0.0 for t in tasks if t.get("_assignee") == raw),
+            *(parse_iso_ts(j.get("last_run_at")) or 0.0 for j in cron_by_profile.get(raw, [])),
+        ]
+        last_active = max(stamps, default=0.0)
+        live = bool(live_sessions or working)
+        status = agent_status({item["kind"] for item in own_items}, live)
+        rows.append({
+            "id": profile["id"],
+            "label": profile["label"],
+            "avatar": agent_avatar(str(profile["label"])),
+            "role": profile.get("role"),
+            "role_state": profile.get("role_state"),
+            "status": status,
+            "status_label": AGENT_STATUS_LABELS[status],
+            "status_reason": own_items[0]["title"] if own_items and status not in ("working", "idle") else None,
+            "live": live,
+            "current": current,
+            "helpers": {
+                "subagents": sum(1 for s in live_sessions if s.get("source") == "subagent"),
+                "workers": len(running),
+                "cron": sum(1 for job in cron_by_profile.get(raw, []) if job.get("enabled")),
+            },
+            "last_active_at": ts_to_iso(last_active) if last_active else None,
+            "runs_7d": activity.get(raw, {}).get("runs"),
+            "issues": len(own_items),
+            "setup": agent_setup(profile, gateways),
+            "gateway_state": profile.get("gateway_state"),
+            "gateway_mode": profile.get("gateway_mode"),
+            "dashboard_home": bool(profile.get("dashboard_home")),
+        })
+    rows.sort(key=lambda row: (AGENT_STATUS_ORDER.index(row["status"]), str(row["label"])))
+    return {
+        "summary": {
+            "agents": len(rows),
+            "working": sum(1 for row in rows if row["live"]),
+            "need_you": sum(1 for row in rows if row["issues"]),
+            "queue": len(queue),
+            "unattributed": sum(1 for item in queue if item["agent"] is None),
+        },
+        "agents": rows,
+    }
+
+
+def _store_timeline(db: Path, now: float) -> List[Dict[str, Any]]:
+    """Session and tool events from one profile's state.db, newest first."""
+    if not db.exists():
+        return []
+    events: List[Dict[str, Any]] = []
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        cols = table_columns(con, "sessions")
+        recency = [c for c in ("last_activity_at", "ended_at", "started_at") if c in cols]
+        if "id" not in cols or not recency:
+            return []
+        wanted = [c for c in ("id", "source", "title", "started_at", "ended_at", "end_reason") if c in cols]
+        rows = con.execute(
+            f"SELECT {', '.join(wanted)} FROM sessions ORDER BY {recency_expr(recency)} DESC LIMIT ?",
+            (AGENT_TIMELINE_SESSIONS,),
+        ).fetchall()
+        labels: Dict[str, str] = {}
+        for row in rows:
+            session_id = str(row_value(row, "id"))
+            source = str(row_value(row, "source") or "session")
+            ref = session_id if EXPOSE_LOCAL_LABELS else safe_id(session_id, "session")
+            label = public_label(row_value(row, "title"), source, "session")
+            labels[session_id] = label
+            subagent = source == "subagent"
+            kind = "subagent" if subagent else "session"
+            started = safe_float(row_value(row, "started_at"))
+            ended = safe_float(row_value(row, "ended_at"))
+            where = None if label == source else source
+            if ended:
+                # A finished session is one step: what ran, for how long.
+                reason = str(row_value(row, "end_reason") or "")
+                minutes = f"{max(1, round((ended - started) / 60))} min" if started else None
+                events.append({
+                    "at": ts_to_iso(ended), "_ts": ended, "kind": kind,
+                    "text": f"{'Subagent ran' if subagent else 'Ran'} {label}" + (f" ({minutes})" if minutes else ""),
+                    "detail": ", ".join(part for part in (where, reason.replace("_", " ") if reason not in ("", "completed") else None) if part) or None,
+                    "state": "error" if reason in ("error", "failed", "crashed") else None, "session_ref": ref,
+                })
+            elif started:
+                events.append({
+                    "at": ts_to_iso(started), "_ts": started, "kind": kind,
+                    "text": f"Started a subagent: {label}" if subagent else f"Started {label}",
+                    "detail": None if subagent else where, "state": None, "session_ref": ref,
+                })
+        message_cols = table_columns(con, "messages")
+        if labels and {"session_id", "tool_name", "timestamp"}.issubset(message_cols):
+            marks = ", ".join("?" for _ in labels)
+            role = " AND role = 'tool'" if "role" in message_cols else ""
+            tools = con.execute(
+                f"SELECT session_id, tool_name, timestamp FROM messages WHERE session_id IN ({marks}){role} "
+                "AND tool_name IS NOT NULL AND tool_name != '' ORDER BY timestamp DESC LIMIT ?",
+                (*labels, AGENT_TIMELINE_TOOLS),
+            ).fetchall()
+            # Consecutive calls of one tool in one session read as one step.
+            for row in tools:
+                tool = redact_text(row["tool_name"], 60)
+                last = events[-1] if events and events[-1]["kind"] == "tool" else None
+                if last and last["_tool"] == (row["session_id"], tool):
+                    last["count"] += 1
+                    last["text"] = f"Used {tool} ×{last['count']}"
+                    continue
+                events.append({
+                    "at": ts_to_iso(row["timestamp"]), "_ts": safe_float(row["timestamp"]),
+                    "kind": "tool", "text": f"Used {tool}", "detail": labels.get(str(row["session_id"])),
+                    "state": None, "count": 1, "_tool": (row["session_id"], tool),
+                })
+    except sqlite3.Error as exc:
+        log_read_warning("agent timeline scan failed", exc)
+    finally:
+        con.close()
+    return events
+
+
+def _store_top_tools(db: Path, since: float) -> List[Dict[str, Any]]:
+    """The tools this agent called most in sessions started since ``since``."""
+    if not db.exists():
+        return []
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        message_cols = table_columns(con, "messages")
+        if not {"session_id", "tool_name"}.issubset(message_cols) or not {"id", "started_at"}.issubset(table_columns(con, "sessions")):
+            return []
+        role = " AND m.role = 'tool'" if "role" in message_cols else ""
+        return [
+            {"tool": redact_text(row["tool_name"], 60), "calls": int(row["calls"])}
+            for row in con.execute(
+                "SELECT m.tool_name, COUNT(*) AS calls FROM sessions s JOIN messages m ON m.session_id = s.id "
+                f"WHERE s.started_at >= ?{role} AND m.tool_name IS NOT NULL AND m.tool_name != '' "
+                "GROUP BY m.tool_name ORDER BY calls DESC, m.tool_name LIMIT ?",
+                (since, AGENT_TOP_TOOLS),
+            )
+        ]
+    except sqlite3.Error as exc:
+        log_read_warning("agent tool mix scan failed", exc)
+        return []
+    finally:
+        con.close()
+
+
+def _kanban_timeline(raw_profile: str) -> List[Dict[str, Any]]:
+    """Recent task events for tasks assigned to one profile, on every board."""
+    events: List[Dict[str, Any]] = []
+    for board in discover_kanban_boards():
+        con = _kanban_conn(kanban_board_db(str(board["_slug"])))
+        if con is None:
+            continue
+        try:
+            if not {"task_id", "kind", "created_at"}.issubset(table_columns(con, "task_events")):
+                continue
+            for row in con.execute(
+                "SELECT e.kind, e.created_at, e.task_id, t.title FROM task_events e JOIN tasks t ON t.id = e.task_id "
+                "WHERE t.assignee = ? ORDER BY e.created_at DESC LIMIT ?",
+                (raw_profile, AGENT_TIMELINE_LIMIT),
+            ):
+                task_id = str(row["task_id"])
+                public_task = task_id if EXPOSE_LOCAL_LABELS else safe_id(task_id, "task")
+                kind = str(row["kind"] or "")
+                events.append({
+                    "at": ts_to_iso(row["created_at"]), "_ts": safe_float(row["created_at"]),
+                    "kind": "task",
+                    "text": f"{TASK_EVENT_TEXT.get(kind, kind.replace('_', ' ').capitalize())}: {display_name(public_label(row['title'], public_task, 'task'), public_task, 'Task')}",
+                    "detail": board["name"] if board["slug"] != "default" else None,
+                    "state": TASK_EVENT_STATE.get(kind),
+                })
+        except sqlite3.Error as exc:
+            log_read_warning("agent task events scan failed", exc)
+        finally:
+            con.close()
+    return events
+
+
+def agent_success(runs: List[Dict[str, Any]], raw_profile: str, now: float) -> Dict[str, Any]:
+    """Finished Kanban worker runs in the activity window: how many succeeded."""
+    since = now - AGENT_ACTIVITY_DAYS * 86400
+    finished = [
+        r for r in runs
+        if r.get("_profile") == raw_profile and r.get("ended_at") and safe_float(r.get("_sort_ts")) >= since
+    ]
+    ok = sum(1 for r in finished if r.get("outcome") in SUCCESS_RUN_OUTCOMES)
+    failed = sum(1 for r in finished if is_failed_run(r))
+    return {
+        "succeeded": ok,
+        "failed": failed,
+        "rate": round(ok / (ok + failed), 3) if ok + failed else None,
+        "basis": f"Kanban worker runs that finished in the last {AGENT_ACTIVITY_DAYS} days",
+    }
+
+
+def build_agent_detail(scan: Dict[str, Any], agent_id: str, actions: List[Dict[str, Any]], fixes: List[Dict[str, Any]], now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """Everything the inspector shows for one agent."""
+    now = time.time() if now is None else now
+    profile = next((p for p in scan["profiles"] if p["id"] == agent_id), None)
+    if profile is None:
+        return None
+    raw = str(profile["name"])
+    who = str(profile["label"])
+    row = next(a for a in scan["agents"]["agents"] if a["id"] == agent_id)
+    jobs = [
+        {**strip_internal(job), "label": display_name(job["label"], job["id"], "Job"), "actions": cron_actions(job, who)}
+        for job in scan["cron"] if cron_profile(job) == raw
+    ]
+    # Kanban owns the board; the inspector shows only what this agent is
+    # working on now plus counts, and items that need a person are already
+    # in its Needs-you list.
+    own_tasks = [t for t in kanban_items(scan["kanban"], "_tasks") if t.get("_assignee") == raw]
+    week_ago = now - AGENT_ACTIVITY_DAYS * 86400
+    running = [
+        {
+            "id": t["id"], "board": t["board"], "title": display_name(t["title"], t["id"], "Task"), "status": t["status"],
+            "started_at": t.get("started_at"), "stale": task_stale_reason(t, now),
+            "actions": task_actions(t, who, now),
+        }
+        for t in sorted(own_tasks, key=lambda t: parse_iso_ts(t.get("started_at")) or 0.0, reverse=True)
+        if t.get("status") == "running"
+    ]
+    kanban = {
+        "running": running,
+        "open": sum(1 for t in own_tasks if t.get("status") in OPEN_KANBAN_STATUSES),
+        "blocked": sum(1 for t in own_tasks if t.get("status") == "blocked"),
+        "done_7d": sum(1 for t in own_tasks if t.get("status") == "done" and (parse_iso_ts(t.get("completed_at")) or 0.0) >= week_ago),
+    }
+    own_sessions = [s for s in scan["sessions"] if session_matches_profile(s, raw)]
+    metrics = build_metrics(own_sessions)
+    working = {
+        "window": session_window_label(len(own_sessions)),
+        "sessions": len(own_sessions),
+        "median_run_seconds": metrics["median_duration_seconds"],
+        "p90_run_seconds": metrics["p90_duration_seconds"],
+        "tools_per_session": metrics["avg_tools_per_session"],
+        "tokens_per_call": metrics["avg_tokens_per_call"],
+        "top_tools": _store_top_tools(Path(str(profile["_path"])) / "state.db", week_ago),
+        "signals": agent_behaviour(own_sessions),
+    }
+    timeline = _store_timeline(Path(str(profile["_path"])) / "state.db", now) + _kanban_timeline(raw)
+    for job in jobs:
+        if job.get("last_run_at"):
+            failed = job.get("state") == "error"
+            timeline.append({
+                "at": job["last_run_at"], "_ts": parse_iso_ts(job["last_run_at"]) or 0.0, "kind": "cron",
+                "text": f"Ran {display_name(job['label'], job['id'], 'Job')}", "detail": job.get("last_error") if failed else job.get("last_status"),
+                "state": "error" if failed else "ok",
+            })
+    for action in actions:
+        # The log keeps the label and Hermes' reply as they were when the
+        # operator acted; show them only while labels are on now.
+        ref = str(action["target_ref"])
+        if not EXPOSE_LOCAL_LABELS and ":" not in ref:
+            ref = safe_id(ref, str(action["target_kind"]))  # a raw id logged while labels were on
+        label = action["label"] if EXPOSE_LOCAL_LABELS else display_name(ref, ref, "Task" if action["target_kind"] == "task" else "Job")
+        timeline.append({
+            "at": ts_to_iso(action["at"]), "_ts": float(action["at"]), "kind": "action",
+            "text": f"You chose {ACTION_LABELS.get(action['action'], action['action'])}: {label}",
+            "detail": public_error(action.get("detail")), "state": "ok" if action["ok"] else "error",
+        })
+    timeline.sort(key=lambda event: event["_ts"], reverse=True)
+    days = scan["agent_activity"].get(raw, {}).get("days", [])
+    return {
+        "agent": row,
+        "needs_you": [item for item in scan["needs_you"] if item["agent"] and item["agent"]["id"] == agent_id],
+        "timeline": strip_internal(timeline[:AGENT_TIMELINE_LIMIT]),
+        "cron": jobs,
+        "kanban": kanban,
+        "working": working,
+        "usage": {
+            "days": days,
+            "tokens_7d": sum(d["input_tokens"] + d["cache_tokens"] + d["output_tokens"] for d in days),
+            "cost_7d_usd": round(sum(d["cost_usd"] for d in days), 4),
+            "basis": "Hermes session totals by the UTC day each session started.",
+        },
+        "success": agent_success(kanban_items(scan["kanban"], "_runs"), raw, now),
+        "fixes": [fix for fix in fixes if fix.get("agent") == agent_id],
+        "start_gateway": gateway_start_command(raw) if profile.get("gateway_state") != "running" else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Performance: how well each agent's runs go over 7 or 30 days.
+#
+# A run is a top-level session. Its outcome uses Hermes' own rule
+# (hermes_state_sessions.classify_session_status: the session's last message)
+# and a failed tool call uses Hermes' own display rule
+# (agent/display._detect_tool_failure). A cron run whose every tool call
+# failed is failed too, though Hermes books it complete. Hermes stores no
+# per-call latency, so run time is a session's start-to-end time.
+# ---------------------------------------------------------------------------
+
+PERFORMANCE_DAYS = (7, 30)
+# Sessions that ended by rolling over into another session, not by finishing.
+ROTATED_END_REASONS = {"compression", "branched", "superseded_by_repair", "orphaned_compression"}
+FAILED_END_REASONS = {"cron_incomplete_no_output"}
+ERROR_FINISH_REASONS = {"error", "agent_error", "content_filter"}
+FILE_MUTATING_TOOLS = {"write_file", "patch"}
+TOOL_RESULT_SCAN_LIMIT = 20000
+TOOL_RESULT_FULL_CHARS = 20000
+PERFORMANCE_TOOLS_SHOWN = 10
+PERFORMANCE_RUNS_SHOWN = 6
+RUN_STEP_LIMIT = 400
+FAILURE_MARKER_RE = re.compile(r'"(?:error|failed)"(?!\s*:\s*(?:null|false|0|""|\[\]|\{\})\s*(?:[,}\]]|$))', re.IGNORECASE)
+EXIT_CODE_RE = re.compile(r'"exit_code"\s*:\s*(-?\d+)')
+
+
+def run_outcome(ended: Any, end_reason: Any, last_role: Any, pending_tool_calls: bool, finish_reason: Any) -> str:
+    """succeeded / failed / cut_off for a finished run, open while it runs."""
+    if not ended:
+        return "open"
+    if str(end_reason or "") in FAILED_END_REASONS or str(finish_reason or "").strip().lower() in ERROR_FINISH_REASONS:
+        return "failed"
+    role = str(last_role or "").strip().lower()
+    if role in ("user", "tool") or (role == "assistant" and pending_tool_calls):
+        return "cut_off"
+    return "succeeded"
+
+
+def _has_failure_marker(text: str) -> bool:
+    head = text[:600]
+    return any(m.start() < 500 for m in FAILURE_MARKER_RE.finditer(head)) or text.startswith("Error")
+
+
+def tool_result_failed(tool_name: str, content: Any, truncated: bool = False) -> bool:
+    """Whether a stored tool result is a failure, by Hermes' own display rule.
+
+    ``truncated`` results (over TOOL_RESULT_FULL_CHARS) cannot be parsed as
+    JSON, so only their head is read: an exit code, ``"success": false`` or a
+    failure marker.
+    """
+    if not isinstance(content, str) or not content:
+        return False
+    text = content.strip()
+    if truncated:
+        code = EXIT_CODE_RE.search(text[:600]) if tool_name == "terminal" else None
+        if code:
+            return int(code.group(1)) != 0
+        return '"success": false' in text[:600] or _has_failure_marker(text)
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return _has_failure_marker(text)
+    if not isinstance(data, dict):
+        return _has_failure_marker(text) if isinstance(data, str) else False
+    if data.get("guardrail_refusal") is True:
+        return False
+    if tool_name in FILE_MUTATING_TOOLS and not data.get("error"):
+        if (tool_name == "write_file" and "bytes_written" in data) or (tool_name == "patch" and data.get("success") is True):
+            return False
+    if data.get("user_summary"):
+        return True
+    if tool_name == "terminal":
+        return data.get("exit_code") not in (None, 0)
+    error = data.get("error") or data.get("message")
+    if error and (data.get("success") is False or "error" in data):
+        return True
+    if str(data.get("status", "")).lower() in ("failed", "error"):
+        return True
+    items = data.get("results")
+    return isinstance(items, list) and bool(items) and all(isinstance(i, dict) for i in items) and all(i.get("error") for i in items)
+
+
+def _tool_error_text(content: str) -> str:
+    try:
+        data = json.loads(content)
+    except ValueError:
+        return content
+    if isinstance(data, dict):
+        for key in ("error", "message", "user_summary"):
+            if data.get(key):
+                return str(data[key])
+        if data.get("exit_code") not in (None, 0):
+            return f"exit code {data['exit_code']}"
+    return content
+
+
+def _sessions_with_every_tool_failed(con: sqlite3.Connection, where: str, params: tuple) -> Dict[str, Dict[str, Any]]:
+    """Sessions (``where`` filters ``sessions s``) that made tool calls and none worked.
+
+    Each comes with its call count and its first failure, ``tool: error``.
+    """
+    if not {"session_id", "tool_name", "content", "role"}.issubset(table_columns(con, "messages")):
+        return {}
+    rows = con.execute(
+        "SELECT m.session_id, m.tool_name, length(m.content) AS size, "
+        f"CASE WHEN length(m.content) <= {TOOL_RESULT_FULL_CHARS} THEN m.content ELSE substr(m.content, 1, 600) END AS body "
+        f"FROM messages m JOIN sessions s ON s.id = m.session_id WHERE {where} "
+        "AND m.role = 'tool' AND m.tool_name IS NOT NULL AND m.tool_name != '' ORDER BY m.id",
+        params,
+    ).fetchall()
+    sessions: Dict[str, Optional[Dict[str, Any]]] = {}
+    for row in rows:
+        session_id = str(row["session_id"])
+        tool = str(row["tool_name"])
+        if not tool_result_failed(tool, row["body"], safe_int(row["size"]) > TOOL_RESULT_FULL_CHARS):
+            sessions[session_id] = None  # one call worked
+        elif session_id not in sessions:
+            sessions[session_id] = {"calls": 1, "first": f"{tool}: {_tool_error_text(str(row['body']))}"}
+        elif sessions[session_id] is not None:
+            sessions[session_id]["calls"] += 1
+    return {session_id: failed for session_id, failed in sessions.items() if failed is not None}
+
+
+def _store_runs(db: Path, since: float, session_id: Optional[str] = None, now: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Every session started since ``since`` (or the one ``session_id``) with its outcome, cost and size."""
+    now = time.time() if now is None else now
+    if not db.exists():
+        return []
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        cols = table_columns(con, "sessions")
+        message_cols = table_columns(con, "messages")
+        if not {"id", "started_at"}.issubset(cols):
+            return []
+        wanted = [c for c in (
+            "id", "source", "title", "started_at", "ended_at", "last_activity_at", "end_reason", "tool_call_count", "api_call_count",
+            "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+            "actual_cost_usd", "estimated_cost_usd", "parent_session_id",
+        ) if c in cols]
+        last = ""
+        if {"id", "session_id", "role"}.issubset(message_cols):
+            finish = "m.finish_reason" if "finish_reason" in message_cols else "NULL"
+            pending = "(m.tool_calls IS NOT NULL AND m.tool_calls NOT IN ('', '[]'))" if "tool_calls" in message_cols else "0"
+            last = (f", m.role AS last_role, {finish} AS last_finish, {pending} AS last_pending "
+                    "FROM sessions s LEFT JOIN messages m ON m.id = (SELECT MAX(id) FROM messages WHERE session_id = s.id)")
+        else:
+            last = ", NULL AS last_role, NULL AS last_finish, 0 AS last_pending FROM sessions s"
+        where, params = ("s.id = ?", (session_id,)) if session_id is not None else ("s.started_at >= ?", (since,))
+        rows = con.execute(
+            f"SELECT {', '.join('s.' + c for c in wanted)}{last} WHERE {where} ORDER BY s.started_at",
+            params,
+        ).fetchall()
+        # Hermes books a cron run complete when the agent replied; a run whose
+        # every tool call failed replied without doing its job.
+        cron_tools_failed = _sessions_with_every_tool_failed(con, f"s.source = 'cron' AND {where}", params) if "source" in cols else {}
+    except sqlite3.Error as exc:
+        log_read_warning("performance run scan failed", exc)
+        return []
+    finally:
+        con.close()
+    runs: List[Dict[str, Any]] = []
+    for r in rows:
+        session_id = row_value(r, "id")
+        started = safe_float(row_value(r, "started_at"))
+        # A session nobody closed but that has been quiet for a day is over:
+        # Hermes reaps it the same way. It ends at its last activity.
+        quiet_since = safe_float(row_value(r, "last_activity_at")) or started
+        ended = safe_float(row_value(r, "ended_at")) or (quiet_since if now - quiet_since > STALE_SECONDS else 0.0)
+        actual = row_value(r, "actual_cost_usd")
+        cost = safe_float(actual if actual not in (None, "") else row_value(r, "estimated_cost_usd"))
+        source = str(row_value(r, "source") or "session")
+        outcome = run_outcome(ended, row_value(r, "end_reason"), row_value(r, "last_role"), bool(row_value(r, "last_pending")), row_value(r, "last_finish"))
+        if outcome == "succeeded" and str(session_id) in cron_tools_failed:
+            outcome = "failed"
+        runs.append({
+            "_id": str(session_id),
+            "ref": str(session_id) if EXPOSE_LOCAL_LABELS else safe_id(session_id, "session"),
+            "label": public_label(row_value(r, "title"), source, "session"),
+            "source": source,
+            "subagent": source == "subagent",
+            "rotated": str(row_value(r, "end_reason") or "") in ROTATED_END_REASONS,
+            "started": started,
+            "ended": ended or None,
+            "duration": max(0.0, ended - started) if ended and started else None,
+            "outcome": outcome,
+            "end_reason": row_value(r, "end_reason"),
+            "tool_calls": safe_int(row_value(r, "tool_call_count")),
+            "api_calls": safe_int(row_value(r, "api_call_count")),
+            "tokens": sum(safe_int(row_value(r, c)) for c in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")),
+            "cost": cost,
+        })
+    return runs
+
+
+def _store_tool_outcomes(db: Path, since: float) -> Dict[str, Dict[str, int]]:
+    """Calls and failures per tool for sessions started since ``since`` (newest results first)."""
+    if not db.exists():
+        return {}
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        message_cols = table_columns(con, "messages")
+        if not {"session_id", "tool_name", "content", "role"}.issubset(message_cols):
+            return {}
+        rows = con.execute(
+            "SELECT m.tool_name, length(m.content) AS size, "
+            f"CASE WHEN length(m.content) <= {TOOL_RESULT_FULL_CHARS} THEN m.content ELSE substr(m.content, 1, 600) END AS body "
+            "FROM messages m JOIN sessions s ON s.id = m.session_id "
+            "WHERE s.started_at >= ? AND m.role = 'tool' AND m.tool_name IS NOT NULL AND m.tool_name != '' "
+            "ORDER BY m.id DESC LIMIT ?",
+            (since, TOOL_RESULT_SCAN_LIMIT),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        log_read_warning("performance tool scan failed", exc)
+        return {}
+    finally:
+        con.close()
+    out: Dict[str, Dict[str, int]] = {}
+    for row in rows:
+        name = redact_text(row["tool_name"], 60)
+        stats = out.setdefault(name, {"calls": 0, "failures": 0})
+        stats["calls"] += 1
+        stats["failures"] += 1 if tool_result_failed(str(row["tool_name"]), row["body"], safe_int(row["size"]) > TOOL_RESULT_FULL_CHARS) else 0
+    return out
+
+
+def percentile(sorted_values: List[float], share: float) -> Optional[float]:
+    """Nearest-rank percentile of an ascending list."""
+    if not sorted_values:
+        return None
+    return sorted_values[max(0, math.ceil(len(sorted_values) * share) - 1)]
+
+
+def _public_run(run: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "ref": run["ref"], "label": run["label"], "source": run["source"], "outcome": run["outcome"],
+        "started_at": ts_to_iso(run["started"]), "duration_seconds": run["duration"],
+        "tool_calls": run["tool_calls"], "tokens": run["tokens"], "cost_usd": round(run["cost"], 4),
+    }
+
+
+def summarize_runs(runs: List[Dict[str, Any]], tools: Dict[str, Dict[str, int]], days: List[str]) -> Dict[str, Any]:
+    """One agent's performance over the window: outcomes, run time, size, cost and tools."""
+    top = [r for r in runs if not r["subagent"] and not r["rotated"]]
+    finished = [r for r in top if r["outcome"] != "open"]
+    counts = {name: sum(1 for r in top if r["outcome"] == name) for name in ("succeeded", "failed", "cut_off", "open")}
+    durations = sorted(r["duration"] for r in finished if r["duration"] is not None)
+    tool_calls = sum(f["calls"] for f in tools.values())
+    tool_failures = sum(f["failures"] for f in tools.values())
+    daily: List[Dict[str, Any]] = []
+    for day in days:
+        on_day = [r for r in top if datetime.fromtimestamp(r["started"], tz=timezone.utc).date().isoformat() == day]
+        day_durations = sorted(r["duration"] for r in on_day if r["duration"] is not None and r["outcome"] != "open")
+        daily.append({
+            "day": day,
+            "runs": len(on_day),
+            "succeeded": sum(1 for r in on_day if r["outcome"] == "succeeded"),
+            "failed": sum(1 for r in on_day if r["outcome"] == "failed"),
+            "cut_off": sum(1 for r in on_day if r["outcome"] == "cut_off"),
+            "open": sum(1 for r in on_day if r["outcome"] == "open"),
+            "median_seconds": statistics.median(day_durations) if day_durations else None,
+            "tokens": sum(r["tokens"] for r in on_day),
+            "cost_usd": round(sum(r["cost"] for r in on_day), 4),
+        })
+    return {
+        "runs": len(top),
+        "subagent_runs": sum(1 for r in runs if r["subagent"]),
+        **counts,
+        "success_rate": round(counts["succeeded"] / len(finished), 3) if finished else None,
+        "median_seconds": statistics.median(durations) if durations else None,
+        "p90_seconds": percentile(durations, 0.9),
+        "tool_calls_per_run": round(sum(r["tool_calls"] for r in top) / len(top), 1) if top else 0,
+        "tokens_per_run": int(sum(r["tokens"] for r in top) / len(top)) if top else 0,
+        "cost_usd": round(sum(r["cost"] for r in runs), 4),
+        "tool_calls": tool_calls,
+        "tool_failures": tool_failures,
+        "tool_error_rate": round(tool_failures / tool_calls, 3) if tool_calls else None,
+        "tools": [
+            {"tool": name, "calls": stats["calls"], "failures": stats["failures"],
+             "error_rate": round(stats["failures"] / stats["calls"], 3)}
+            for name, stats in sorted(tools.items(), key=lambda kv: (-kv[1]["calls"], kv[0]))[:PERFORMANCE_TOOLS_SHOWN]
+        ],
+        "daily": daily,
+        "slowest": [_public_run(r) for r in sorted((r for r in finished if r["duration"] is not None), key=lambda r: -r["duration"])[:PERFORMANCE_RUNS_SHOWN]],
+        "failed_runs": [_public_run(r) for r in sorted((r for r in finished if r["outcome"] in ("failed", "cut_off")), key=lambda r: -r["started"])[:PERFORMANCE_RUNS_SHOWN]],
+    }
+
+
+def build_performance(profiles: List[Dict[str, Any]], days: int, now: Optional[float] = None) -> Dict[str, Any]:
+    """Per-agent performance for the last ``days`` UTC days, plus fleet totals."""
+    now = time.time() if now is None else now
+    day_list = [
+        datetime.fromtimestamp(now - offset * 86400, tz=timezone.utc).date().isoformat()
+        for offset in range(days - 1, -1, -1)
+    ]
+    since = datetime.fromisoformat(day_list[0]).replace(tzinfo=timezone.utc).timestamp()
+    agents: List[Dict[str, Any]] = []
+    all_runs: List[Dict[str, Any]] = []
+    all_tools: Dict[str, Dict[str, int]] = {}
+    for profile in profiles:
+        db = Path(str(profile["_path"])) / "state.db"
+        runs = _store_runs(db, since)
+        tools = _store_tool_outcomes(db, since)
+        all_runs.extend(runs)
+        for name, stats in tools.items():
+            merged = all_tools.setdefault(name, {"calls": 0, "failures": 0})
+            merged["calls"] += stats["calls"]
+            merged["failures"] += stats["failures"]
+        agents.append({"id": profile["id"], "label": profile["label"], "avatar": agent_avatar(str(profile["label"])), **summarize_runs(runs, tools, day_list)})
+    fleet = summarize_runs(all_runs, all_tools, day_list)
+    return {
+        "days": days,
+        "generated_at": now_iso(),
+        "fleet": {k: v for k, v in fleet.items() if k not in ("slowest", "failed_runs")},
+        "agents": agents,
+        "basis": (
+            "A run is a top-level session (subagents and sessions that rolled over are counted separately). "
+            "Outcome follows Hermes: a run failed when it ended on a provider or agent error, and was cut off "
+            "when it ended waiting on a tool or a reply. A scheduled run also failed when every tool call in it failed, "
+            "even if Hermes booked it complete. Run time is start to end; Hermes records no per-call latency. "
+            "Tool failures use the rule Hermes uses to mark failed tool calls."
+        ),
+    }
+
+
+def build_run_detail(ref: str) -> Optional[Dict[str, Any]]:
+    """One run step by step: who spoke, which tool, how long each step took."""
+    found = resolve_session_ref(ref)
+    if found is None:
+        return None
+    profile = next((p for p in collect_profiles() if p["name"] == found["profile"]), None)
+    if profile is None:
+        return None
+    db = Path(str(profile["_path"])) / "state.db"
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        session_cols = table_columns(con, "sessions")
+        message_cols = table_columns(con, "messages")
+        run = next(iter(_store_runs(db, 0.0, found["session_id"])), None)
+        wanted = [c for c in ("id", "role", "tool_name", "timestamp", "token_count", "finish_reason", "content") if c in message_cols]
+        rows = con.execute(
+            f"SELECT {', '.join(wanted)} FROM messages WHERE session_id = ? ORDER BY id LIMIT ?",
+            (found["session_id"], RUN_STEP_LIMIT),
+        ).fetchall() if {"id", "role"}.issubset(message_cols) else []
+        total = con.execute("SELECT COUNT(*) FROM messages WHERE session_id = ?", (found["session_id"],)).fetchone()[0] if "session_id" in message_cols else 0
+        has_end = "ended_at" in session_cols
+    except sqlite3.Error as exc:
+        log_read_warning("run detail read failed", exc)
+        return None
+    finally:
+        con.close()
+    if run is None or not has_end:
+        return None
+    steps: List[Dict[str, Any]] = []
+    previous: Optional[float] = run["started"]
+    for row in rows:
+        ts = safe_float(row_value(row, "timestamp")) or None
+        role = str(row_value(row, "role") or "")
+        tool = row_value(row, "tool_name")
+        content = row_value(row, "content")
+        steps.append({
+            "at": ts_to_iso(ts),
+            "role": role,
+            "tool": redact_text(tool, 60) if tool else None,
+            "failed": role == "tool" and tool_result_failed(str(tool or ""), content),
+            "seconds": round(ts - previous, 1) if ts and previous else None,
+            "tokens": safe_int(row_value(row, "token_count")) or None,
+            "error": str(row_value(row, "finish_reason") or "").lower() in ERROR_FINISH_REASONS,
+            "preview": redact_text(content, 160) if EXPOSE_LOCAL_LABELS and isinstance(content, str) else None,
+        })
+        previous = ts or previous
+    return {
+        "run": {**_public_run(run), "end_reason": run["end_reason"], "api_calls": run["api_calls"], "subagent": run["subagent"]},
+        "agent": {"id": profile["id"], "label": profile["label"]},
+        "steps": steps,
+        "steps_total": int(total),
+        "tool_failures": sum(1 for s in steps if s["failed"]),
+        "content_shown": EXPOSE_LOCAL_LABELS,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Olympus' own storage: daily snapshots and fix tracking.
+#
+# Olympus never writes Hermes state. It keeps its history in the per-plugin
+# data directory Hermes provides (<hermes home>/plugin-data/olympus/).
+# ---------------------------------------------------------------------------
+
+HISTORY_DB = "history.db"
+HISTORY_RETENTION_DAYS = 90
+HISTORY_TREND_DAYS = 14
+SNAPSHOT_MIN_INTERVAL_SECONDS = 300
+SNAPSHOT_FIELDS = (
+    "needs_you", "looping", "context_pressure", "failed_runs", "blocked",
+    "stale_workers", "spend_24h", "sessions", "tool_calls", "median_run",
+)
+
+
+def olympus_data_dir() -> Path:
+    try:
+        from plugins.plugin_storage import plugin_data_dir  # type: ignore
+    except ImportError:
+        # Outside Hermes (unit tests): the same layout Hermes uses.
+        path = get_hermes_home() / "plugin-data" / "olympus"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    return plugin_data_dir("olympus")
+
+
+def history_db() -> sqlite3.Connection:
+    try:
+        from plugins.plugin_storage import plugin_db  # type: ignore
+    except ImportError:
+        con = sqlite3.connect(olympus_data_dir() / HISTORY_DB, timeout=2.0, check_same_thread=False)
+    else:
+        con = plugin_db("olympus", HISTORY_DB)
+    con.row_factory = sqlite3.Row
+    con.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS snapshots (
+            day TEXT PRIMARY KEY,
+            taken_at REAL NOT NULL,
+            needs_you INTEGER, looping INTEGER, context_pressure INTEGER,
+            failed_runs INTEGER, blocked INTEGER, stale_workers INTEGER, spend_24h REAL,
+            sessions INTEGER, tool_calls INTEGER, median_run REAL
+        );
+        CREATE TABLE IF NOT EXISTS fixes (
+            key TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            baseline INTEGER,
+            marked_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            at REAL NOT NULL,
+            agent TEXT,
+            action TEXT NOT NULL,
+            target_kind TEXT NOT NULL,
+            target_ref TEXT NOT NULL,
+            label TEXT NOT NULL,
+            ok INTEGER NOT NULL,
+            detail TEXT
+        );
+        """
+    )
+    # 1.1.0 stores had no agent column on fixes.
+    if "agent" not in table_columns(con, "fixes"):
+        con.execute("ALTER TABLE fixes ADD COLUMN agent TEXT")
+        con.commit()
+    return con
+
+
+ACTIONS_RETAINED = 500
+
+
+def record_action(con: sqlite3.Connection, entry: Dict[str, Any], now: Optional[float] = None) -> None:
+    """Olympus' own log of a control the operator confirmed, and its result."""
+    con.execute(
+        "INSERT INTO actions (at, agent, action, target_kind, target_ref, label, ok, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            time.time() if now is None else now, entry.get("agent"), entry["action"], entry["target_kind"],
+            entry["target_ref"], entry["label"], 1 if entry["ok"] else 0, entry.get("detail"),
+        ),
+    )
+    con.execute("DELETE FROM actions WHERE id NOT IN (SELECT id FROM actions ORDER BY id DESC LIMIT ?)", (ACTIONS_RETAINED,))
+    con.commit()
+
+
+def read_actions(con: sqlite3.Connection, agent: Optional[str] = None, limit: int = AGENT_TIMELINE_LIMIT) -> List[Dict[str, Any]]:
+    where, params = ("WHERE agent = ?", (agent, limit)) if agent else ("", (limit,))
+    return [
+        {**dict(row), "ok": bool(row["ok"])}
+        for row in con.execute(f"SELECT * FROM actions {where} ORDER BY id DESC LIMIT ?", params)
+    ]
+
+
+def snapshot_values(scan: Dict[str, Any]) -> Dict[str, Any]:
+    tuning = scan["tuning"]
+    hq = tuning.get("agent_hq") or {}
+    metrics = hq.get("metrics") or {}
+    orch_summary = (scan["orchestration"].get("summary") or {}) if isinstance(scan["orchestration"], dict) else {}
+    totals = scan["kanban"].get("totals") if isinstance(scan["kanban"].get("totals"), dict) else {}
+    return {
+        "needs_you": sum(1 for item in as_list(hq.get("recommendations")) if item.get("severity") in ("critical", "warning")),
+        "looping": int(metrics.get("looping_sessions") or 0),
+        "context_pressure": int(metrics.get("context_pressure_sessions") or 0),
+        "failed_runs": int(metrics.get("failed_kanban_runs") or 0),
+        "blocked": int(totals.get("blocked") or 0),
+        "stale_workers": int(orch_summary.get("stale_workers") or 0),
+        "spend_24h": float(metrics.get("spend_24h_usd") or 0.0),
+        "sessions": int((metrics.get("window") or {}).get("sessions") or 0),
+        "tool_calls": int(metrics.get("total_tool_calls") or 0),
+        "median_run": metrics.get("median_duration_seconds"),
+    }
+
+
+def record_snapshot(con: sqlite3.Connection, values: Dict[str, Any], now: Optional[float] = None) -> bool:
+    """Upsert today's snapshot (UTC day); at most one write per SNAPSHOT_MIN_INTERVAL."""
+    now = time.time() if now is None else now
+    day = datetime.fromtimestamp(now, tz=timezone.utc).date().isoformat()
+    row = con.execute("SELECT taken_at FROM snapshots WHERE day = ?", (day,)).fetchone()
+    if row is not None and now - float(row["taken_at"]) < SNAPSHOT_MIN_INTERVAL_SECONDS:
+        return False
+    columns = ("day", "taken_at") + SNAPSHOT_FIELDS
+    con.execute(
+        f"INSERT OR REPLACE INTO snapshots ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+        (day, now) + tuple(values[name] for name in SNAPSHOT_FIELDS),
+    )
+    cutoff = datetime.fromtimestamp(now - HISTORY_RETENTION_DAYS * 86400, tz=timezone.utc).date().isoformat()
+    con.execute("DELETE FROM snapshots WHERE day < ?", (cutoff,))
+    con.commit()
+    return True
+
+
+def read_history(con: sqlite3.Connection, now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    since = datetime.fromtimestamp(now - (HISTORY_TREND_DAYS - 1) * 86400, tz=timezone.utc).date().isoformat()
+    days = [
+        {key: row[key] for key in ("day",) + SNAPSHOT_FIELDS}
+        for row in con.execute("SELECT * FROM snapshots WHERE day >= ? ORDER BY day", (since,))
+    ]
+    return {
+        "days": days,
+        "recorded_days": len(days),
+        "storage": "Olympus plugin data (never Hermes state)",
+    }
+
+
+def mark_fix(con: sqlite3.Connection, item: Dict[str, Any], now: Optional[float] = None, agent: Optional[str] = None) -> None:
+    con.execute(
+        "INSERT OR REPLACE INTO fixes (key, title, kind, baseline, marked_at, agent) VALUES (?, ?, ?, ?, ?, ?)",
+        (item["key"], str(item.get("title") or item["key"]), str(item.get("kind") or "finding"), item.get("count"), time.time() if now is None else now, agent),
+    )
+    con.commit()
+
+
+def build_fix_tracking(con: sqlite3.Connection, tuning: Dict[str, Any], now: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Compare each finding the operator marked fixed with the current scan."""
+    now = time.time() if now is None else now
+    current = {item.get("key"): item for item in as_list((tuning.get("agent_hq") or {}).get("recommendations"))}
+    out: List[Dict[str, Any]] = []
+    for row in con.execute("SELECT * FROM fixes ORDER BY marked_at DESC"):
+        item = current.get(row["key"])
+        baseline = row["baseline"]
+        now_count = item.get("count") if item else 0
+        if item is None:
+            verdict = "cleared"
+        elif baseline is None or now_count is None:
+            verdict = "still present"
+        elif now_count < baseline:
+            verdict = "improved"
+        elif now_count > baseline:
+            verdict = "worse"
+        else:
+            verdict = "unchanged"
+        out.append({
+            "key": row["key"],
+            "title": row["title"],
+            "kind": row["kind"],
+            "baseline": baseline,
+            "current": now_count,
+            "verdict": verdict,
+            "marked_at": ts_to_iso(row["marked_at"]),
+            "days_tracked": int((now - float(row["marked_at"])) // 86400),
+            "agent": row["agent"],
+        })
+    return out
+
+
+def overview_payload(scan: Dict[str, Any]) -> Dict[str, Any]:
+    con = history_db()
+    try:
+        record_snapshot(con, snapshot_values(scan))
+        fixes = build_fix_tracking(con, scan["tuning"])
+    finally:
+        con.close()
+    return {
+        "generated_at": now_iso(),
+        "controls": controls_enabled(),
+        "agents": scan["agents"],
+        "needs_you": scan["needs_you"],
+        "health": scan["health"],
+        "tuning": strip_internal(scan["tuning"]),
+        "cost_attribution": scan["cost_attribution"],
+        "backlog": strip_internal(scan["backlog"]),
+        "fixes": fixes,
+        "skill_hygiene": strip_internal(scan["skill_hygiene"]),
+        "evidence_sources": strip_internal(scan["evidence_sources"]),
+        "config_policy": strip_internal(scan["config_policy"]),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Alerts for a Hermes no-agent cron job.
+#
+# `hermes olympus install-alerts` puts a small script in $HERMES_HOME/scripts/
+# that calls alert_report(). Hermes cron runs it on the user's schedule and
+# delivers its stdout through the user's own delivery target; empty output is
+# a silent run. No model is called and Olympus never sends anything itself.
+# ---------------------------------------------------------------------------
+
+ALERTS_STATE_FILE = "alerts.json"
+ALERT_REPEAT_SECONDS = 6 * 60 * 60
+ALERT_RECENT_SECONDS = 24 * 60 * 60
+CRON_OVERDUE_SECONDS = 30 * 60
+ALERT_SPEND_FLOOR_USD = 1.0
+ALERT_SPEND_SPIKE_RATIO = 2.0
+
+
+def build_alerts(scan: Dict[str, Any], history: Dict[str, Any], now: Optional[float] = None) -> List[Dict[str, str]]:
+    """Conditions worth interrupting someone for, each with a stable key."""
+    now = time.time() if now is None else now
+    alerts: List[Dict[str, str]] = []
+
+    def add(key: str, severity: str, text: str) -> None:
+        alerts.append({"key": key, "severity": severity, "text": text})
+
+    for job in scan["cron"]:
+        where = " / ".join(str(part) for part in (job.get("profile"), job.get("schedule")) if part)
+        name = f"{job.get('label')} ({where})" if where else str(job.get("label"))
+        if job.get("state") == "error":
+            add(f"cron-failed:{job.get('id')}", "critical", f"Cron job {name} failed: {job.get('last_error') or 'last run reported an error'}.")
+            continue
+        due = parse_iso_ts(job.get("next_run_at"))
+        if job.get("enabled") and due is not None and now - due > CRON_OVERDUE_SECONDS:
+            late = int((now - due) // 60)
+            add(f"cron-overdue:{job.get('id')}", "critical", f"Cron job {name} is {late} min overdue; the cron ticker may have stopped.")
+
+    for task in kanban_items(scan["kanban"], "_tasks"):
+        if task_stale_reason(task, now):
+            add(f"worker-stalled:{task.get('id')}", "critical", f"Kanban worker stalled on {task.get('title')} ({task.get('assignee')}): {task_stale_reason(task, now)}.")
+
+    for run in kanban_items(scan["kanban"], "_runs"):
+        if is_failed_run(run) and now - safe_float(run.get("_sort_ts")) <= ALERT_RECENT_SECONDS:
+            add(f"worker-failed:{run.get('id')}", "warning", f"Kanban worker run {run.get('outcome') or run.get('status')} on task {run.get('task_id')}: {run.get('error') or 'no error text recorded'}.")
+
+    for session in scan["sessions"]:
+        if int(session.get("tool_call_count") or 0) >= RUNAWAY_TOOLS_THRESHOLD and now - safe_float(session.get("_last_ts")) <= ALERT_RECENT_SECONDS:
+            add(f"looping:{session.get('session_ref')}", "warning", f"A {session.get('label')} session made {session.get('tool_call_count')} tool calls; it may be looping.")
+
+    metrics = (scan["tuning"].get("agent_hq") or {}).get("metrics") or {}
+    spend = float(metrics.get("spend_24h_usd") or 0.0)
+    today = datetime.fromtimestamp(now, tz=timezone.utc).date().isoformat()
+    previous = [float(day.get("spend_24h") or 0.0) for day in as_list(history.get("days")) if day.get("day") != today][-6:]
+    if previous and spend >= ALERT_SPEND_FLOOR_USD:
+        average = sum(previous) / len(previous)
+        if spend >= ALERT_SPEND_SPIKE_RATIO * max(average, 0.01):
+            add(f"spend-spike:{today}", "warning", f"Spend spike: ${spend:.2f} in the last 24h against a ${average:.2f}/day average.")
+    return alerts
+
+
+def select_new_alerts(alerts: List[Dict[str, str]], state: Dict[str, float], now: float) -> List[Dict[str, str]]:
+    """Alerts not sent within ALERT_REPEAT_SECONDS. Mutates ``state`` to match."""
+    active = {alert["key"] for alert in alerts}
+    for key in list(state):
+        if key not in active:
+            del state[key]  # cleared: it can alert again if it comes back
+    fresh = [alert for alert in alerts if alert["key"] not in state or now - state[alert["key"]] >= ALERT_REPEAT_SECONDS]
+    for alert in fresh:
+        state[alert["key"]] = now
+    return fresh
+
+
+def format_alerts(alerts: List[Dict[str, str]]) -> str:
+    if not alerts:
+        return ""
+    ordered = sorted(alerts, key=lambda alert: _severity_rank(alert["severity"]))
+    lines = [f"Olympus: {len(ordered)} new alert{'s' if len(ordered) != 1 else ''}"]
+    lines += [f"- {alert['text']}" for alert in ordered]
+    return "\n".join(lines)
+
+
+def alert_report(now: Optional[float] = None, *, preview: bool = False) -> str:
+    """Text for the cron job to deliver; empty when nothing new needs attention."""
+    now = time.time() if now is None else now
+    refresh_expose_local_labels()
+    scan = scan_hermes()
+    con = history_db()
+    try:
+        history = read_history(con, now)
+    finally:
+        con.close()
+    alerts = build_alerts(scan, history, now)
+    if preview:
+        return format_alerts(alerts)
+    state_path = olympus_data_dir() / ALERTS_STATE_FILE
+    loaded = read_json(state_path)
+    state = {str(k): float(v) for k, v in loaded.items()} if isinstance(loaded, dict) else {}
+    fresh = select_new_alerts(alerts, state, now)
+    state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+    return format_alerts(fresh)
+
+
+@router.get("/overview")
+def overview() -> Dict[str, Any]:
+    refresh_expose_local_labels()
+    started_at = time.perf_counter()
+    scan = scan_hermes()
+    payload = overview_payload(scan)
+    payload["diagnostics"] = runtime_diagnostics("/overview", started_at, payload, scan["profiles"], scan["sessions"], scan["kanban"])
     return payload
+
+
+@router.post("/fixes")
+def track_fix(key: str) -> Dict[str, Any]:
+    """Start tracking a current finding the operator says they fixed.
+
+    The finding's title and count come from a fresh scan, never the request.
+    """
+    refresh_expose_local_labels()
+    scan = scan_hermes()
+    item = next((i for i in as_list((scan["tuning"].get("agent_hq") or {}).get("recommendations")) if i.get("key") == key), None)
+    if item is None:
+        return {"tracked": False, "reason": "finding not in the current scan"}
+    queued = next((q for q in scan["needs_you"] if q["key"] == key), None)
+    con = history_db()
+    try:
+        mark_fix(con, item, agent=queued["agent"]["id"] if queued and queued["agent"] else None)
+        fixes = build_fix_tracking(con, scan["tuning"])
+    finally:
+        con.close()
+    return {"tracked": True, "fixes": fixes}
+
+
+@router.delete("/fixes")
+def untrack_fix(key: str) -> Dict[str, Any]:
+    con = history_db()
+    try:
+        con.execute("DELETE FROM fixes WHERE key = ?", (key,))
+        con.commit()
+    finally:
+        con.close()
+    return {"tracked": False}
+
+
+@router.get("/agent")
+def agent(ref: str) -> Dict[str, Any]:
+    """The inspector for one agent (``ref`` is its roster id, e.g. profile:default)."""
+    refresh_expose_local_labels()
+    scan = scan_hermes()
+    con = history_db()
+    try:
+        actions = read_actions(con, ref)
+        fixes = build_fix_tracking(con, scan["tuning"])
+    finally:
+        con.close()
+    detail = build_agent_detail(scan, ref, actions, fixes)
+    if detail is None:
+        return {"found": False}
+    return {"found": True, "generated_at": now_iso(), "controls": controls_enabled(), **detail}
+
+
+@router.get("/performance")
+def performance(days: int = 7) -> Dict[str, Any]:
+    """Per-agent run outcomes, run time, size, cost and tool failures (7 or 30 days)."""
+    refresh_expose_local_labels()
+    if days not in PERFORMANCE_DAYS:
+        return {"error": f"days must be one of {', '.join(str(d) for d in PERFORMANCE_DAYS)}"}
+    return build_performance(collect_profiles(), days)
+
+
+@router.get("/run")
+def run_detail(ref: str) -> Dict[str, Any]:
+    """One run step by step (``ref`` is a public session ref)."""
+    refresh_expose_local_labels()
+    detail = build_run_detail(ref)
+    return {"found": False} if detail is None else {"found": True, **detail}
+
+
+def resolve_ref(kind: str, ref: str, board: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """Raw Hermes ids behind a public ref, read fresh from Hermes' stores."""
+    if kind == "cron":
+        for raw_profile, home in profile_stores(collect_profiles()):
+            data = read_json(home / "cron" / "jobs.json") or {}
+            for job in as_list(data.get("jobs") if isinstance(data, dict) else None):
+                if isinstance(job, dict) and job.get("id") and public_ref(job["id"], "cron") == ref:
+                    return {"job_id": str(job["id"]), "profile": raw_profile}
+        return None
+    if kind == "task":
+        for found_board in discover_kanban_boards():
+            if board is not None and found_board["slug"] != board:
+                continue
+            con = _kanban_conn(kanban_board_db(str(found_board["_slug"])))
+            if con is None:
+                continue
+            try:
+                ids = [row["id"] for row in con.execute("SELECT id FROM tasks")]
+            except sqlite3.Error as exc:
+                log_read_warning("task resolve scan failed", exc)
+                continue
+            finally:
+                con.close()
+            for task_id in ids:
+                if (str(task_id) if EXPOSE_LOCAL_LABELS else safe_id(task_id, "task")) == ref:
+                    return {"task_id": str(task_id), "board": str(found_board["_slug"])}
+        return None
+    if kind == "profile":
+        profile = next((p for p in collect_profiles() if p["id"] == ref), None)
+        return {"profile": str(profile["name"])} if profile else None
+    return None
+
+
+@router.get("/resolve")
+def resolve(kind: str, ref: str, board: Optional[str] = None) -> Dict[str, Any]:
+    """Raw ids for one confirmed control, looked up at click time.
+
+    Payloads carry only public refs; the page asks for the raw cron job id,
+    task id and board, or profile name immediately before it calls Hermes'
+    own endpoint. Refused when controls are turned off.
+    """
+    refresh_expose_local_labels()
+    if not controls_enabled():
+        return {"allowed": False, "reason": "Controls are off (dashboard.olympus.controls is false in config.yaml)."}
+    found = resolve_ref(kind, ref, board)
+    return {"allowed": True, "found": found is not None, **(found or {})}
+
+
+@router.post("/actions")
+def log_action(action: str, kind: str, ref: str, label: str, ok: bool, agent: Optional[str] = None, detail: Optional[str] = None) -> Dict[str, Any]:
+    """Record a control the operator confirmed and what Hermes answered."""
+    if action not in ACTION_LABELS or kind not in ("task", "cron"):
+        return {"recorded": False, "reason": "not an Olympus control"}
+    con = history_db()
+    try:
+        record_action(con, {
+            "agent": agent, "action": action, "target_kind": kind, "target_ref": ref,
+            "label": redact_text(label, 120), "ok": ok, "detail": redact_text(detail, 200) if detail else None,
+        })
+    finally:
+        con.close()
+    return {"recorded": True}

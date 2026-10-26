@@ -4,48 +4,89 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Olympus Visual Fixture</title>
-    <link rel="stylesheet" href="../../dashboard/dist/style.css">
     <style>
+      /* Hermes Teal, the default Hermes theme, as the dashboard defines it
+         (web/src/index.css). ?theme=light switches to a light preset to
+         check that Olympus follows the theme. */
+      :root {
+        --midground-base: #ffe6cb;
+        --background-base: #041c1c;
+        --radius: 0.5rem;
+        --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+      }
+
+      :root[data-theme="light"] {
+        --midground-base: #170d02;
+        --background-base: #e8f2fd;
+      }
+
+      /* Exactly the --color-* set the live dashboard defines: Hermes builds
+         with Tailwind v4, which emits no --color-foreground or
+         --color-background, so neither exists here either. */
+      :root {
+        --color-midground: var(--midground-base);
+        --color-text-secondary: color-mix(in srgb, var(--midground-base) 80%, transparent);
+        --color-secondary: color-mix(in srgb, var(--midground-base) 6%, var(--background-base));
+        --color-card: color-mix(in srgb, var(--midground-base) 4%, var(--background-base));
+        --color-card-foreground: var(--midground-base);
+        --color-primary: var(--midground-base);
+        --color-primary-foreground: var(--background-base);
+        --color-muted: color-mix(in srgb, var(--midground-base) 8%, var(--background-base));
+        --color-muted-foreground: color-mix(in srgb, var(--midground-base) 80%, transparent);
+        --color-accent: color-mix(in srgb, var(--midground-base) 10%, var(--background-base));
+        --color-destructive: #fb2c36;
+        --color-success: #4ade80;
+        --color-warning: #ffbd38;
+        --color-border: color-mix(in srgb, var(--midground-base) 15%, transparent);
+        --color-input: color-mix(in srgb, var(--midground-base) 15%, transparent);
+        --color-ring: var(--midground-base);
+        --color-popover: color-mix(in srgb, var(--midground-base) 4%, var(--background-base));
+        --color-popover-foreground: var(--midground-base);
+      }
+
+      :root[data-theme="light"] {
+        --color-destructive: #d4141c;
+        --color-success: #15803d;
+        --color-warning: #b45309;
+      }
+
       html,
       body {
         margin: 0;
         min-height: 100%;
-        background: #120d12;
-        color: #f6f0df;
+        background: var(--background-base);
+        color: var(--midground-base);
       }
 
       body {
-        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        font-size: 15px;
       }
 
       .fixture-shell {
         display: grid;
-        grid-template-columns: 232px minmax(0, 1fr);
+        grid-template-columns: 220px minmax(0, 1fr);
         min-height: 100vh;
       }
 
       .fixture-sidebar {
         padding: 18px 14px;
-        border-right: 1px solid rgba(246, 240, 223, 0.16);
-        background: #1a1117;
+        border-right: 1px solid var(--color-border);
       }
 
-      .fixture-sidebar h1 {
-        margin: 0 0 24px;
-        font-family: Charter, "Iowan Old Style", "Palatino Linotype", Georgia, ui-serif, serif;
-        font-size: 24px;
-        line-height: 1;
-        letter-spacing: 0;
+      .fixture-sidebar strong {
+        display: block;
+        margin: 0 0 20px;
+        font-size: 14px;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
       }
 
       .fixture-sidebar span {
         display: block;
-        padding: 9px 0;
-        color: rgba(246, 240, 223, 0.7);
-        font-size: 12px;
-        letter-spacing: 0;
-        text-transform: uppercase;
+        padding: 7px 0;
+        color: var(--color-muted-foreground);
+        font-size: 13px;
       }
 
       .fixture-main {
@@ -58,15 +99,11 @@
         }
 
         .fixture-sidebar {
-          position: sticky;
-          top: 0;
-          z-index: 10;
           padding: 10px 14px;
         }
 
-        .fixture-sidebar h1 {
+        .fixture-sidebar strong {
           margin: 0;
-          font-size: 16px;
         }
 
         .fixture-sidebar span {
@@ -74,18 +111,20 @@
         }
       }
     </style>
+    <link rel="stylesheet" href="../../dashboard/dist/style.css">
     <script src="../../node_modules/react/umd/react.development.js"></script>
     <script src="../../node_modules/react-dom/umd/react-dom.development.js"></script>
     <script src="./olympus-fixture-data.js"></script>
+    <script src="./olympus-fixture-agents.js"></script>
   </head>
   <body>
     <div class="fixture-shell">
       <aside class="fixture-sidebar" aria-label="Fixture navigation">
-        <h1>Hermes Agent</h1>
+        <strong>Hermes Agent</strong>
         <span>Chat</span>
         <span>Sessions</span>
-        <span>Skills</span>
         <span>Kanban</span>
+        <span>Cron</span>
         <span>Olympus</span>
       </aside>
       <main class="fixture-main">
@@ -95,41 +134,147 @@
     <script>
       const React = window.React;
       const ReactDOM = window.ReactDOM;
+      const params = new URLSearchParams(window.location.search);
+      const fixtureState = params.get("state") || "noisy";
+      if (params.get("theme") === "light") document.documentElement.dataset.theme = "light";
 
-      function FixtureBadge(props) {
-        return React.createElement("span", props, props.children);
+      // The agent payloads come from a real scan (scripts/build-fixture-agents.py).
+      // Every timestamp is shifted so "now" in that scan is now in the browser.
+      // state=no-labels uses the scan with local labels hidden; state=empty a
+      // fresh install with one idle agent.
+      const variant = { "no-labels": "hidden", empty: "fresh" }[fixtureState] || "labelled";
+      const generated = window.__OLYMPUS_FIXTURE_AGENTS__[variant];
+      const shift = Date.now() - Date.parse(generated.generated_at);
+      const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+      function shifted(value) {
+        if (typeof value === "string" && ISO.test(value)) return new Date(Date.parse(value) + shift).toISOString();
+        if (Array.isArray(value)) return value.map(shifted);
+        if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, shifted(v)]));
+        return value;
+      }
+      const agentData = shifted(generated);
+      const data = window.__OLYMPUS_FIXTURE_DATA__;
+      Object.assign(data, {
+        generated_at: new Date().toISOString(),
+        controls: params.get("controls") !== "off",
+        agents: agentData.agents,
+        needs_you: agentData.needs_you
+      });
+      const details = agentData.details;
+      // ?agents=<n> grows the roster to n agents for scale checks.
+      const extra = Number(params.get("agents") || 0);
+      if (extra) {
+        const template = data.agents.agents[data.agents.agents.length - 1];
+        data.agents.agents = data.agents.agents.concat(Array.from({ length: extra }, (_, idx) => Object.assign({}, template, {
+          id: "profile:extra_" + idx,
+          label: "Profile " + (idx + 10),
+          avatar: String(idx + 10)
+        })));
+        data.agents.summary = Object.assign({}, data.agents.summary, { agents: data.agents.agents.length });
       }
 
-      function FixtureButton(props) {
-        return React.createElement("button", props, props.children);
-      }
+      // ?delay=<ms> holds every response that long; ?base=<prefix> mimics a
+      // reverse-proxied dashboard; ?fail=<action path> makes that Hermes
+      // endpoint answer with an error. __OLYMPUS_FETCH_LOG__ records request
+      // counts, overlap, and every write the page sent.
+      const fixtureDelay = Number(params.get("delay") || 0);
+      const failPath = params.get("fail");
+      if (params.get("base")) window.__HERMES_BASE_PATH__ = params.get("base");
+      const fetchLog = window.__OLYMPUS_FETCH_LOG__ = { started: 0, settled: 0, inFlight: 0, peak: 0, writes: [] };
 
-      const fixtureParams = new URLSearchParams(window.location.search);
-      const fixtureState = fixtureParams.get("state") || "noisy";
-
-      async function fixtureFetchJSON(url) {
-        if (fixtureState !== "static-user-plugin") return window.__OLYMPUS_FIXTURE_DATA__;
-        if (String(url).startsWith("/api/plugins/olympus/overview")) {
-          throw new Error("404 /api/plugins/olympus/overview");
+      async function fixtureFetchJSON(url, init) {
+        fetchLog.started += 1;
+        fetchLog.inFlight += 1;
+        fetchLog.peak = Math.max(fetchLog.peak, fetchLog.inFlight);
+        try {
+          if (fixtureDelay) await new Promise((resolve) => setTimeout(resolve, fixtureDelay));
+          return await fixtureResponse(String(url), init || {});
+        } finally {
+          fetchLog.inFlight -= 1;
+          fetchLog.settled += 1;
         }
-        const responses = {
-          "/api/dashboard/plugins": [{ name: "olympus", source: "user", has_api: false }],
-          "/api/status": { version: "fixture", gateway_platforms: {}, active_sessions: 1 },
-          "/api/profiles": { profiles: [{ name: "default" }, { name: "vulcan", is_active: true }] },
-          "/api/skills": [{ name: "skill-one" }, { name: "skill-two" }],
-          "/api/sessions/stats": { total: 3, active_store: 3, archived: 0, messages: 12 },
-          "/api/cron/jobs": { jobs: [{ id: "job-one" }] }
-        };
-        return responses[String(url).split("?")[0]] || {};
+      }
+
+      function query(url) {
+        return new URLSearchParams(url.split("?")[1] || "");
+      }
+
+      // Hermes write endpoints: record the call, then change the fixture
+      // data the way Hermes would, so the next refresh shows the result.
+      function hermesWrite(url, init) {
+        const path = url.split("?")[0];
+        fetchLog.writes.push({ method: init.method, path, query: url.split("?")[1] || "", body: init.body ? JSON.parse(init.body) : null });
+        if (failPath && path.endsWith(failPath)) throw new Error("409: cannot " + failPath + " (fixture refusal)");
+        const task = path.match(/\/tasks\/([^/]+)/);
+        const job = path.match(/\/cron\/jobs\/([^/]+)\/(pause|resume|trigger)/);
+        const ref = task ? decodeURIComponent(task[1]) : job ? decodeURIComponent(job[1]) : null;
+        const resolves = (init.method === "PATCH" && init.body && JSON.parse(init.body).status === "ready") || /\/(reclaim|reassign|trigger|pause)$/.test(path);
+        if (ref && resolves) {
+          data.needs_you = data.needs_you.filter((item) => !item.actions.some((action) => action.target.ref === ref));
+          data.agents.agents.forEach((agent) => {
+            agent.issues = data.needs_you.filter((item) => item.agent && item.agent.id === agent.id).length;
+          });
+        }
+        return { ok: true };
+      }
+
+      async function fixtureResponse(url, init) {
+        const path = url.split("?")[0];
+        if (path === "/api/plugins/olympus/fixes") {
+          const key = query(url).get("key");
+          if (init.method === "DELETE") {
+            data.fixes = data.fixes.filter((fix) => fix.key !== key);
+            return { tracked: false };
+          }
+          const item = data.tuning.agent_hq.recommendations.find((rec) => rec.key === key)
+            || data.needs_you.find((rec) => rec.key === key);
+          data.fixes = [{ key, title: item.title, kind: item.kind, baseline: item.count || null, current: item.count || null, verdict: "unchanged", marked_at: data.generated_at, days_tracked: 0, agent: item.agent ? item.agent.id : null }].concat(data.fixes);
+          return { tracked: true, fixes: data.fixes };
+        }
+        if (path === "/api/plugins/olympus/open/session") {
+          return { href: query(url).get("ref") === "session:91be04d6aa" ? null : "/chat?resume=fixture-session&profile=default" };
+        }
+        if (path === "/api/plugins/olympus/agent") {
+          const ref = query(url).get("ref");
+          const added = ref.startsWith("profile:extra_") && data.agents.agents.find((agent) => agent.id === ref);
+          const detail = details[ref] || (added && Object.assign({}, details[data.agents.agents[6].id], { agent: added }));
+          if (!detail) return { found: false };
+          const live = data.agents.agents.find((agent) => agent.id === detail.agent.id);
+          return Object.assign({}, detail, {
+            agent: live || detail.agent,
+            needs_you: data.needs_you.filter((item) => item.agent && item.agent.id === detail.agent.id)
+          });
+        }
+        if (path === "/api/plugins/olympus/performance") {
+          return agentData.performance[query(url).get("days")] || { error: "days must be one of 7, 30" };
+        }
+        if (path === "/api/plugins/olympus/run") {
+          return agentData.runs[query(url).get("ref")] || { found: false };
+        }
+        if (path === "/api/plugins/olympus/resolve") {
+          if (!data.controls) return { allowed: false, reason: "Controls are off (dashboard.olympus.controls is false in config.yaml)." };
+          const q = query(url);
+          const kind = q.get("kind");
+          const ref = q.get("ref");
+          if (kind === "cron") return { allowed: true, found: true, job_id: ref, profile: "fixture" };
+          if (kind === "task") return { allowed: true, found: true, task_id: ref, board: q.get("board") || "default" };
+          return { allowed: true, found: true, profile: ref.replace("profile:", "") };
+        }
+        if (path === "/api/plugins/olympus/actions") {
+          fetchLog.writes.push({ method: "POST", path, query: url.split("?")[1] || "", body: null });
+          return { recorded: true };
+        }
+        if (path.startsWith("/api/cron/jobs/") || path.startsWith("/api/plugins/kanban/")) return hermesWrite(url, init);
+        if (fixtureState !== "static-user-plugin") return data;
+        if (path === "/api/plugins/olympus/overview") throw new Error("404 /api/plugins/olympus/overview");
+        if (path === "/api/profiles") return { profiles: [{ name: "default" }, { name: "vulcan" }, { name: "iris" }] };
+        return {};
       }
 
       window.__HERMES_PLUGIN_SDK__ = {
         React,
         hooks: React,
-        components: {
-          Badge: FixtureBadge,
-          Button: FixtureButton
-        },
+        components: {},
         fetchJSON: fixtureFetchJSON
       };
 
