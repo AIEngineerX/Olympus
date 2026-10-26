@@ -138,7 +138,7 @@ class PerformanceTest(unittest.TestCase):
             {"runs": 5, "succeeded": 2, "failed": 1, "cut_off": 1, "open": 1, "subagent_runs": 1, "success_rate": 0.5},
         )
         # Finished run times: 120, 600, 900, 1800 seconds.
-        self.assertEqual((default["median_seconds"], default["p90_seconds"]), (600.0, 1800.0))
+        self.assertEqual((default["median_seconds"], default["p90_seconds"]), (750.0, 1800.0))
         self.assertEqual(default["tool_calls_per_run"], 1.4)
         # Tools: terminal 1 of 2 failed, web_search 1 of 1, write_file and patch landed.
         tools = {t["tool"]: (t["calls"], t["failures"]) for t in default["tools"]}

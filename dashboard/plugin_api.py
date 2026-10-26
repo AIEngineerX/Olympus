@@ -293,7 +293,7 @@ def safe_int(value: Any, default: int = 0) -> int:
     except (TypeError, ValueError):
         try:
             return int(float(value))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return default
 
 
@@ -1683,7 +1683,7 @@ def _cron_last_run_tool_failures(db: Path, jobs: List[Any]) -> Dict[str, Dict[st
                 "ORDER BY started_at DESC LIMIT 1",
                 (last_run, len(prefix), prefix),
             ).fetchone()
-            if row is None or last_run - safe_float(row["ended_at"]) > CRON_RUN_SETTLE_SECONDS:
+            if row is None or not 0 <= last_run - safe_float(row["ended_at"]) <= CRON_RUN_SETTLE_SECONDS:
                 continue
             failed = _sessions_with_every_tool_failed(con, "s.id = ?", (row["id"],)).get(str(row["id"]))
             if failed:
@@ -4156,10 +4156,16 @@ def build_agent_detail(scan: Dict[str, Any], agent_id: str, actions: List[Dict[s
                 "state": "error" if failed else "ok",
             })
     for action in actions:
+        # The log keeps the label and Hermes' reply as they were when the
+        # operator acted; show them only while labels are on now.
+        ref = str(action["target_ref"])
+        if not EXPOSE_LOCAL_LABELS and ":" not in ref:
+            ref = safe_id(ref, str(action["target_kind"]))  # a raw id logged while labels were on
+        label = action["label"] if EXPOSE_LOCAL_LABELS else display_name(ref, ref, "Task" if action["target_kind"] == "task" else "Job")
         timeline.append({
             "at": ts_to_iso(action["at"]), "_ts": float(action["at"]), "kind": "action",
-            "text": f"You chose {ACTION_LABELS.get(action['action'], action['action'])}: {action['label']}",
-            "detail": action.get("detail"), "state": "ok" if action["ok"] else "error",
+            "text": f"You chose {ACTION_LABELS.get(action['action'], action['action'])}: {label}",
+            "detail": public_error(action.get("detail")), "state": "ok" if action["ok"] else "error",
         })
     timeline.sort(key=lambda event: event["_ts"], reverse=True)
     days = scan["agent_activity"].get(raw, {}).get("days", [])
@@ -4443,7 +4449,7 @@ def summarize_runs(runs: List[Dict[str, Any]], tools: Dict[str, Dict[str, int]],
             "failed": sum(1 for r in on_day if r["outcome"] == "failed"),
             "cut_off": sum(1 for r in on_day if r["outcome"] == "cut_off"),
             "open": sum(1 for r in on_day if r["outcome"] == "open"),
-            "median_seconds": percentile(day_durations, 0.5),
+            "median_seconds": statistics.median(day_durations) if day_durations else None,
             "tokens": sum(r["tokens"] for r in on_day),
             "cost_usd": round(sum(r["cost"] for r in on_day), 4),
         })
@@ -4452,7 +4458,7 @@ def summarize_runs(runs: List[Dict[str, Any]], tools: Dict[str, Dict[str, int]],
         "subagent_runs": sum(1 for r in runs if r["subagent"]),
         **counts,
         "success_rate": round(counts["succeeded"] / len(finished), 3) if finished else None,
-        "median_seconds": percentile(durations, 0.5),
+        "median_seconds": statistics.median(durations) if durations else None,
         "p90_seconds": percentile(durations, 0.9),
         "tool_calls_per_run": round(sum(r["tool_calls"] for r in top) / len(top), 1) if top else 0,
         "tokens_per_run": int(sum(r["tokens"] for r in top) / len(top)) if top else 0,
