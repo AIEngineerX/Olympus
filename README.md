@@ -22,7 +22,9 @@ problems it targets, and the Hermes issues that show people have them, are in
   its scheduled jobs and Kanban work, how it works, and whether your fixes
   worked.
 - **Performance.** For 7 or 30 days: runs, how many succeeded, typical and slow
-  run time, tool calls that failed, and cost, per agent and across all of them.
+  run time, tool calls that failed, and cost, per agent and across all of them,
+  each compared with the same number of days before ("−4 pts vs the 7 days
+  before", "7% faster than before") beside a success-rate-per-day line.
   Outcomes follow Hermes' own session status, except that a scheduled run in
   which every tool call failed counts as failed. Any run opens step by step.
 - **Checks.** Findings across your agents, Kanban backlog grouped by who has to

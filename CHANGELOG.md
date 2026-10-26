@@ -6,7 +6,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Performance shows the trend: each agent's success rate, run time, cost and
+  run count for the window are compared with the equal window before it
+  (`previous` and `trend` on every agent and on the fleet in `GET /performance`),
+  and the table carries a thin success-rate-per-day line beside the comparison
+  in words. "−4 pts vs the 7 days before" and "7% faster than before" are
+  sentences the view could not say before. With the panel open the table keeps
+  Agent, Runs, Succeeded, Trend and Cost.
+
 ### Changed
+
+- The visual fixture seeds its history at noon UTC on each day, so rebuilding
+  it at a different hour no longer moves runs across the window boundary and
+  changes the counts the tests assert. Coder now has a prior week of runs.
 
 - Olympus no longer opens a profile's `.env` file for any reason. Which
   messaging platforms a profile has configured now comes from Hermes' own

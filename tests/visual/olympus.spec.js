@@ -185,6 +185,14 @@ for (const size of [DESKTOP, MOBILE]) {
   test(`performance view at ${size.width}px is readable, with a run open`, async ({ page }, testInfo) => {
     const messages = await openFixture(page, testInfo, size, { state: "noisy", view: "performance", agent: "profile:coder" });
     await expect(page.locator(".olympus-perf-table tbody tr")).toHaveCount(7);
+    // Trend: a success-rate line per day and the comparison with the days before, in words.
+    const trendHeader = page.locator(".olympus-perf-table th", { hasText: "Trend" });
+    await expect(trendHeader).toHaveCount(1);
+    if (size === DESKTOP) await expect(trendHeader).toBeVisible(); // cards name their own fields at 390 px
+    const trendCells = page.locator(".olympus-perf-table td[data-label='Trend']");
+    await expect(trendCells).toHaveCount(7);
+    await expect(trendCells.locator(".olympus-spark[role='img']").first()).toBeVisible();
+    await expect(trendCells.filter({ hasText: /days before/ }).first()).toBeVisible();
     await expect(page.getByRole("complementary", { name: "Performance of Coder" })).toBeVisible();
     expectClean(await collectVisualMetrics(page, size === MOBILE ? 32 : 24), messages, { name: "performance" });
 

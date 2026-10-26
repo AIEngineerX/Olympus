@@ -153,6 +153,40 @@ class PerformanceTest(unittest.TestCase):
         self.assertEqual(report["fleet"]["runs"], 5)
         self.assertIn("no per-call latency", report["basis"])
 
+    def test_this_week_is_compared_with_the_week_before(self):
+        # Two runs 9 and 10 days ago, both succeeded, 300 s each: the week
+        # before was perfect and quick, so this week reads worse and slower.
+        now = self.now
+        con = sqlite3.connect(self.home / "state.db")
+        con.executemany(
+            "INSERT INTO sessions (id, source, title, started_at, ended_at, end_reason, tool_call_count, api_call_count, "
+            "input_tokens, output_tokens, actual_cost_usd) VALUES (?, 'cli', ?, ?, ?, 'cli_close', 0, 1, 100, 10, 0.05)",
+            [("prev-1", "Earlier run", now - 9 * 86400, now - 9 * 86400 + 300),
+             ("prev-2", "Another earlier run", now - 10 * 86400, now - 10 * 86400 + 300)],
+        )
+        con.commit()
+        con.close()
+
+        report = plugin_api.performance(7)
+        default = report["agents"][0]
+        self.assertEqual(default["runs"], 5, "the earlier runs stay out of this week's figures")
+        self.assertEqual({k: default["previous"][k] for k in ("runs", "succeeded", "success_rate", "median_seconds", "cost_usd")},
+                         {"runs": 2, "succeeded": 2, "success_rate": 1.0, "median_seconds": 300.0, "cost_usd": 0.1})
+        trend = default["trend"]
+        self.assertEqual(trend["previous_runs"], 2)
+        self.assertEqual(trend["success_rate_points"], -0.5)       # 50% now against 100% before
+        self.assertEqual(trend["median_change"], 1.5)              # 750 s against 300 s
+        self.assertEqual(trend["p90_change"], 5.0)                 # 1800 s against 300 s
+        self.assertEqual(trend["runs_change"], 1.5)                # 5 runs against 2
+        self.assertEqual(report["fleet"]["trend"]["success_rate_points"], -0.5)
+        self.assertIn("7 days before them", report["basis"])
+
+        # With nothing in the week before, every comparison is absent, not zero.
+        month = plugin_api.performance(30)
+        self.assertEqual(month["agents"][0]["previous"]["runs"], 0)
+        self.assertEqual(month["agents"][0]["trend"]["success_rate_points"], None)
+        self.assertEqual(month["agents"][0]["trend"]["median_change"], None)
+
     def test_a_session_quiet_for_a_day_counts_as_finished(self):
         con = sqlite3.connect(self.home / "state.db")
         con.execute("INSERT INTO sessions (id, source, title, started_at, last_activity_at) VALUES ('quiet-1', 'kanban', 'Abandoned', ?, ?)",

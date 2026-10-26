@@ -60,11 +60,17 @@ def seed(home: Path, now: float) -> None:
         con.commit()
         con.close()
 
+    # The performance windows start at UTC midnight, so a run seeded "N days
+    # ago" must sit well inside its UTC day or the counts the visual tests
+    # assert would depend on the hour of the rebuild. Runs start at noon UTC
+    # plus a few hours.
+    today = datetime.fromtimestamp(now, tz=timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
     def history(prefix: str, days: int, per_day: int, scale: int) -> list[tuple]:
         rows = []
         for day in range(1, days):
             for n in range(per_day + (day % 3)):
-                start = now - day * 86400 - n * 3600
+                start = today - day * 86400 + 12 * 3600 + n * 3600
                 length = 120 + ((day * 7 + n * 13 + len(prefix) * 5) % 24) * 60  # 2 to 25 minutes
                 rows.append((f"{prefix}-{day}-{n}", "cli", None, start, start + length, "completed", start + length,
                              scale * (2 + n), scale // 2, scale * 6, round(scale / 40000, 4), None))
@@ -99,7 +105,8 @@ def seed(home: Path, now: float) -> None:
     )
     con.commit()
     con.close()
-    sessions(home / "profiles" / "coder", history("c", 7, 3, 24000) + [
+    # Coder has a prior week too, so the performance trend compares two windows.
+    sessions(home / "profiles" / "coder", history("c", 14, 3, 24000) + [
         ("coder-kanban", "kanban", "Fix flaky checkout test", now - 2400, None, None, now - 60, 30000, 7000, 140000, 0.88, None),
     ])
     # Behaviour only Olympus sees: a coder run that looped (58 tool calls,

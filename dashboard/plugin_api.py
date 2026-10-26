@@ -4456,39 +4456,96 @@ def summarize_runs(runs: List[Dict[str, Any]], tools: Dict[str, Dict[str, int]],
     }
 
 
+def window_summary(runs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The outcome, run-time and cost figures for one window of runs (no tools, no daily)."""
+    top = [r for r in runs if not r["subagent"] and not r["rotated"]]
+    finished = [r for r in top if r["outcome"] != "open"]
+    durations = sorted(r["duration"] for r in finished if r["duration"] is not None)
+    succeeded = sum(1 for r in top if r["outcome"] == "succeeded")
+    return {
+        "runs": len(top),
+        "succeeded": succeeded,
+        "failed": sum(1 for r in top if r["outcome"] == "failed"),
+        "cut_off": sum(1 for r in top if r["outcome"] == "cut_off"),
+        "success_rate": round(succeeded / len(finished), 3) if finished else None,
+        "median_seconds": statistics.median(durations) if durations else None,
+        "p90_seconds": percentile(durations, 0.9),
+        "cost_usd": round(sum(r["cost"] for r in runs), 4),
+    }
+
+
+def _change(now_value: Optional[float], before: Optional[float]) -> Optional[float]:
+    """Relative change from ``before`` to ``now_value`` (0.25 = a quarter more); None without both."""
+    if now_value is None or before is None or before == 0:
+        return None
+    return round((now_value - before) / before, 3)
+
+
+def trend_between(current: Dict[str, Any], previous: Dict[str, Any]) -> Dict[str, Any]:
+    """How this window compares with the equal window before it.
+
+    ``success_rate_points`` is the difference in percentage points (0.08 = eight
+    points better); the ``*_change`` values are relative (0.25 = a quarter more
+    time, money or runs). Each is None when either window lacks the figure.
+    """
+    rate_now, rate_before = current.get("success_rate"), previous.get("success_rate")
+    return {
+        "previous_runs": previous["runs"],
+        "success_rate_points": round(rate_now - rate_before, 3) if rate_now is not None and rate_before is not None else None,
+        "median_change": _change(current.get("median_seconds"), previous.get("median_seconds")),
+        "p90_change": _change(current.get("p90_seconds"), previous.get("p90_seconds")),
+        "cost_change": _change(current.get("cost_usd"), previous.get("cost_usd")),
+        "runs_change": _change(current.get("runs"), previous.get("runs")),
+    }
+
+
 def build_performance(profiles: List[Dict[str, Any]], days: int, now: Optional[float] = None) -> Dict[str, Any]:
-    """Per-agent performance for the last ``days`` UTC days, plus fleet totals."""
+    """Per-agent performance for the last ``days`` UTC days, plus fleet totals,
+    each compared with the ``days`` before them."""
     now = time.time() if now is None else now
     day_list = [
         datetime.fromtimestamp(now - offset * 86400, tz=timezone.utc).date().isoformat()
         for offset in range(days - 1, -1, -1)
     ]
     since = datetime.fromisoformat(day_list[0]).replace(tzinfo=timezone.utc).timestamp()
+    before_since = since - days * 86400
     agents: List[Dict[str, Any]] = []
     all_runs: List[Dict[str, Any]] = []
+    all_previous: List[Dict[str, Any]] = []
     all_tools: Dict[str, Dict[str, int]] = {}
     for profile in profiles:
         db = Path(str(profile["_path"])) / "state.db"
-        runs = _store_runs(db, since)
+        both = _store_runs(db, before_since)
+        runs = [r for r in both if r["started"] >= since]
+        previous_runs = [r for r in both if r["started"] < since]
         tools = _store_tool_outcomes(db, since)
         all_runs.extend(runs)
+        all_previous.extend(previous_runs)
         for name, stats in tools.items():
             merged = all_tools.setdefault(name, {"calls": 0, "failures": 0})
             merged["calls"] += stats["calls"]
             merged["failures"] += stats["failures"]
-        agents.append({"id": profile["id"], "label": profile["label"], "avatar": agent_avatar(str(profile["label"])), **summarize_runs(runs, tools, day_list)})
+        summary = summarize_runs(runs, tools, day_list)
+        previous = window_summary(previous_runs)
+        agents.append({
+            "id": profile["id"], "label": profile["label"], "avatar": agent_avatar(str(profile["label"])),
+            **summary, "previous": previous, "trend": trend_between(summary, previous),
+        })
     fleet = summarize_runs(all_runs, all_tools, day_list)
+    fleet_previous = window_summary(all_previous)
     return {
         "days": days,
         "generated_at": now_iso(),
-        "fleet": {k: v for k, v in fleet.items() if k not in ("slowest", "failed_runs")},
+        "fleet": {**{k: v for k, v in fleet.items() if k not in ("slowest", "failed_runs")},
+                  "previous": fleet_previous, "trend": trend_between(fleet, fleet_previous)},
         "agents": agents,
         "basis": (
             "A run is a top-level session (subagents and sessions that rolled over are counted separately). "
             "Outcome follows Hermes: a run failed when it ended on a provider or agent error, and was cut off "
             "when it ended waiting on a tool or a reply. A scheduled run also failed when every tool call in it failed, "
             "even if Hermes booked it complete. Run time is start to end; Hermes records no per-call latency. "
-            "Tool failures use the rule Hermes uses to mark failed tool calls."
+            "Tool failures use the rule Hermes uses to mark failed tool calls. "
+            f"The trend compares these {days} days with the {days} days before them."
         ),
     }
 

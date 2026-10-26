@@ -993,10 +993,67 @@
 
   function runTimes(row) {
     if (row.median_seconds == null) return el("span", { className: "olympus-muted" }, "No finished runs");
-    return el("span", null, formatDuration(row.median_seconds), el("small", null, "slow " + formatDuration(row.p90_seconds)));
+    const change = row.trend ? row.trend.median_change : null;
+    return el("span", null, formatDuration(row.median_seconds),
+      el("small", null, "slow " + formatDuration(row.p90_seconds)),
+      change != null && Math.abs(change) >= 0.05 ? el("small", { className: change >= SLOWER_SHARE ? "olympus-attention-text" : null }, speedText(change)) : null);
   }
 
-  function PerformanceTable({ agents, selected, onSelect, sort, onSort }) {
+  // Trend: this window against the equal window before it. Words carry the
+  // direction; colour only underlines a clear turn for the worse.
+  const WORSE_POINTS = -0.05;
+  const SLOWER_SHARE = 0.25;
+
+  function speedText(change) {
+    return Math.round(Math.abs(change) * 100) + "% " + (change > 0 ? "slower" : "faster") + " than before";
+  }
+
+  function pointsText(points, days) {
+    const whole = Math.round(Math.abs(points) * 100);
+    if (whole === 0) return "Same as the " + days + " days before";
+    return (points > 0 ? "+" : "−") + whole + " pts vs the " + days + " days before";
+  }
+
+  // Success rate per day as one thin line; days with nothing finished leave a gap.
+  function Sparkline({ daily, label }) {
+    const list = asList(daily);
+    const rates = list.map((day) => {
+      const finished = Number(day.succeeded || 0) + Number(day.failed || 0) + Number(day.cut_off || 0);
+      return finished ? Number(day.succeeded || 0) / finished : null;
+    });
+    if (!rates.some((rate) => rate != null)) return null;
+    const width = 84, height = 22, pad = 3;
+    const x = (idx) => list.length > 1 ? pad + (idx / (list.length - 1)) * (width - 2 * pad) : width / 2;
+    const y = (rate) => height - pad - rate * (height - 2 * pad);
+    let path = "";
+    let open = false;
+    let last = null;
+    rates.forEach((rate, idx) => {
+      if (rate == null) { open = false; return; }
+      path += (open ? " L" : " M") + x(idx).toFixed(1) + " " + y(rate).toFixed(1);
+      open = true;
+      last = { x: x(idx), y: y(rate) };
+    });
+    const summary = list.map((day, idx) => dayLabel(day.day, idx, list.length) + (rates[idx] == null ? " none finished" : " " + percent(rates[idx]))).filter((text) => text.trim()).join(", ");
+    return el("span", { className: "olympus-spark", role: "img", "aria-label": label + " by day: " + summary, title: summary },
+      el("svg", { viewBox: "0 0 " + width + " " + height, "aria-hidden": "true", focusable: "false" },
+        el("line", { x1: pad, x2: width - pad, y1: height - pad, y2: height - pad }),
+        el("path", { d: path.trim() }),
+        last ? el("circle", { cx: last.x.toFixed(1), cy: last.y.toFixed(1), r: 2.5 }) : null
+      )
+    );
+  }
+
+  function TrendCell({ row, days }) {
+    const trend = row.trend || {};
+    const points = trend.success_rate_points;
+    let text;
+    if (points == null) text = el("small", { className: "olympus-muted" }, trend.previous_runs ? "Nothing finished before" : "No runs the " + days + " days before");
+    else text = el("small", { className: points <= WORSE_POINTS ? "olympus-attention-text" : null }, pointsText(points, days));
+    return el("span", { className: "olympus-trend" }, el(Sparkline, { daily: row.daily, label: "Success rate" }), text);
+  }
+
+  function PerformanceTable({ agents, selected, onSelect, sort, onSort, days }) {
     const rows = asList(agents).slice().sort(PERF_SORTS[sort] || PERF_SORTS.success);
     function header(key, label) {
       const active = sort === key;
@@ -1009,6 +1066,7 @@
         header("name", "Agent"),
         header("runs", "Runs"),
         header("success", "Succeeded"),
+        el("th", { scope: "col" }, "Trend"),
         el("th", { scope: "col" }, "Typical run"),
         el("th", { scope: "col" }, "Tools per run"),
         el("th", { scope: "col" }, "Tool failures"),
@@ -1028,6 +1086,7 @@
         el("td", { "data-label": "Runs" }, formatCount(row.runs), row.subagent_runs ? el("small", null, " +" + row.subagent_runs + " subagent") : null),
         el("td", { "data-label": "Succeeded" }, row.success_rate == null ? el("span", { className: "olympus-muted" }, "None finished") : el("span", { className: cx("olympus-rate", rateClass(row.success_rate)) },
           percent(row.success_rate), el("small", null, [row.failed ? row.failed + " failed" : null, row.cut_off ? row.cut_off + " cut off" : null].filter(Boolean).join(", ")))),
+        el("td", { "data-label": "Trend" }, el(TrendCell, { row, days })),
         el("td", { "data-label": "Typical run" }, runTimes(row)),
         el("td", { "data-label": "Tools per run" }, String(row.tool_calls_per_run)),
         el("td", { "data-label": "Tool failures" }, row.tool_error_rate == null ? el("span", { className: "olympus-muted" }, "No tool calls") :
@@ -1084,8 +1143,10 @@
       ),
       el("dl", { className: "olympus-facts" },
         el("div", null, el("dt", null, "Runs"), el("dd", null, formatCount(row.runs) + (row.open ? " (" + row.open + " running)" : ""))),
-        el("div", null, el("dt", null, "Succeeded"), el("dd", { className: rateClass(row.success_rate) }, row.success_rate == null ? "None finished" : percent(row.success_rate) + " of " + formatCount(row.succeeded + row.failed + row.cut_off))),
-        el("div", null, el("dt", null, "Typical run"), el("dd", null, row.median_seconds == null ? "None finished" : formatDuration(row.median_seconds) + ", slow " + formatDuration(row.p90_seconds))),
+        el("div", null, el("dt", null, "Succeeded"), el("dd", { className: rateClass(row.success_rate) }, row.success_rate == null ? "None finished" : percent(row.success_rate) + " of " + formatCount(row.succeeded + row.failed + row.cut_off),
+          row.trend && row.trend.success_rate_points != null ? el("small", { className: row.trend.success_rate_points <= WORSE_POINTS ? "olympus-attention-text" : null }, pointsText(row.trend.success_rate_points, days)) : null)),
+        el("div", null, el("dt", null, "Typical run"), el("dd", null, row.median_seconds == null ? "None finished" : formatDuration(row.median_seconds) + ", slow " + formatDuration(row.p90_seconds),
+          row.trend && row.trend.median_change != null && Math.abs(row.trend.median_change) >= 0.05 ? el("small", { className: row.trend.median_change >= SLOWER_SHARE ? "olympus-attention-text" : null }, speedText(row.trend.median_change)) : null)),
         el("div", null, el("dt", null, "Cost"), el("dd", null, formatMoney(row.cost_usd)))
       ),
       el(DayBars, { rows: row.daily, series: OUTCOME_SERIES, caption: "Runs per day", format: (n) => formatCount(n), peakUnit: "runs" }),
@@ -1210,7 +1271,7 @@
       fleet ? el(DayBars, { rows: fleet.daily, series: OUTCOME_SERIES, caption: "Runs per day, all agents", format: (n) => formatCount(n), peakUnit: "runs" }) : null,
       report ? el("div", { className: cx("olympus-workspace", (row || runRef) && "olympus-workspace-split") },
         el("div", { className: "olympus-roster-wrap" },
-          el(PerformanceTable, { agents: report.agents, selected, onSelect, sort, onSort: setSort }),
+          el(PerformanceTable, { agents: report.agents, selected, onSelect, sort, onSort: setSort, days }),
           el("small", { className: "olympus-muted olympus-perf-basis" }, report.basis)
         ),
         runRef ? el(RunView, { runRef, onBack: () => onRun(null) })
