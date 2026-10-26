@@ -3,7 +3,7 @@
   "label": "Olympus",
   "description": "Manage your Hermes agents: the roster, what needs you, run performance, and confirmed controls.",
   "icon": "Activity",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "tab": { "path": "/olympus", "position": "end" },
   "entry": "dist/index.js",
   "css": "dist/style.css",
