@@ -64,7 +64,8 @@ async function openFixture(page, testInfo, size, params) {
   await page.locator(".olympus-page").waitFor();
   await page.locator(".olympus-census").filter({ hasText: /agent/i }).waitFor();
   await page.screenshot({
-    path: testInfo.outputPath(`olympus-${Object.values(params).join("-")}-${size.width}x${size.height}.png`),
+    // Agent ids carry a colon ("profile:default"), which GitHub's artifact upload rejects.
+    path: testInfo.outputPath(`olympus-${Object.values(params).join("-").replace(/[^\w.-]/g, "_")}-${size.width}x${size.height}.png`),
     fullPage: true
   });
   return messages;
