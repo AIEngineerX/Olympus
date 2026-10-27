@@ -1031,19 +1031,24 @@
     const y = (rate) => height - pad - rate * (height - 2 * pad);
     let path = "";
     let open = false;
-    let last = null;
+    // A day with no finished neighbour has no line to sit on, so it gets its
+    // own dot; the latest day always gets the larger one.
+    const dots = [];
     rates.forEach((rate, idx) => {
       if (rate == null) { open = false; return; }
       path += (open ? " L" : " M") + x(idx).toFixed(1) + " " + y(rate).toFixed(1);
       open = true;
-      last = { x: x(idx), y: y(rate) };
+      const alone = rates[idx - 1] == null && rates[idx + 1] == null;
+      if (alone) dots.push({ x: x(idx), y: y(rate), r: 1.5 });
     });
+    const lastIdx = rates.length - 1 - rates.slice().reverse().findIndex((rate) => rate != null);
+    dots.push({ x: x(lastIdx), y: y(rates[lastIdx]), r: 2.5 });
     const summary = list.map((day, idx) => dayLabel(day.day, idx, list.length) + (rates[idx] == null ? " none finished" : " " + percent(rates[idx]))).filter((text) => text.trim()).join(", ");
     return el("span", { className: "olympus-spark", role: "img", "aria-label": label + " by day: " + summary, title: summary },
       el("svg", { viewBox: "0 0 " + width + " " + height, "aria-hidden": "true", focusable: "false" },
         el("line", { x1: pad, x2: width - pad, y1: height - pad, y2: height - pad }),
         el("path", { d: path.trim() }),
-        last ? el("circle", { cx: last.x.toFixed(1), cy: last.y.toFixed(1), r: 2.5 }) : null
+        dots.map((dot, idx) => el("circle", { key: idx, cx: dot.x.toFixed(1), cy: dot.y.toFixed(1), r: dot.r }))
       )
     );
   }
@@ -1052,7 +1057,12 @@
     const trend = row.trend || {};
     const points = trend.success_rate_points;
     let text;
-    if (points == null) text = el("small", { className: "olympus-muted" }, trend.previous_runs ? "Nothing finished before" : "No runs the " + days + " days before");
+    if (points == null) {
+      const why = row.success_rate == null ? "Nothing finished to compare"
+        : !trend.previous_runs ? "No runs the " + days + " days before"
+        : "Nothing finished before";
+      text = el("small", { className: "olympus-muted" }, why);
+    }
     else text = el("small", { className: points <= WORSE_POINTS ? "olympus-attention-text" : null }, beforeText(row, days));
     return el("span", { className: "olympus-trend" }, el(Sparkline, { daily: row.daily, label: "Success rate" }), text);
   }

@@ -756,6 +756,12 @@
   font-weight: 400;
 }
 
+/* "slow 25 min" stays on one line, so the cell reads as "14 min / slow 25 min"
+   plus the speed change, not six broken fragments. */
+.olympus-perf-table td[data-label="Typical run"] small:first-of-type {
+  white-space: nowrap;
+}
+
 .olympus-rate-low,
 .olympus-facts dd.olympus-rate-low {
   color: var(--color-warning);

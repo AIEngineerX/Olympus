@@ -101,6 +101,27 @@ class AlertsTest(unittest.TestCase):
         self.assertEqual(by_key["answer"]["severity"], "critical")
         self.assertEqual(by_key["gateway-offline"]["severity"], "warning")
 
+    def test_ready_tasks_do_not_need_the_assignee_gateway_while_another_runs(self):
+        (self.home / "profiles" / "coder").mkdir(parents=True)
+        self._kanban()
+        con = sqlite3.connect(self.home / "kanban.db")
+        con.execute("UPDATE tasks SET assignee = 'coder' WHERE id = 't-ready'")
+        con.commit()
+        con.close()
+        gateway = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", "gateway"])
+        try:
+            (self.home / "gateway.pid").write_bytes(json.dumps({"pid": gateway.pid, "kind": "hermes-gateway"}).encode("utf-8"))
+            scan = plugin_api.scan_hermes()
+        finally:
+            gateway.kill()
+            gateway.wait()
+
+        keys = {alert["key"].split(":")[0] for alert in plugin_api.build_alerts(scan, {"days": []}, self.now)}
+
+        # The default gateway dispatches coder's ready task; coder's own gateway is not needed for it.
+        self.assertNotIn("gateway-offline", keys)
+        self.assertNotIn("Gateway is not running", " ".join(q["title"] for q in scan["needs_you"]))
+
     def test_overdue_job_alerts_when_its_gateway_is_running(self):
         self._cron([{"id": "job-late", "name": "sync", "enabled": True, "next_run_at": iso(self.now - 2 * 3600)}])
         gateway = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", "gateway"])

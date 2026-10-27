@@ -11,6 +11,8 @@ problems it targets, and the Hermes issues that show people have them, are in
 
 ## What you see
 
+![Agents: Needs you on top, then one row per agent with status, what it is doing now, a week of runs and its issues](screenshots/agents.png)
+
 - **Agents.** One row per agent (Hermes profile): status in a word, the task and
   tool it is on now, its helpers, last activity, and a week of runs with the
   failed ones marked. Above it, **Needs you**: every question waiting on an
@@ -21,6 +23,8 @@ problems it targets, and the Hermes issues that show people have them, are in
   its inspector: what it did recently,
   its scheduled jobs and Kanban work, how it works, and whether your fixes
   worked.
+![The inspector for one agent beside the roster: what it needs, what it is doing now, its jobs and tasks](screenshots/inspector.png)
+
 - **Performance.** For 7 or 30 days: runs, how many succeeded, typical and slow
   run time, tool calls that failed, and cost, per agent and across all of them,
   each compared with the same number of days before ("96% of 25, was 100% the
@@ -29,6 +33,11 @@ problems it targets, and the Hermes issues that show people have them, are in
   which every tool call failed counts as failed. Any run opens step by step.
 - **Checks.** Findings across your agents, Kanban backlog grouped by who has to
   act, skill hygiene, configuration risks, and where spend goes.
+
+![Performance: runs per day, then each agent's success rate with its trend line and the comparison with the days before](screenshots/performance.png)
+
+Everything works at phone width too; the roster becomes cards and each panel
+opens full screen with a Back button.
 
 ## Controls
 

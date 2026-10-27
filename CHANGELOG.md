@@ -16,6 +16,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gateway is offline is no longer alerted on separately; the gateway alert
   explains it.
 
+- README screenshots (`screenshots/`, rendered from the test fixture): the
+  Agents view, the inspector beside the roster, and Performance.
+
 - Performance shows the trend: each agent's success rate, run time, cost and
   run count for the window are compared with the equal window before it
   (`previous` and `trend` on every agent and on the fleet in `GET /performance`),
@@ -23,6 +26,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in words. "96% of 25, was 100% the 7 days before" and "7% faster than
   before" are sentences the view could not say before. With the panel open the table keeps
   Agent, Runs, Succeeded, Trend and Cost.
+
+### Fixed
+
+- A ready Kanban task no longer makes Olympus report its agent's gateway as
+  needed: any running gateway dispatches the whole board (Hermes holds one
+  dispatcher lock per machine), so the queue item and the alert count ready
+  tasks only when no gateway runs at all. Scheduled jobs still need their
+  own profile's gateway.
+- The Trend cell named the wrong window when this window had nothing
+  finished; it now says "Nothing finished to compare".
+- A day of runs between two days with none finished drew nothing on the
+  success-rate line; it now gets its own dot.
+- "slow 25 min" in the Typical run column no longer breaks across lines.
 
 ### Changed
 

@@ -3662,12 +3662,15 @@ def build_needs_you(
 
     cron_by_profile = group_cron_by_profile(cron)
     tasks = kanban_items(kanban, "_tasks")
+    # Any running gateway dispatches the whole board (Hermes holds one
+    # dispatcher lock per machine), so ready tasks only wait when none runs.
+    dispatcher_running = len(offline) < len(profiles)
     for profile in profiles:
         raw = str(profile["name"])
         if raw not in offline:
             continue
         jobs = sum(1 for job in cron_by_profile.get(raw, []) if job.get("enabled"))
-        ready = sum(1 for task in tasks if task.get("_assignee") == raw and task.get("status") == "ready")
+        ready = 0 if dispatcher_running else sum(1 for task in tasks if task.get("_assignee") == raw and task.get("status") == "ready")
         if not (jobs or ready):
             continue
         waiting = " and ".join(part for part in (
@@ -4869,12 +4872,13 @@ def build_alerts(scan: Dict[str, Any], history: Dict[str, Any], now: Optional[fl
             add(f"worker-stalled:{task.get('id')}", "critical", f"Kanban worker stalled on {task.get('title')} ({task.get('assignee')}): {task_stale_reason(task, now)}.")
 
     cron_by_profile = group_cron_by_profile(scan["cron"])
+    dispatcher_running = len(offline) < len(profiles)  # see build_needs_you: one dispatcher per machine
     for profile in profiles:
         raw = str(profile["name"])
         if raw not in offline:
             continue
         jobs = sum(1 for job in cron_by_profile.get(raw, []) if job.get("enabled"))
-        ready = sum(1 for task in tasks if task.get("_assignee") == raw and task.get("status") == "ready")
+        ready = 0 if dispatcher_running else sum(1 for task in tasks if task.get("_assignee") == raw and task.get("status") == "ready")
         if not (jobs or ready):
             continue
         waiting = " and ".join(part for part in (

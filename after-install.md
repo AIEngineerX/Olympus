@@ -20,8 +20,9 @@
    agent's runs succeed; **Checks** holds findings, backlog, skills, policy and
    spend.
 
-4. Optional alerts for failed or stalled cron jobs, stalled workers, looping
-   sessions and spend spikes, delivered by a Hermes no-agent cron job:
+4. Optional alerts for tasks waiting on your answer, failed or stalled cron
+   jobs, stalled workers, gateways down while work waits, looping sessions
+   and spend spikes, delivered by a Hermes no-agent cron job:
 
    ```bash
    hermes olympus install-alerts --deliver telegram
