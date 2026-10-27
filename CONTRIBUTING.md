@@ -131,6 +131,22 @@ Keep commits focused and the body explaining the *why*.
 4. Keep the safety and privacy invariants intact. Call out any new control
    explicitly, with the problem it solves and the Hermes endpoint it calls.
 
+## API
+
+Mounted at `/api/plugins/olympus/` behind the Hermes dashboard session token:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /overview` | Roster, Needs you, findings, backlog, skills, policy, spend |
+| `GET /agent?ref=` | One agent's inspector |
+| `GET /performance?days=7\|30` | Run success, run time, tool failures and cost per agent |
+| `GET /run?ref=` | One run, step by step |
+| `GET /resolve?kind=&ref=` | The id a control needs, looked up at click time; refused when controls are off |
+| `POST /actions` | Record a control in the action log |
+| `POST /fixes?key=` / `DELETE /fixes?key=` | Start or stop tracking a finding you fixed |
+| `GET /open/session?ref=` | A session's Hermes chat link, or `null` if it is gone |
+| `GET /health` | Liveness and a coarse runtime summary |
+
 ## Security
 
 Please do not open public issues for security or privacy problems. See

@@ -77,6 +77,25 @@ a user plugin's API only once it is in `plugins.enabled`; until then the tab
 lists your agents from Hermes' own API and says how to enable the rest. If the
 tab shows no data after enabling, restart `hermes dashboard` once.
 
+## Alerts (opt-in)
+
+Olympus can tell you when a task is waiting on your answer, a cron job fails
+or stops running on time, a Kanban worker stalls or fails, an agent's gateway
+is not running while jobs or tasks wait on it, a session starts looping, or
+spend jumps to twice its daily average:
+
+```bash
+hermes olympus install-alerts --deliver telegram   # any `hermes cron --deliver` target
+```
+
+This copies `olympus_alerts.py` into `$HERMES_HOME/scripts/` and prints the
+`hermes cron create --no-agent ...` command to run. Hermes cron runs it on your
+schedule and delivers what it prints; no model is called, and a run with
+nothing new is silent. An alert repeats at most every six hours while it is
+still active. Preview with `hermes olympus alerts --preview`; stop with
+`hermes cron remove <job id>`. With `plugins.isolation: host`, copy
+`alerts/olympus_alerts.py` into `$HERMES_HOME/scripts/` yourself.
+
 ## What Olympus reads and writes
 
 Olympus never writes Hermes files or databases. It opens every Hermes store
@@ -96,25 +115,6 @@ and the Kanban databases under the Hermes root. It writes only to
 `$HERMES_HOME/plugin-data/olympus/` (daily snapshots, findings you marked fixed,
 the action log, alert state), plus `$HERMES_HOME/scripts/olympus_alerts.py` if
 you install alerts.
-
-## Alerts (opt-in)
-
-Olympus can tell you when a task is waiting on your answer, a cron job fails
-or stops running on time, a Kanban worker stalls or fails, an agent's gateway
-is not running while jobs or tasks wait on it, a session starts looping, or
-spend jumps to twice its daily average:
-
-```bash
-hermes olympus install-alerts --deliver telegram   # any `hermes cron --deliver` target
-```
-
-This copies `olympus_alerts.py` into `$HERMES_HOME/scripts/` and prints the
-`hermes cron create --no-agent ...` command to run. Hermes cron runs it on your
-schedule and delivers what it prints; no model is called, and a run with
-nothing new is silent. An alert repeats at most every six hours while it is
-still active. Preview with `hermes olympus alerts --preview`; stop with
-`hermes cron remove <job id>`. With `plugins.isolation: host`, copy
-`alerts/olympus_alerts.py` into `$HERMES_HOME/scripts/` yourself.
 
 ## Hermes Desktop
 
@@ -142,19 +142,8 @@ Keep the Hermes dashboard on localhost.
 
 ## API
 
-Mounted at `/api/plugins/olympus/` behind the Hermes dashboard session token:
-
-| Route | Purpose |
-| --- | --- |
-| `GET /overview` | Roster, Needs you, findings, backlog, skills, policy, spend |
-| `GET /agent?ref=` | One agent's inspector |
-| `GET /performance?days=7\|30` | Run success, run time, tool failures and cost per agent |
-| `GET /run?ref=` | One run, step by step |
-| `GET /resolve?kind=&ref=` | The id a control needs, looked up at click time; refused when controls are off |
-| `POST /actions` | Record a control in the action log |
-| `POST /fixes?key=` / `DELETE /fixes?key=` | Start or stop tracking a finding you fixed |
-| `GET /open/session?ref=` | A session's Hermes chat link, or `null` if it is gone |
-| `GET /health` | Liveness and a coarse runtime summary |
+Olympus mounts its own routes under `/api/plugins/olympus/`; the full table
+is in [`CONTRIBUTING.md`](CONTRIBUTING.md#api).
 
 ## Verify
 

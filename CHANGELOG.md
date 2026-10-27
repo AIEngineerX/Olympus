@@ -39,6 +39,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A day of runs between two days with none finished drew nothing on the
   success-rate line; it now gets its own dot.
 - "slow 25 min" in the Typical run column no longer breaks across lines.
+- A worsening comparison ("was 100% the 7 days before" after a drop, "50%
+  slower than before") now shows in the warning colour in the table and the
+  panel; the muted small-print rule used to win over it.
+- A finished run of under a second reads "0 s", not "none".
+- The latest day on the success-rate line gets one dot, not two, when it is
+  also isolated.
+- README: "What Olympus reads and writes" now follows Alerts, and the API
+  table moved to CONTRIBUTING.md.
 
 ### Changed
 

@@ -471,7 +471,10 @@
   font-size: 13px;
 }
 
-.olympus-attention-text {
+.olympus-attention-text,
+.olympus-perf-table td small.olympus-attention-text,
+.olympus-facts dd small.olympus-attention-text,
+.olympus-trend small.olympus-attention-text {
   color: var(--color-warning);
 }
 

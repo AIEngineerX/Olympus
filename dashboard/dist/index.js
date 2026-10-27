@@ -994,8 +994,8 @@
   function runTimes(row) {
     if (row.median_seconds == null) return el("span", { className: "olympus-muted" }, "No finished runs");
     const change = row.trend ? row.trend.median_change : null;
-    return el("span", null, formatDuration(row.median_seconds),
-      el("small", null, "slow " + formatDuration(row.p90_seconds)),
+    return el("span", null, formatSpan(row.median_seconds * 1000),
+      el("small", null, "slow " + formatSpan(row.p90_seconds * 1000)),
       change != null && Math.abs(change) >= 0.05 ? el("small", { className: change >= SLOWER_SHARE ? "olympus-attention-text" : null }, speedText(change)) : null);
   }
 
@@ -1042,6 +1042,7 @@
       if (alone) dots.push({ x: x(idx), y: y(rate), r: 1.5 });
     });
     const lastIdx = rates.length - 1 - rates.slice().reverse().findIndex((rate) => rate != null);
+    if (dots.length && dots[dots.length - 1].x === x(lastIdx)) dots.pop(); // the latest day's dot is the large one
     dots.push({ x: x(lastIdx), y: y(rates[lastIdx]), r: 2.5 });
     const summary = list.map((day, idx) => dayLabel(day.day, idx, list.length) + (rates[idx] == null ? " none finished" : " " + percent(rates[idx]))).filter((text) => text.trim()).join(", ");
     return el("span", { className: "olympus-spark", role: "img", "aria-label": label + " by day: " + summary, title: summary },
@@ -1159,7 +1160,7 @@
         el("div", null, el("dt", null, "Runs"), el("dd", null, formatCount(row.runs) + (row.open ? " (" + row.open + " running)" : ""))),
         el("div", null, el("dt", null, "Succeeded"), el("dd", { className: rateClass(row.success_rate) }, row.success_rate == null ? "None finished" : percent(row.success_rate) + " of " + formatCount(row.succeeded + row.failed + row.cut_off),
           row.trend && row.trend.success_rate_points != null ? el("small", { className: row.trend.success_rate_points <= WORSE_POINTS ? "olympus-attention-text" : null }, beforeText(row, days)) : null)),
-        el("div", null, el("dt", null, "Typical run"), el("dd", null, row.median_seconds == null ? "None finished" : formatDuration(row.median_seconds) + ", slow " + formatDuration(row.p90_seconds),
+        el("div", null, el("dt", null, "Typical run"), el("dd", null, row.median_seconds == null ? "None finished" : formatSpan(row.median_seconds * 1000) + ", slow " + formatSpan(row.p90_seconds * 1000),
           row.trend && row.trend.median_change != null && Math.abs(row.trend.median_change) >= 0.05 ? el("small", { className: row.trend.median_change >= SLOWER_SHARE ? "olympus-attention-text" : null }, speedText(row.trend.median_change)) : null)),
         el("div", null, el("dt", null, "Cost"), el("dd", null, formatMoney(row.cost_usd)))
       ),
