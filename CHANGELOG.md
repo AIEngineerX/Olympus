@@ -4,16 +4,24 @@ All notable changes to Olympus are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.1] - 2026-10-27
 
 ### Added
+
+- Two more alerts, both things the Needs-you queue already showed but only
+  while the tab was open: a Kanban task blocked on a question for you
+  ("... is waiting on your answer", with the question when local labels are
+  exposed), and an agent's gateway not running while scheduled jobs or ready
+  tasks wait on it (with the start command). An overdue cron job whose
+  gateway is offline is no longer alerted on separately; the gateway alert
+  explains it.
 
 - Performance shows the trend: each agent's success rate, run time, cost and
   run count for the window are compared with the equal window before it
   (`previous` and `trend` on every agent and on the fleet in `GET /performance`),
   and the table carries a thin success-rate-per-day line beside the comparison
-  in words. "−4 pts vs the 7 days before" and "7% faster than before" are
-  sentences the view could not say before. With the panel open the table keeps
+  in words. "96% of 25, was 100% the 7 days before" and "7% faster than
+  before" are sentences the view could not say before. With the panel open the table keeps
   Agent, Runs, Succeeded, Trend and Cost.
 
 ### Changed
@@ -274,6 +282,7 @@ credentials, or config.
 - `verify` workflow runs backend compile, backend unit tests, frontend parse,
   whitespace check, and the visual smoke on push and pull request.
 
+[2.0.1]: https://github.com/AIEngineerX/Olympus/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/AIEngineerX/Olympus/compare/v1.0.3...v2.0.0
 [1.0.3]: https://github.com/AIEngineerX/Olympus/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/AIEngineerX/Olympus/compare/v1.0.1...v1.0.2

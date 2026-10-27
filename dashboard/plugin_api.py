@@ -4844,6 +4844,10 @@ def build_alerts(scan: Dict[str, Any], history: Dict[str, Any], now: Optional[fl
     def add(key: str, severity: str, text: str) -> None:
         alerts.append({"key": key, "severity": severity, "text": text})
 
+    profiles = scan["profiles"]
+    offline = {str(p["name"]) for p in profiles if p.get("gateway_state") != "running"}
+    tasks = kanban_items(scan["kanban"], "_tasks")
+
     for job in scan["cron"]:
         where = " / ".join(str(part) for part in (job.get("profile"), job.get("schedule")) if part)
         name = f"{job.get('label')} ({where})" if where else str(job.get("label"))
@@ -4851,13 +4855,34 @@ def build_alerts(scan: Dict[str, Any], history: Dict[str, Any], now: Optional[fl
             add(f"cron-failed:{job.get('id')}", "critical", f"Cron job {name} failed: {job.get('last_error') or 'last run reported an error'}.")
             continue
         due = parse_iso_ts(job.get("next_run_at"))
-        if job.get("enabled") and due is not None and now - due > CRON_OVERDUE_SECONDS:
+        # An offline gateway explains every overdue job it owns; that alert says so once.
+        if job.get("enabled") and due is not None and now - due > CRON_OVERDUE_SECONDS and cron_profile(job) not in offline:
             late = int((now - due) // 60)
             add(f"cron-overdue:{job.get('id')}", "critical", f"Cron job {name} is {late} min overdue; the cron ticker may have stopped.")
 
-    for task in kanban_items(scan["kanban"], "_tasks"):
+    for task in tasks:
+        if task.get("status") == "blocked" and task.get("block_kind") == "needs_input":
+            title = display_name(task.get("title"), str(task.get("id")), "Task")
+            question = task.get("block_reason") or "Open it in Kanban to read the question"
+            add(f"answer:{task.get('id')}", "critical", f"{title} is waiting on your answer ({task.get('assignee')}): {question}.")
         if task_stale_reason(task, now):
             add(f"worker-stalled:{task.get('id')}", "critical", f"Kanban worker stalled on {task.get('title')} ({task.get('assignee')}): {task_stale_reason(task, now)}.")
+
+    cron_by_profile = group_cron_by_profile(scan["cron"])
+    for profile in profiles:
+        raw = str(profile["name"])
+        if raw not in offline:
+            continue
+        jobs = sum(1 for job in cron_by_profile.get(raw, []) if job.get("enabled"))
+        ready = sum(1 for task in tasks if task.get("_assignee") == raw and task.get("status") == "ready")
+        if not (jobs or ready):
+            continue
+        waiting = " and ".join(part for part in (
+            f"{jobs} scheduled job{'s' if jobs != 1 else ''}" if jobs else "",
+            f"{ready} ready task{'s' if ready != 1 else ''}" if ready else "",
+        ) if part)
+        add(f"gateway-offline:{profile['id']}", "warning",
+            f"Gateway is not running for {profile['label']}: {waiting} {'waits' if jobs + ready == 1 else 'wait'} on it. Start it with: {gateway_start_command(raw)}")
 
     for run in kanban_items(scan["kanban"], "_runs"):
         if is_failed_run(run) and now - safe_float(run.get("_sort_ts")) <= ALERT_RECENT_SECONDS:

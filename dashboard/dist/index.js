@@ -1008,10 +1008,14 @@
     return Math.round(Math.abs(change) * 100) + "% " + (change > 0 ? "slower" : "faster") + " than before";
   }
 
-  function pointsText(points, days) {
-    const whole = Math.round(Math.abs(points) * 100);
-    if (whole === 0) return "Same as the " + days + " days before";
-    return (points > 0 ? "+" : "−") + whole + " pts vs the " + days + " days before";
+  // The comparison names the earlier rate itself ("was 100% the 7 days before"),
+  // so nobody has to add points to a percentage; null when there is nothing to compare.
+  function beforeText(row, days) {
+    const before = row.previous ? row.previous.success_rate : null;
+    const points = row.trend ? row.trend.success_rate_points : null;
+    if (before == null || points == null) return null;
+    if (Math.round(Math.abs(points) * 100) === 0) return "Same as the " + days + " days before";
+    return "was " + percent(before) + " the " + days + " days before";
   }
 
   // Success rate per day as one thin line; days with nothing finished leave a gap.
@@ -1049,7 +1053,7 @@
     const points = trend.success_rate_points;
     let text;
     if (points == null) text = el("small", { className: "olympus-muted" }, trend.previous_runs ? "Nothing finished before" : "No runs the " + days + " days before");
-    else text = el("small", { className: points <= WORSE_POINTS ? "olympus-attention-text" : null }, pointsText(points, days));
+    else text = el("small", { className: points <= WORSE_POINTS ? "olympus-attention-text" : null }, beforeText(row, days));
     return el("span", { className: "olympus-trend" }, el(Sparkline, { daily: row.daily, label: "Success rate" }), text);
   }
 
@@ -1144,7 +1148,7 @@
       el("dl", { className: "olympus-facts" },
         el("div", null, el("dt", null, "Runs"), el("dd", null, formatCount(row.runs) + (row.open ? " (" + row.open + " running)" : ""))),
         el("div", null, el("dt", null, "Succeeded"), el("dd", { className: rateClass(row.success_rate) }, row.success_rate == null ? "None finished" : percent(row.success_rate) + " of " + formatCount(row.succeeded + row.failed + row.cut_off),
-          row.trend && row.trend.success_rate_points != null ? el("small", { className: row.trend.success_rate_points <= WORSE_POINTS ? "olympus-attention-text" : null }, pointsText(row.trend.success_rate_points, days)) : null)),
+          row.trend && row.trend.success_rate_points != null ? el("small", { className: row.trend.success_rate_points <= WORSE_POINTS ? "olympus-attention-text" : null }, beforeText(row, days)) : null)),
         el("div", null, el("dt", null, "Typical run"), el("dd", null, row.median_seconds == null ? "None finished" : formatDuration(row.median_seconds) + ", slow " + formatDuration(row.p90_seconds),
           row.trend && row.trend.median_change != null && Math.abs(row.trend.median_change) >= 0.05 ? el("small", { className: row.trend.median_change >= SLOWER_SHARE ? "olympus-attention-text" : null }, speedText(row.trend.median_change)) : null)),
         el("div", null, el("dt", null, "Cost"), el("dd", null, formatMoney(row.cost_usd)))

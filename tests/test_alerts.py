@@ -57,12 +57,14 @@ class AlertsTest(unittest.TestCase):
         con.executescript(
             """
             CREATE TABLE tasks (id TEXT, title TEXT, status TEXT, assignee TEXT, created_at INTEGER,
-              started_at INTEGER, completed_at INTEGER, last_heartbeat_at INTEGER);
+              started_at INTEGER, completed_at INTEGER, last_heartbeat_at INTEGER, block_kind TEXT);
             CREATE TABLE task_runs (id TEXT, task_id TEXT, profile TEXT, status TEXT, outcome TEXT,
               started_at INTEGER, ended_at INTEGER, error TEXT);
             """
         )
-        con.execute("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?)", ("t-stuck", "stuck task", "running", "default", now - 9000, now - 9000, None, now - 7200))
+        con.execute("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", ("t-stuck", "stuck task", "running", "default", now - 9000, now - 9000, None, now - 7200, None))
+        con.execute("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", ("t-ask", "Pick a database", "blocked", "default", now - 9000, now - 9000, None, None, "needs_input"))
+        con.execute("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", ("t-ready", "Next job", "ready", "default", now - 900, None, None, None, None))
         con.execute("INSERT INTO task_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)", ("r-1", "t-stuck", "default", "failed", "crashed", now - 600, now - 300, "Traceback"))
         con.commit()
         con.close()
@@ -83,13 +85,35 @@ class AlertsTest(unittest.TestCase):
         today = datetime.fromtimestamp(self.now, tz=timezone.utc).date().isoformat()
         history = {"days": [{"day": f"2026-01-0{i}", "spend_24h": 0.5} for i in range(1, 7)] + [{"day": today, "spend_24h": 3.0}]}
 
-        keys = {alert["key"].split(":")[0] for alert in plugin_api.build_alerts(scan, history, self.now)}
+        alerts = plugin_api.build_alerts(scan, history, self.now)
+        keys = {alert["key"].split(":")[0] for alert in alerts}
 
-        self.assertEqual(keys, {"cron-failed", "cron-overdue", "worker-stalled", "worker-failed", "looping", "spend-spike"})
-        texts = " ".join(alert["text"] for alert in plugin_api.build_alerts(scan, history, self.now))
-        for raw in ("job-err", "digest", "stuck task", "sess-raw-xyz", "Traceback"):
+        # No gateway runs in this home, so the overdue job is explained by the
+        # offline gateway (one alert) rather than reported twice.
+        self.assertEqual(keys, {"cron-failed", "worker-stalled", "worker-failed", "looping", "spend-spike", "answer", "gateway-offline"})
+        texts = " ".join(alert["text"] for alert in alerts)
+        for raw in ("job-err", "digest", "stuck task", "sess-raw-xyz", "Traceback", "Pick a database"):
             self.assertNotIn(raw, texts)
         self.assertIn("timeout (details hidden)", texts)
+        self.assertIn("is waiting on your answer", texts)
+        self.assertIn("Gateway is not running for Default: 3 scheduled jobs and 1 ready task wait on it. Start it with: hermes gateway start", texts)
+        by_key = {alert["key"].split(":")[0]: alert for alert in alerts}
+        self.assertEqual(by_key["answer"]["severity"], "critical")
+        self.assertEqual(by_key["gateway-offline"]["severity"], "warning")
+
+    def test_overdue_job_alerts_when_its_gateway_is_running(self):
+        self._cron([{"id": "job-late", "name": "sync", "enabled": True, "next_run_at": iso(self.now - 2 * 3600)}])
+        gateway = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", "gateway"])
+        try:
+            (self.home / "gateway.pid").write_bytes(json.dumps({"pid": gateway.pid, "kind": "hermes-gateway"}).encode("utf-8"))
+            scan = plugin_api.scan_hermes()
+        finally:
+            gateway.kill()
+            gateway.wait()
+
+        keys = {alert["key"].split(":")[0] for alert in plugin_api.build_alerts(scan, {"days": []}, self.now)}
+
+        self.assertEqual(keys, {"cron-overdue"})
 
     def test_alerts_are_sent_once_until_they_clear_or_six_hours_pass(self):
         state = {}
@@ -106,7 +130,7 @@ class AlertsTest(unittest.TestCase):
         self._cron([{"id": "job-err", "name": "digest", "enabled": True, "last_status": "error", "last_error": "boom"}])
 
         preview = plugin_api.alert_report(preview=True)
-        self.assertIn("Olympus: 1 new alert", preview)
+        self.assertIn("Olympus: 2 new alerts", preview)  # the failed job, and the gateway it waits on
         self.assertFalse((self.home / "plugin-data" / "olympus" / plugin_api.ALERTS_STATE_FILE).exists())
 
         self.assertIn("Cron job", plugin_api.alert_report())
@@ -136,7 +160,7 @@ class AlertsTest(unittest.TestCase):
         second = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, env=env, cwd=str(self.home))
 
         self.assertEqual(first.returncode, 0, first.stderr)
-        self.assertIn("Olympus: 1 new alert", first.stdout)
+        self.assertIn("Olympus: 2 new alerts", first.stdout)
         self.assertEqual(second.stdout, "")
 
 

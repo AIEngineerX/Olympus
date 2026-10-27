@@ -1,6 +1,6 @@
 {
   "name": "olympus-dashboard-plugin",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "Manage your Hermes agents: a Hermes dashboard plugin.",
   "scripts": {

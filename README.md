@@ -23,8 +23,8 @@ problems it targets, and the Hermes issues that show people have them, are in
   worked.
 - **Performance.** For 7 or 30 days: runs, how many succeeded, typical and slow
   run time, tool calls that failed, and cost, per agent and across all of them,
-  each compared with the same number of days before ("−4 pts vs the 7 days
-  before", "7% faster than before") beside a success-rate-per-day line.
+  each compared with the same number of days before ("96% of 25, was 100% the
+  7 days before", "7% faster than before") beside a success-rate-per-day line.
   Outcomes follow Hermes' own session status, except that a scheduled run in
   which every tool call failed counts as failed. Any run opens step by step.
 - **Checks.** Findings across your agents, Kanban backlog grouped by who has to
@@ -90,9 +90,10 @@ you install alerts.
 
 ## Alerts (opt-in)
 
-Olympus can tell you when a cron job fails or stops running on time, a Kanban
-worker stalls or fails, a session starts looping, or spend jumps to twice its
-daily average:
+Olympus can tell you when a task is waiting on your answer, a cron job fails
+or stops running on time, a Kanban worker stalls or fails, an agent's gateway
+is not running while jobs or tasks wait on it, a session starts looping, or
+spend jumps to twice its daily average:
 
 ```bash
 hermes olympus install-alerts --deliver telegram   # any `hermes cron --deliver` target

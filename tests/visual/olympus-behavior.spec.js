@@ -216,8 +216,8 @@ test.describe("Olympus behaviour", () => {
     await perf.locator('tr[data-agent="profile:coder"]').click();
     const panel = page.getByRole("complementary", { name: "Performance of Coder" });
     await expect(panel.locator(".olympus-facts")).toContainText("96% of 25");
-    await expect(panel.locator(".olympus-facts")).toContainText("−4 pts vs the 7 days before");
-    await expect(perf.locator('tr[data-agent="profile:coder"] td[data-label="Trend"]')).toContainText("−4 pts");
+    await expect(panel.locator(".olympus-facts")).toContainText("was 100% the 7 days before");
+    await expect(perf.locator('tr[data-agent="profile:coder"] td[data-label="Trend"]')).toContainText("was 100% the 7 days before");
     const terminal = panel.locator(".olympus-table tbody tr").filter({ hasText: "terminal" });
     await expect(terminal.locator("td")).toHaveText(["terminal", "12", "8", "67%"]);
 
