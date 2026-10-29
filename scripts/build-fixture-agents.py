@@ -66,9 +66,9 @@ def seed(home: Path, now: float) -> None:
     # plus a few hours.
     today = datetime.fromtimestamp(now, tz=timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
 
-    def history(prefix: str, days: int, per_day: int, scale: int) -> list[tuple]:
+    def history(prefix: str, days: int, per_day: int, scale: int, first_day: int = 1) -> list[tuple]:
         rows = []
-        for day in range(1, days):
+        for day in range(first_day, days):
             for n in range(per_day + (day % 3)):
                 start = today - day * 86400 + 12 * 3600 + n * 3600
                 length = 120 + ((day * 7 + n * 13 + len(prefix) * 5) % 24) * 60  # 2 to 25 minutes
@@ -76,11 +76,18 @@ def seed(home: Path, now: float) -> None:
                              scale * (2 + n), scale // 2, scale * 6, round(scale / 40000, 4), None))
         return rows
 
-    sessions(home, history("d", 7, 2, 18000) + [
+    # Every agent has a prior week too, so the performance trend compares two
+    # windows. Default's prior week has one failed run, so its trend improves
+    # while researcher's and coder's worsen.
+    sessions(home, history("d", 14, 2, 18000) + [
         ("live-main", "cli", "Draft the weekly investor update", now - 1500, None, None, now - 40, 22000, 6100, 90000, 0.62, None),
         ("live-sub", "subagent", "Collect revenue numbers", now - 400, None, None, now - 25, 8000, 900, 12000, 0.11, "live-main"),
+        ("d-prev-fail", "cli", "Rebuild the weekly update", today - 9 * 86400 + 16 * 3600, today - 9 * 86400 + 16 * 3600 + 300,
+         "completed", today - 9 * 86400 + 16 * 3600 + 300, 9000, 400, 20000, 0.05, None),
     ])
     con = sqlite3.connect(home / "state.db")
+    con.execute("INSERT INTO messages (session_id, role, content, finish_reason, timestamp) VALUES ('d-prev-fail', 'assistant', '', 'agent_error', ?)",
+                (today - 9 * 86400 + 16 * 3600 + 290,))
     tools = ["read_file", "read_file", "read_file", "web_search", "terminal", "terminal", "write_file", "delegate_task"]
     con.executemany("INSERT INTO messages (session_id, role, tool_name, timestamp) VALUES ('live-main', 'tool', ?, ?)",
                     [(tool, now - 1400 + idx * 150) for idx, tool in enumerate(tools)])
@@ -88,7 +95,7 @@ def seed(home: Path, now: float) -> None:
                     [("web_extract", now - 300), ("web_extract", now - 200)])
     con.commit()
     con.close()
-    sessions(home / "profiles" / "researcher", history("r", 7, 1, 30000) + [
+    sessions(home / "profiles" / "researcher", history("r", 14, 1, 30000) + [
         # This morning's digest: Hermes booked it complete, but its only tool
         # call failed and the reply just said so.
         ("r-digest", "cron", "Morning market digest · 07:30", now - 5 * 3600 - 40, now - 5 * 3600 - 2, "cron_complete",
@@ -105,7 +112,6 @@ def seed(home: Path, now: float) -> None:
     )
     con.commit()
     con.close()
-    # Coder has a prior week too, so the performance trend compares two windows.
     sessions(home / "profiles" / "coder", history("c", 14, 3, 24000) + [
         ("coder-kanban", "kanban", "Fix flaky checkout test", now - 2400, None, None, now - 60, 30000, 7000, 140000, 0.88, None),
     ])
@@ -152,9 +158,9 @@ def seed(home: Path, now: float) -> None:
     )
     con.commit()
     con.close()
-    sessions(home / "profiles" / "reviewer", history("v", 5, 1, 12000))
-    sessions(home / "profiles" / "writer", history("w", 4, 1, 9000))
-    sessions(home / "profiles" / "analyst", history("a", 3, 1, 6000))
+    sessions(home / "profiles" / "reviewer", history("v", 5, 1, 12000) + history("v", 14, 1, 12000, first_day=7))
+    sessions(home / "profiles" / "writer", history("w", 4, 1, 9000) + history("w", 14, 1, 9000, first_day=7))
+    sessions(home / "profiles" / "analyst", history("a", 3, 1, 6000) + history("a", 14, 1, 6000, first_day=7))
 
     def cron(profile: Path, jobs: list[dict]) -> None:
         (profile / "cron").mkdir(exist_ok=True)

@@ -52,7 +52,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - The visual fixture seeds its history at noon UTC on each day, so rebuilding
   it at a different hour no longer moves runs across the window boundary and
-  changes the counts the tests assert. Coder now has a prior week of runs.
+  changes the counts the tests assert. Every agent now has a prior week of
+  runs, so the README screenshots show real trend text.
 
 - Olympus no longer opens a profile's `.env` file for any reason. Which
   messaging platforms a profile has configured now comes from Hermes' own
