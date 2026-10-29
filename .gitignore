@@ -77,3 +77,6 @@ tmp/
 temp/
 *.tmp
 *.swp
+
+# Promotion drafts and copies of the screenshots (local only)
+promote/
