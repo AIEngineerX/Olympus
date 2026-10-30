@@ -1822,6 +1822,13 @@
   text-overflow: ellipsis;
 }
 
+/* Labels are link buttons into the run view; they keep the cell's ellipsis. */
+.olympus-page button.olympus-lane-label {
+  display: block;
+  max-width: 100%;
+  text-align: left;
+}
+
 .olympus-lane-source {
   font-size: 11px;
   letter-spacing: 0.04em;

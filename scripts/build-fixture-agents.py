@@ -305,11 +305,17 @@ def scan(home: Path) -> dict:
     plugin_api.refresh_expose_local_labels()
     overview = plugin_api.overview_payload(plugin_api.scan_hermes())
     performance = {str(days): plugin_api.performance(days) for days in plugin_api.PERFORMANCE_DAYS}
+    live = plugin_api.live()
     refs = {
         run["ref"]
         for report in performance.values()
         for agent in report["agents"]
         for run in agent["failed_runs"] + agent["slowest"]
+    } | {
+        session["ref"]
+        for lane in live["lanes"]
+        for run in lane["runs"]
+        for session in [run, *run["children"]]
     }
     return {
         "generated_at": overview["generated_at"],
@@ -319,7 +325,7 @@ def scan(home: Path) -> dict:
         "details": {row["id"]: plugin_api.agent(row["id"]) for row in overview["agents"]["agents"]},
         "performance": performance,
         "runs": {ref: plugin_api.run_detail(ref) for ref in sorted(refs)},
-        "live": plugin_api.live(),
+        "live": live,
     }
 
 

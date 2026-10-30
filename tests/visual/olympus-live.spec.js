@@ -100,6 +100,19 @@ test.describe("Live view", () => {
     await expect(page.locator(".olympus-view-current")).toHaveText("Agents");
   });
 
+  test("a run label and a subagent label open that session's steps in the run view", async ({ page }) => {
+    await openLive(page, { state: "noisy" }, DESKTOP);
+    await page.locator('.olympus-lane[data-agent="profile:coder"] .olympus-lane-run-row .olympus-lane-label').click();
+    await expect(page.locator(".olympus-views .olympus-view-current")).toHaveText("Performance");
+    const runView = page.locator('aside[aria-label="Run detail"]');
+    await expect(runView.locator("h2")).toHaveText("Fix flaky checkout test");
+    await runView.getByRole("button", { name: /Back to/ }).click();
+    await page.locator(".olympus-view-switch", { hasText: "Live" }).click();
+    await page.locator('.olympus-lane[data-agent="profile:coder"] .olympus-lane-child-running .olympus-lane-label').click();
+    // The run view shows Hermes' own session title, prefix and all.
+    await expect(runView.locator("h2")).toHaveText("Subagent: Patch the retry loop");
+  });
+
   test("a fresh install says nothing is running", async ({ page }) => {
     await openLive(page, { state: "empty" }, DESKTOP);
     await expect(page.locator(".olympus-lane")).toHaveCount(0);

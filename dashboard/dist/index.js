@@ -1373,33 +1373,34 @@
 
   // `fresh`: the subagent appeared since the last read, so it slides in from
   // its parent. Rows already on screen at first paint stay still.
-  function ChildRow({ child, now, fresh, settled }) {
+  function ChildRow({ child, now, fresh, settled, onOpen }) {
     const running = child.status === "running";
     return el("li", { className: cx("olympus-lane-child", "olympus-lane-child-" + child.status, fresh && "olympus-lane-child-new"), "data-status": child.status },
       el("span", { className: "olympus-lane-cell olympus-lane-status" },
         el("span", { className: cx("olympus-lane-dot", "olympus-lane-dot-" + child.status), "aria-hidden": "true" }),
         CHILD_STATUS_TEXT[child.status] || child.status
       ),
-      el("span", { className: "olympus-lane-cell olympus-lane-label" }, child.label),
+      el("button", { type: "button", className: "olympus-link-button olympus-lane-cell olympus-lane-label", title: child.label, onClick: () => onOpen(child.ref) }, child.label),
       el("span", { className: "olympus-lane-cell olympus-lane-time" }, running ? elapsed(child.started_at, now) : spanBetween(child.started_at, child.ended_at)),
       el("span", { className: "olympus-lane-cell olympus-lane-tool-cell" }, el(ToolChip, { tool: child.last_tool, settled })),
       el("span", { className: "olympus-lane-cell olympus-lane-note" }, child.errors ? plural(child.errors, "failed call") : null)
     );
   }
 
-  function RunRow({ run, now, readAt, freshRefs, settled }) {
+  // Every label is a session, so each opens that session's steps in the run view.
+  function RunRow({ run, now, readAt, freshRefs, settled, onOpen }) {
     const batch = run.batch;
     const children = asList(run.children);
     return el("li", { className: "olympus-lane-run" },
       el("div", { className: "olympus-lane-run-row" },
         el("span", { className: "olympus-lane-cell olympus-lane-source" }, sourceText(run.source)),
-        el("span", { className: "olympus-lane-cell olympus-lane-label" }, run.label),
+        el("button", { type: "button", className: "olympus-link-button olympus-lane-cell olympus-lane-label", title: run.label, onClick: () => onOpen(run.ref) }, run.label),
         el("span", { className: "olympus-lane-cell olympus-lane-time" }, elapsed(run.started_at, now)),
         el("span", { className: "olympus-lane-cell olympus-lane-tool-cell" }, el(ToolChip, { tool: run.last_tool, settled })),
         el(ActivityStrip, { ticks: run.ticks, readAt })
       ),
       children.length ? el("ol", { className: "olympus-lane-children" },
-        children.map((child) => el(ChildRow, { key: child.ref, child, now, fresh: freshRefs.has(child.ref), settled }))) : null,
+        children.map((child) => el(ChildRow, { key: child.ref, child, now, fresh: freshRefs.has(child.ref), settled, onOpen }))) : null,
       batch ? el("p", { className: "olympus-lane-batch" },
         "Tasks done " + batch.done + " of " + batch.total + (batch.failed ? ", " + plural(batch.failed, "failed") : "")) : null
     );
@@ -1413,7 +1414,7 @@
         el("button", { type: "button", className: "olympus-link-button olympus-lane-name", onClick: () => ctx.openAgent(agent.id) }, agent.label),
         agent.status ? el(StatusPill, { status: agent.status, label: agent.status_label }) : null
       ),
-      el("ol", { className: "olympus-lane-runs" }, asList(lane.runs).map((run) => el(RunRow, { key: run.ref, run, now: ctx.now, readAt, freshRefs, settled })))
+      el("ol", { className: "olympus-lane-runs" }, asList(lane.runs).map((run) => el(RunRow, { key: run.ref, run, now: ctx.now, readAt, freshRefs, settled, onOpen: ctx.openRun })))
     );
   }
 
@@ -1923,6 +1924,8 @@
       controls: Boolean(data && data.controls),
       openAgent,
       openPerformance: () => changeView("performance"),
+      // A session's steps live in the run view under Performance.
+      openRun: (ref) => { changeView("performance"); showRun(ref); },
       onActionDone
     };
     const open = selected && (agentById[selected] || detail);
