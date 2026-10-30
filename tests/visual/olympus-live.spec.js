@@ -40,7 +40,8 @@ test.describe("Live view", () => {
       // The lane header carries the roster's status, so Waiting on you still shows here.
       await expect(coder.locator(".olympus-lane-head .olympus-status")).toHaveText("Waiting on you");
 
-      await expect(page.locator(".olympus-live-idle")).toHaveText("Idle: Analyst, Ops, Researcher, Reviewer, Writer");
+      // Agents without a run keep their roster status, so none reads as calm when it is not.
+      await expect(page.locator(".olympus-live-idle")).toHaveText("No open runs: Analyst, Ops (Offline), Researcher (Waiting on you), Reviewer (Stalled), Writer (Failed)");
 
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(overflow).toBe(0);

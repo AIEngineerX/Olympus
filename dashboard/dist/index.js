@@ -1411,6 +1411,16 @@
     );
   }
 
+  // Agents with no open run, each with its roster status unless it is plain
+  // idle, so a stalled or failed agent never reads as calm here.
+  function noRunsLine(idle, ctx) {
+    const names = idle.map((agent) => {
+      const row = ctx.agentById[agent.id] || agent;
+      return row.status && row.status !== "idle" && row.status_label ? row.label + " (" + row.status_label + ")" : row.label;
+    });
+    return "No open runs: " + names.join(", ");
+  }
+
   function childRefs(payload) {
     const refs = new Set();
     asList(payload && payload.lanes).forEach((lane) => asList(lane.runs).forEach((run) => asList(run.children).forEach((child) => refs.add(child.ref))));
@@ -1466,8 +1476,7 @@
       !live && !error ? el(RosterSkeleton) : null,
       live && !lanes.length ? el("p", { className: "olympus-muted olympus-live-empty" }, "Nothing is running. A run shows here within " + live.poll_seconds + " s of starting.") : null,
       lanes.map((lane) => el(Lane, { key: lane.agent.id, lane, ctx, freshRefs, settled })),
-      idle.length ? el("p", { className: "olympus-muted olympus-live-idle" },
-        "Idle: " + idle.map((agent) => (ctx.agentById[agent.id] || agent).label).join(", ")) : null
+      idle.length ? el("p", { className: "olympus-muted olympus-live-idle" }, noRunsLine(idle, ctx)) : null
     );
   }
 
