@@ -1770,17 +1770,8 @@
    minute's tool calls. Motion only where state changes: a subagent slides
    in from its parent as it appears, its dot fills or turns red as it ends,
    the tool chip fades when it changes, ticks drift left a step a second. */
-.olympus-live-head {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px 16px;
+.olympus-page .olympus-live-head {
   margin: 0 0 8px;
-}
-
-.olympus-live-head .olympus-census {
-  margin: 0;
 }
 
 .olympus-lane {

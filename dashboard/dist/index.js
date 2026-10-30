@@ -1428,11 +1428,9 @@
   }
 
   function liveCensus(summary) {
-    return [
-      plural(Number(summary.agents_running || 0), "agent") + " running",
-      plural(Number(summary.runs || 0), "run"),
-      plural(Number(summary.children || 0), "subagent") + " running"
-    ].join(" · ");
+    const children = Number(summary.children || 0);
+    return plural(Number(summary.runs || 0), "run") + " open on " + plural(Number(summary.agents_running || 0), "agent")
+      + " · " + (children ? plural(children, "subagent") + " running" : "no subagents running");
   }
 
   function LiveView({ ctx }) {
@@ -1467,16 +1465,16 @@
     }, []);
     const lanes = asList(live && live.lanes);
     const idle = asList(live && live.idle);
+    // The header already says when Olympus last read Hermes, so this view
+    // adds one census line, and with nothing running, one sentence.
     return el("div", { className: "olympus-live" },
-      el("div", { className: "olympus-live-head" },
-        el("p", { className: "olympus-census" }, live ? liveCensus(live.summary || {}) : "Reading open runs…"),
-        live ? el("small", { className: "olympus-muted" }, "Updated " + ago(live.generated_at, ctx.now) + " · read again every " + live.poll_seconds + " s") : null
-      ),
+      lanes.length ? el("p", { className: "olympus-census olympus-live-head" }, liveCensus(live.summary || {})) : null,
       error ? el("p", { className: "olympus-error-text", role: "alert" }, "Could not read live runs: " + error) : null,
       !live && !error ? el(RosterSkeleton) : null,
-      live && !lanes.length ? el("p", { className: "olympus-muted olympus-live-empty" }, "Nothing is running. A run shows here within " + live.poll_seconds + " s of starting.") : null,
+      live && !lanes.length ? el("p", { className: "olympus-muted olympus-live-empty" },
+        "Nothing is running. Start a chat, a cron job or a Kanban task and it shows here within " + live.poll_seconds + " s.") : null,
       lanes.map((lane) => el(Lane, { key: lane.agent.id, lane, ctx, freshRefs, settled })),
-      idle.length ? el("p", { className: "olympus-muted olympus-live-idle" }, noRunsLine(idle, ctx)) : null
+      lanes.length && idle.length ? el("p", { className: "olympus-muted olympus-live-idle" }, noRunsLine(idle, ctx)) : null
     );
   }
 

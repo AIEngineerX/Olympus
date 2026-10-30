@@ -25,7 +25,9 @@ test.describe("Live view", () => {
     test(`at ${size.width}px: one lane per working agent, subagents under their run, idle agents folded`, async ({ page }, testInfo) => {
       const errors = await openLive(page, { state: "noisy" }, size);
       await expect(page.locator(".olympus-lane")).toHaveCount(2);
-      await expect(page.locator(".olympus-live-head .olympus-census")).toHaveText("2 agents running · 2 runs · 2 subagents running");
+      await expect(page.locator(".olympus-live-head")).toHaveText("2 runs open on 2 agents · 2 subagents running");
+      // The Hermes header already carries "Updated … ago"; the view does not repeat it.
+      await expect(page.locator(".olympus-live")).not.toContainText("Updated");
 
       const coder = page.locator('.olympus-lane[data-agent="profile:coder"]');
       await expect(coder.locator(".olympus-lane-run")).toHaveCount(1);
@@ -91,7 +93,9 @@ test.describe("Live view", () => {
   test("a fresh install says nothing is running", async ({ page }) => {
     await openLive(page, { state: "empty" }, DESKTOP);
     await expect(page.locator(".olympus-lane")).toHaveCount(0);
-    await expect(page.locator(".olympus-live-empty")).toHaveText("Nothing is running. A run shows here within 5 s of starting.");
+    // One sentence, nothing else: no census, no idle line, no poll chrome.
+    await expect(page.locator(".olympus-live-empty")).toHaveText("Nothing is running. Start a chat, a cron job or a Kanban task and it shows here within 5 s.");
+    await expect(page.locator(".olympus-live > *")).toHaveCount(1);
   });
 
   test("only a subagent that appears after the first read animates in", async ({ page }) => {
