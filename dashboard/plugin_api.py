@@ -12,7 +12,7 @@ import statistics
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 try:
@@ -5249,7 +5249,7 @@ def _live_child(row: Dict[str, Any], store: Dict[str, Any], log: Optional[Path])
 def build_live(profiles: List[Dict[str, Any]], now: Optional[float] = None) -> Dict[str, Any]:
     """One lane per agent with an open run: the run, its subagents, batch progress and the last minute of tool calls."""
     now = time.time() if now is None else now
-    lanes: List[Dict[str, Any]] = []
+    keyed: List[Tuple[Tuple[int, int, float], Dict[str, Any]]] = []
     idle: List[Dict[str, Any]] = []
     runs_total = children_running = 0
     for profile in profiles:
@@ -5288,7 +5288,14 @@ def build_live(profiles: List[Dict[str, Any]], now: Optional[float] = None) -> D
                 "ticks": [{"at": t["at"], "error": t["error"]} for t in ticks],
             })
         runs_total += len(runs)
-        lanes.append({"agent": agent, "runs": runs})
+        # Lanes that need eyes come first: a failed subagent, then the most
+        # subagents running, then the latest activity. Ties keep profile order.
+        kids = [child for run in runs for child in run["children"]]
+        latest = max(float(root.get("last_activity_at") or root.get("started_at") or 0) for root in store["runs"])
+        failed = sum(1 for child in kids if child["status"] == "failed")
+        running = sum(1 for child in kids if child["status"] == "running")
+        keyed.append(((-failed, -running, -latest), {"agent": agent, "runs": runs}))
+    lanes = [lane for _, lane in sorted(keyed, key=lambda item: item[0])]
     return {
         "generated_at": now_iso(),
         "poll_seconds": LIVE_POLL_SECONDS,

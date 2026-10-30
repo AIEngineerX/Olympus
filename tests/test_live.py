@@ -144,6 +144,28 @@ class LiveViewTest(unittest.TestCase):
         self.assertEqual(payload["summary"], {"runs": 1, "children": 1, "agents_running": 1})
         self.assertEqual(payload["poll_seconds"], plugin_api.LIVE_POLL_SECONDS)
 
+    def test_lanes_are_ordered_by_a_failed_subagent_then_running_count_then_recency(self):
+        # Coder: a newer run with two running subagents and no failure.
+        now = self.now
+        con = sqlite3.connect(self.home / "profiles" / "coder" / "state.db")
+        con.execute(SESSIONS_SQL)
+        con.execute(MESSAGES_SQL)
+        con.executemany("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, 6, 4, ?)", [
+            ("c-run", "kanban", "Ship the release", now - 300, None, None, now - 1, None),
+            ("c-a", "subagent", "Subagent: Bump the version", now - 120, None, None, now - 2, "c-run"),
+            ("c-b", "subagent", "Subagent: Write the notes", now - 110, None, None, now - 1, "c-run"),
+        ])
+        con.commit()
+        con.close()
+        # Default's failed subagent outranks Coder's two running ones and its newer activity.
+        self.assertEqual([lane["agent"]["id"] for lane in self.live()["lanes"]], ["profile:default", "profile:coder"])
+        con = sqlite3.connect(self.home / "state.db")
+        con.execute("UPDATE sessions SET end_reason = 'completed' WHERE id = 'child-c'")
+        con.commit()
+        con.close()
+        # With no failure anywhere, the lane with more subagents running comes first.
+        self.assertEqual([lane["agent"]["id"] for lane in self.live()["lanes"]], ["profile:coder", "profile:default"])
+
     def test_open_run_with_its_children_in_start_order(self):
         run = self.live()["lanes"][0]["runs"][0]
         self.assertEqual(run["source"], "cli")

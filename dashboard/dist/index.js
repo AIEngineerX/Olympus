@@ -1300,7 +1300,9 @@
   // Live: every open run and its subagents, read again every five seconds.
   // One lane per agent with an open run; a run is two levels deep (the run,
   // then the subagents delegate_task opened under it), so each lane is a
-  // short tree, not a graph. Idle agents fold into one line at the end.
+  // short tree, not a graph. The backend orders lanes by what needs eyes
+  // (a failed subagent, then the most running, then the latest activity).
+  // Idle agents fold into one line at the end.
   // ---------------------------------------------------------------------
 
   const LIVE_REFRESH_MS = 5000;
@@ -1387,10 +1389,37 @@
     );
   }
 
-  // Every label is a session, so each opens that session's steps in the run view.
+  // The last leaf of a run's tree: batch progress from the manifest when
+  // there is one, otherwise a count of the finished subagents. Failures keep
+  // their colour so a closed fold still says something went wrong.
+  function foldText(batch, finished) {
+    const failed = batch ? batch.failed : finished.filter((child) => child.status === "failed").length;
+    const failedText = failed ? el("span", { key: "failed", className: "olympus-lane-fold-failed" }, plural(failed, "failed")) : null;
+    if (batch) return ["Tasks done " + batch.done + " of " + batch.total, failedText ? ", " : null, failedText];
+    const done = finished.length - failed;
+    return [done ? plural(done, "done") : null, done && failedText ? ", " : null, failedText];
+  }
+
+  // Every label is a session, so each opens that session's steps in the run
+  // view. Running subagents stay as rows; finished ones fold under the batch
+  // line, so a run reads as what is still moving plus one line of progress.
   function RunRow({ run, now, readAt, freshRefs, settled, onOpen }) {
     const batch = run.batch;
     const children = asList(run.children);
+    const running = children.filter((child) => child.status === "running");
+    const finished = children.filter((child) => child.status !== "running");
+    const row = (child) => el(ChildRow, { key: child.ref, child, now, fresh: freshRefs.has(child.ref), settled, onOpen });
+    let fold = null;
+    if (finished.length) {
+      fold = el("li", { key: "fold", className: "olympus-lane-fold" },
+        el("details", { className: "olympus-lane-finished" },
+          el("summary", { className: "olympus-lane-batch" }, foldText(batch, finished), el("span", { className: "olympus-lane-fold-toggle", "aria-hidden": "true" })),
+          el("ol", { className: "olympus-lane-finished-list" }, finished.map(row))
+        )
+      );
+    } else if (batch) {
+      fold = el("li", { key: "fold", className: "olympus-lane-fold" }, el("p", { className: "olympus-lane-batch" }, foldText(batch, finished)));
+    }
     return el("li", { className: "olympus-lane-run" },
       el("div", { className: "olympus-lane-run-row" },
         el("span", { className: "olympus-lane-cell olympus-lane-source" }, sourceText(run.source)),
@@ -1399,10 +1428,7 @@
         el("span", { className: "olympus-lane-cell olympus-lane-tool-cell" }, el(ToolChip, { tool: run.last_tool, settled })),
         el(ActivityStrip, { ticks: run.ticks, readAt })
       ),
-      children.length ? el("ol", { className: "olympus-lane-children" },
-        children.map((child) => el(ChildRow, { key: child.ref, child, now, fresh: freshRefs.has(child.ref), settled, onOpen }))) : null,
-      batch ? el("p", { className: "olympus-lane-batch" },
-        "Tasks done " + batch.done + " of " + batch.total + (batch.failed ? ", " + plural(batch.failed, "failed") : "")) : null
+      running.length || fold ? el("ol", { className: "olympus-lane-children" }, running.map(row), fold) : null
     );
   }
 

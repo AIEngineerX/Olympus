@@ -1767,15 +1767,16 @@
 
 /* Live: one lane per agent with an open run. A run row, its subagents
    indented under a hairline, the batch line, and a strip of the last
-   minute's tool calls. Motion only where state changes: a subagent slides
-   in from its parent as it appears, its dot fills or turns red as it ends,
-   the tool chip fades when it changes, ticks drift left a step a second. */
+   minute's tool calls. Running subagents are rows; finished ones fold under
+   the batch line. Motion only where state changes: a subagent slides in
+   from its parent as it appears, its dot fills or turns red as it ends, the
+   tool chip fades when it changes, the strip moves once per read. */
 .olympus-page .olympus-live-head {
   margin: 0 0 8px;
 }
 
 .olympus-lane {
-  padding: 12px 0 14px;
+  padding: 10px 0 12px;
   border-top: 1px solid var(--olympus-hairline);
 }
 
@@ -1792,7 +1793,8 @@
 }
 
 .olympus-lane-runs,
-.olympus-lane-children {
+.olympus-lane-children,
+.olympus-lane-finished-list {
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1802,14 +1804,27 @@
   padding: 2px 0;
 }
 
+/* Columns pack left so a row reads as one line: source, task, time, tool,
+   activity. The task column is capped, not stretched, so the rest never
+   drifts to the far edge of a wide screen. */
 .olympus-lane-run-row,
 .olympus-lane-child {
   display: grid;
-  grid-template-columns: 84px minmax(0, 1fr) 96px minmax(0, 240px) 120px;
+  grid-template-columns: 84px minmax(0, 320px) 96px minmax(0, 240px) 120px;
+  justify-content: start;
   gap: 12px;
   align-items: center;
   min-height: 30px;
   font-size: 13px;
+}
+
+/* The run is the header of its tree; subagents sit one step lighter. */
+.olympus-lane-run-row .olympus-lane-label {
+  font-weight: 600;
+}
+
+.olympus-lane-child {
+  min-height: 28px;
 }
 
 .olympus-lane-cell {
@@ -1941,11 +1956,60 @@
   color: var(--color-destructive);
 }
 
+/* The batch line is the last leaf of the tree. When subagents have finished
+   it is a disclosure that opens their rows; otherwise it is plain text. */
+.olympus-lane-fold {
+  position: relative;
+}
+
+.olympus-lane-fold::before {
+  content: "";
+  position: absolute;
+  top: 14px;
+  left: -16px;
+  width: 11px;
+  height: 1px;
+  background: var(--olympus-hairline);
+}
+
 .olympus-page .olympus-lane-batch {
-  margin: 2px 0 4px 27px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  margin: 0;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: var(--olympus-muted);
+}
+
+.olympus-page summary.olympus-lane-batch {
+  list-style: none;
+  cursor: pointer;
+}
+
+.olympus-page summary.olympus-lane-batch::-webkit-details-marker {
+  display: none;
+}
+
+.olympus-lane-fold-failed {
+  color: var(--color-destructive);
+}
+
+.olympus-lane-fold-toggle {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin: 0 0 2px 2px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.olympus-lane-finished[open] > .olympus-lane-batch .olympus-lane-fold-toggle {
+  margin-bottom: 4px;
+  transform: rotate(45deg);
 }
 
 .olympus-lane-strip-cell {
@@ -2044,7 +2108,8 @@
   }
 
   .olympus-lane-dot,
-  .olympus-lane-child-done {
+  .olympus-lane-child-done,
+  .olympus-lane-fold-toggle {
     transition: none;
   }
 }

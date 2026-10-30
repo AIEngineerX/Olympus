@@ -25,6 +25,8 @@ test.describe("Live view", () => {
     test(`at ${size.width}px: one lane per working agent, subagents under their run, idle agents folded`, async ({ page }, testInfo) => {
       const errors = await openLive(page, { state: "noisy" }, size);
       await expect(page.locator(".olympus-lane")).toHaveCount(2);
+      // Coder has a failed subagent, so its lane comes before Default's.
+      await expect(page.locator(".olympus-lane-name")).toHaveText(["Coder", "Default"]);
       await expect(page.locator(".olympus-live-head")).toHaveText("2 runs open on 2 agents · 2 subagents running");
       // The Hermes header already carries "Updated … ago"; the view does not repeat it.
       await expect(page.locator(".olympus-live")).not.toContainText("Updated");
@@ -33,12 +35,21 @@ test.describe("Live view", () => {
       await expect(coder.locator(".olympus-lane-run")).toHaveCount(1);
       await expect(coder.locator(".olympus-lane-source")).toHaveText("Kanban");
       await expect(coder.locator(".olympus-lane-run-row .olympus-lane-label")).toHaveText("Fix flaky checkout test");
+      // The running subagent is a row; the two finished ones fold under the batch line until opened.
       await expect(coder.locator(".olympus-lane-child")).toHaveCount(3);
-      await expect(coder.locator(".olympus-lane-child .olympus-lane-status")).toHaveText(["Done", "Failed", "Running"]);
+      await expect(coder.locator(".olympus-lane-child .olympus-lane-status")).toHaveText(["Running", "Done", "Failed"]);
+      await expect(coder.locator(".olympus-lane-child-running")).toBeVisible();
+      await expect(coder.locator(".olympus-lane-child-done")).toBeHidden();
+      await expect(coder.locator(".olympus-lane-child-failed")).toBeHidden();
       await expect(coder.locator(".olympus-lane-child-running .olympus-lane-tool")).toHaveText("terminal(npm test -- checkout)");
       await expect(coder.locator(".olympus-lane-child-running .olympus-lane-time")).toHaveText(/^for \d+ min$/);
+      await expect(coder.locator("summary.olympus-lane-batch")).toHaveText("Tasks done 1 of 3, 1 failed");
+      await expect(coder.locator(".olympus-lane-fold-failed")).toHaveText("1 failed");
+      await coder.locator("summary.olympus-lane-batch").click();
+      await expect(coder.locator(".olympus-lane-child-done")).toBeVisible();
       await expect(coder.locator(".olympus-lane-child-failed .olympus-lane-note")).toHaveText("1 failed call");
-      await expect(coder.locator(".olympus-lane-batch")).toHaveText("Tasks done 1 of 3, 1 failed");
+      // A run with every subagent still running keeps a plain batch line.
+      await expect(page.locator('.olympus-lane[data-agent="profile:default"] .olympus-lane-batch')).toHaveText("Tasks done 1 of 2");
       // The lane header carries the roster's status, so Waiting on you still shows here.
       await expect(coder.locator(".olympus-lane-head .olympus-status")).toHaveText("Waiting on you");
 
@@ -85,8 +96,10 @@ test.describe("Live view", () => {
     for (const phrase of ["Fix flaky", "Patch the retry", "Collect revenue", "npm test", "reports/churn", "coder-kanban", "live-main", "deleg_"]) {
       expect(text).not.toContain(phrase);
     }
-    await expect(page.locator(".olympus-lane-child-running .olympus-lane-tool").last()).toHaveText("terminal");
-    await expect(page.locator(".olympus-lane-batch").last()).toHaveText("Tasks done 1 of 3, 1 failed");
+    // Agent ids are hashed here too, so the Coder lane is found by its place: first, for its failed subagent.
+    const coder = page.locator(".olympus-lane").first();
+    await expect(coder.locator(".olympus-lane-child-running .olympus-lane-tool")).toHaveText("terminal");
+    await expect(coder.locator(".olympus-lane-batch")).toHaveText("Tasks done 1 of 3, 1 failed");
     // A hidden run label never repeats the source word beside it.
     const labels = await page.locator(".olympus-lane-run-row .olympus-lane-label").allTextContents();
     expect(labels).toEqual([expect.stringMatching(/^Run [0-9a-f]{6}$/), expect.stringMatching(/^Run [0-9a-f]{6}$/)]);
@@ -119,6 +132,7 @@ test.describe("Live view", () => {
       const errors = await openLive(page, { state: "noisy", agents: "12", lanes: "14" }, size);
       await expect(page.locator(".olympus-lane")).toHaveCount(14);
       await expect(page.locator(".olympus-lane-child")).toHaveCount(41);
+      await expect(page.locator(".olympus-lane-child-running")).toHaveCount(14);
       await page.clock.runFor(10_500);
       const log = await page.evaluate(() => window.__OLYMPUS_FETCH_LOG__);
       expect(log.peak).toBeLessThanOrEqual(2);
@@ -126,7 +140,7 @@ test.describe("Live view", () => {
       expect(overflow).toBe(0);
       const lastLane = page.locator(".olympus-lane").last();
       await lastLane.scrollIntoViewIfNeeded();
-      await expect(lastLane.locator(".olympus-lane-child").last()).toBeVisible();
+      await expect(lastLane.locator(".olympus-lane-child-running").last()).toBeVisible();
       expect(errors).toEqual([]);
     });
   }
@@ -161,12 +175,15 @@ test.describe("Live view", () => {
     await openLive(page, { state: "noisy" }, DESKTOP);
     const coder = page.locator('.olympus-lane[data-agent="profile:coder"]');
     const weights = await coder.locator(".olympus-lane-child .olympus-lane-status").evaluateAll((nodes) => nodes.map((n) => getComputedStyle(n).fontWeight));
-    expect(weights).toEqual(["400", "400", "600"]);
+    expect(weights).toEqual(["600", "400", "400"]);
+    // The run label is the header of its tree.
+    const runWeight = await coder.locator(".olympus-lane-run-row .olympus-lane-label").evaluate((n) => getComputedStyle(n).fontWeight);
+    expect(runWeight).toBe("600");
     const doneDot = await coder.locator(".olympus-lane-child-done .olympus-lane-dot").evaluate((n) => getComputedStyle(n).backgroundColor);
     expect(doneDot).toBe("rgba(0, 0, 0, 0)");
     const chipWeight = await coder.locator(".olympus-lane-tool").first().evaluate((n) => getComputedStyle(n).fontWeight);
     expect(chipWeight).toBe("400");
-    // The batch line keeps its indent under the tree, not the source column.
+    // The batch line is the last leaf of the tree, level with the subagent rows.
     const [batchLeft, childLeft] = await Promise.all([
       coder.locator(".olympus-lane-batch").evaluate((n) => n.getBoundingClientRect().left),
       coder.locator(".olympus-lane-child").first().evaluate((n) => n.getBoundingClientRect().left)

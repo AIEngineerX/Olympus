@@ -27,11 +27,13 @@ problems it targets, and the Hermes issues that show people have them, are in
 
 - **Live.** Every open run as it happens, read again every five seconds: one
   lane per agent with a run going, the run's source and elapsed time, the tool
-  it is on, and under it each subagent `delegate_task` opened (running, done
-  or failed, with its own last tool), plus "Tasks done 1 of 3" from Hermes'
-  own batch manifest and a strip of the last minute's tool calls with the
-  failed ones marked. A subagent slides in under its parent when it starts
-  and dims when it finishes. Idle agents fold into one line.
+  it is on, and under it each subagent `delegate_task` opened that is still
+  running, with its own last tool. Finished subagents fold under "Tasks done
+  1 of 3, 1 failed" (from Hermes' own batch manifest) and open on a click. A
+  strip of the last minute's tool calls marks the failed ones. Lanes with a
+  failed subagent come first, then the busiest, then the most recent. A
+  subagent slides in under its parent when it starts. Idle agents fold into
+  one line.
 ![Live: one lane per working agent, its run, the subagents under it with their status and last tool, and the last minute of tool calls](screenshots/live.png)
 
 - **Performance.** For 7 or 30 days: runs, how many succeeded, typical and slow
