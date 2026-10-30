@@ -257,6 +257,24 @@
           // under the first run, as it would when a batch fans out.
           liveReads += 1;
           const live = shifted(generated.live);
+          // ?lanes=<n> grows the Live view to n lanes by copying the busiest
+          // lane under the extra agents ?agents= adds, for scale checks.
+          const wanted = Number(params.get("lanes") || 0);
+          if (wanted > live.lanes.length) {
+            const template = live.lanes.reduce((a, b) => (b.runs[0].children.length > a.runs[0].children.length ? b : a));
+            const existing = live.lanes.length;
+            for (let n = existing; n < wanted; n++) {
+              const idx = n - existing;
+              const agent = data.agents.agents.find((row) => row.id === "profile:extra_" + idx) || { id: "profile:extra_" + idx, label: "Profile " + (idx + 10), avatar: String(idx + 10) };
+              const runs = template.runs.map((run) => Object.assign({}, run, {
+                ref: run.ref + "-x" + idx,
+                children: run.children.map((child) => Object.assign({}, child, { ref: child.ref + "-x" + idx }))
+              }));
+              live.lanes.push({ agent: { id: agent.id, label: agent.label, avatar: agent.avatar }, runs });
+            }
+            live.summary = Object.assign({}, live.summary, { agents_running: live.lanes.length, runs: live.lanes.reduce((s, l) => s + l.runs.length, 0),
+              children: live.lanes.reduce((s, l) => s + l.runs.reduce((t, r) => t + r.children.filter((c) => c.status === "running").length, 0), 0) });
+          }
           if (params.get("grow") && liveReads > 1 && live.lanes.length) {
             const run = live.lanes[0].runs[0];
             run.children = run.children.concat([{ ref: "session:grown", label: "Draft the cover note", status: "running",

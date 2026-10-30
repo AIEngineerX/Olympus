@@ -113,6 +113,24 @@ test.describe("Live view", () => {
     await expect(runView.locator("h2")).toHaveText("Subagent: Patch the retry loop");
   });
 
+  for (const size of [DESKTOP, MOBILE]) {
+    test(`at ${size.width}px: fourteen lanes with forty-one subagents stay readable, one read at a time`, async ({ page }) => {
+      await page.clock.install();
+      const errors = await openLive(page, { state: "noisy", agents: "12", lanes: "14" }, size);
+      await expect(page.locator(".olympus-lane")).toHaveCount(14);
+      await expect(page.locator(".olympus-lane-child")).toHaveCount(41);
+      await page.clock.runFor(10_500);
+      const log = await page.evaluate(() => window.__OLYMPUS_FETCH_LOG__);
+      expect(log.peak).toBeLessThanOrEqual(2);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      expect(overflow).toBe(0);
+      const lastLane = page.locator(".olympus-lane").last();
+      await lastLane.scrollIntoViewIfNeeded();
+      await expect(lastLane.locator(".olympus-lane-child").last()).toBeVisible();
+      expect(errors).toEqual([]);
+    });
+  }
+
   test("a fresh install says nothing is running", async ({ page }) => {
     await openLive(page, { state: "empty" }, DESKTOP);
     await expect(page.locator(".olympus-lane")).toHaveCount(0);
