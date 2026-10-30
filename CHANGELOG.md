@@ -4,6 +4,20 @@ All notable changes to Olympus are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- A Live view: every open run as it happens, polled every five seconds. One
+  lane per agent with a run going; under the run, each subagent
+  `delegate_task` opened, as running, done or failed, with the tool it is on;
+  "Tasks done N of M" from Hermes' batch manifest
+  (`cache/delegation/live/<id>/manifest.json`); and a strip of the last
+  minute's tool calls with failed ones marked. The tool a subagent is on comes
+  from Hermes' live transcript (`task-<n>.log`); its arguments show only with
+  `expose_local_labels` on. New endpoint `GET /api/plugins/olympus/live`.
+  Built as a bet against #143077, #132468 and #58725, not a counted problem.
+
 ## [2.0.1] - 2026-10-27
 
 ### Added

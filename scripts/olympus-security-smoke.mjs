@@ -141,20 +141,67 @@ async function startHermesIfNeeded() {
 }
 
 async function fetchOverview(sessionToken) {
-  const response = await requestText(apiUrl, {
+  return fetchRoute(apiUrl, "Overview", sessionToken);
+}
+
+// /live is polled every five seconds while the Live view is open and carries
+// run titles, subagent goals and tool arguments, so it gets the same scan.
+async function fetchLive(sessionToken) {
+  return fetchRoute(new URL("/api/plugins/olympus/live", baseUrl).toString(), "Live", sessionToken);
+}
+
+async function fetchRoute(url, name, sessionToken) {
+  const response = await requestText(url, {
     headers: sessionToken ? { "X-Hermes-Session-Token": sessionToken } : {},
   }, 10000);
   if (response.statusCode < 200 || response.statusCode >= 300) {
     const hint = response.statusCode === 404
       ? await backendCompatibilityHint(sessionToken, { overview: response.statusCode })
       : "";
-    throw new Error(`Overview request failed with ${response.statusCode}: ${response.body.slice(0, 500)}${hint ? "\n" + hint : ""}`);
+    throw new Error(`${name} request failed with ${response.statusCode}: ${response.body.slice(0, 500)}${hint ? "\n" + hint : ""}`);
   }
   try {
     return JSON.parse(response.body);
   } catch (error) {
-    throw new Error(`Overview response was not JSON: ${error && error.message ? error.message : error}`);
+    throw new Error(`${name} response was not JSON: ${error && error.message ? error.message : error}`);
   }
+}
+
+function scanForLeaks(payload, pathName) {
+  const failures = [];
+  const serialized = JSON.stringify(payload);
+  for (const item of leakPatterns) {
+    const match = serialized.match(item.pattern);
+    if (match) failures.push(`${pathName} ${item.name}: ${match[0]}`);
+  }
+  const rawFieldLeaks = [];
+  function scanRawFields(value, nested) {
+    if (Array.isArray(value)) {
+      value.forEach((item, idx) => scanRawFields(item, `${nested}[${idx}]`));
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    for (const [key, item] of Object.entries(value)) {
+      const nextPath = `${nested}.${key}`;
+      if (rawFieldKeys.has(key)) rawFieldLeaks.push(nextPath);
+      scanRawFields(item, nextPath);
+    }
+  }
+  scanRawFields(payload, pathName);
+  rawFieldLeaks.forEach((item) => failures.push(`raw field: ${item}`));
+  return failures;
+}
+
+function assertLivePayload(payload) {
+  const failures = [];
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.lanes)) failures.push("live payload has no lanes");
+  failures.push(...scanForLeaks(payload, "live"));
+  // With labels hidden a tool chip is a name only: no arguments, which may hold paths or URLs.
+  JSON.stringify(payload, (key, value) => {
+    if (key === "args") failures.push("live: tool arguments present with labels hidden");
+    return value;
+  });
+  return failures;
 }
 
 function assertPayload(payload) {
@@ -163,26 +210,7 @@ function assertPayload(payload) {
   if (!payload.evidence_sources) failures.push("missing evidence_sources");
   if (!payload.skill_hygiene) failures.push("missing skill_hygiene");
   if (!payload.config_policy) failures.push("missing config_policy");
-  const serialized = JSON.stringify(payload);
-  for (const item of leakPatterns) {
-    const match = serialized.match(item.pattern);
-    if (match) failures.push(`${item.name}: ${match[0]}`);
-  }
-  const rawFieldLeaks = [];
-  function scanRawFields(value, pathName) {
-    if (Array.isArray(value)) {
-      value.forEach((item, idx) => scanRawFields(item, `${pathName}[${idx}]`));
-      return;
-    }
-    if (!value || typeof value !== "object") return;
-    for (const [key, item] of Object.entries(value)) {
-      const nextPath = `${pathName}.${key}`;
-      if (rawFieldKeys.has(key)) rawFieldLeaks.push(nextPath);
-      scanRawFields(item, nextPath);
-    }
-  }
-  scanRawFields(payload, "overview");
-  rawFieldLeaks.forEach((item) => failures.push(`raw field: ${item}`));
+  failures.push(...scanForLeaks(payload, "overview"));
   const privacy = payload.evidence_sources &&
     payload.evidence_sources.summary &&
     payload.evidence_sources.summary.privacy;
@@ -197,7 +225,8 @@ async function main() {
   try {
     const sessionToken = await fetchSessionToken(baseUrl);
     const payload = await fetchOverview(sessionToken);
-    const failures = assertPayload(payload);
+    const live = await fetchLive(sessionToken);
+    const failures = assertPayload(payload).concat(assertLivePayload(live));
     const summary = {
       ok: failures.length === 0,
       url: apiUrl,

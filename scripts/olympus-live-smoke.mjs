@@ -35,6 +35,10 @@ const viewSections = {
     [".olympus-census", ""],
     [".olympus-roster", ""],
   ],
+  Live: [
+    [".olympus-live", ""],
+    [".olympus-live-head .olympus-census", "run"],
+  ],
   Performance: [
     [".olympus-performance", ""],
   ],

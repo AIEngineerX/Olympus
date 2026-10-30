@@ -24,6 +24,7 @@ NousResearch/hermes-agent issues (all 17,003 read by title and body on
 | Kanban tasks are held back or stuck with no reason shown | #29458, #119070, #83047, #35986, #137597 (about 61) | Stalled, blocked and failing tasks with Answer, Retry, Reclaim, Reassign; held-back tasks planned |
 | Which runs succeed, how long they take, which tools fail | #6642 (1 clear request) | Performance view; no further investment until a real user uses it |
 | Cost per job or task | #106615, #107744, #131119 (7 people) | Spend per cron job in Checks |
+| Which subagents are still running, on what, and how far a batch is | #143077, #132468, #58725 (3 people, 0 to 1 comments each): a **bet**, not a counted problem | Live view: lanes of open runs with their subagents, last tool, tasks done of dispatched |
 
 Not possible as a plugin: approvals nobody sees (#133514, about 73 people).
 Hermes keeps pending approvals in gateway memory, with no table or API to read.

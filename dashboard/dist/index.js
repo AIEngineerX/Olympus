@@ -514,6 +514,7 @@
 
   const VIEWS = [
     { id: "agents", label: "Agents" },
+    { id: "live", label: "Live" },
     { id: "performance", label: "Performance" },
     { id: "checks", label: "Checks" }
   ];
@@ -1296,6 +1297,154 @@
   }
 
   // ---------------------------------------------------------------------
+  // Live: every open run and its subagents, read again every five seconds.
+  // One lane per agent with an open run; a run is two levels deep (the run,
+  // then the subagents delegate_task opened under it), so each lane is a
+  // short tree, not a graph. Idle agents fold into one line at the end.
+  // ---------------------------------------------------------------------
+
+  const LIVE_REFRESH_MS = 5000;
+  const LIVE_WINDOW_MS = 60000;
+  const LIVE_STRIP_WIDTH = 120;
+  const LIVE_STRIP_HEIGHT = 14;
+  const SOURCE_TEXT = { cli: "CLI", oneshot: "CLI", cron: "Cron", kanban: "Kanban", subagent: "Subagent", api_server: "API", acp: "ACP" };
+  const CHILD_STATUS_TEXT = { running: "Running", done: "Done", failed: "Failed" };
+
+  function sourceText(source) {
+    const key = String(source || "session");
+    return SOURCE_TEXT[key] || key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, " ");
+  }
+
+  function spanBetween(startIso, endIso) {
+    const start = parseTime(startIso);
+    const end = parseTime(endIso);
+    return start == null || end == null ? null : formatSpan(Math.max(0, end - start));
+  }
+
+  // The tool a session is on. Keyed by its text so a change remounts it and
+  // the stylesheet fades the new one in.
+  function ToolChip({ tool }) {
+    if (!tool || !tool.name) return null;
+    const text = tool.name + (tool.args ? "(" + tool.args + ")" : "");
+    return el("code", { key: text, className: "olympus-lane-tool", title: text }, text);
+  }
+
+  // The last minute of tool calls as ticks that drift left one pixel-step a
+  // second: a call in accent, a failed call taller and in the failure colour.
+  function ActivityStrip({ ticks, now }) {
+    const rows = asList(ticks).filter((tick) => parseTime(tick.at) != null);
+    const failed = rows.filter((tick) => tick.error).length;
+    const label = rows.length
+      ? plural(rows.length, "tool call") + " in the last minute" + (failed ? ", " + failed + " failed" : "")
+      : "No tool calls in the last minute";
+    return el("svg", {
+      className: "olympus-lane-strip",
+      width: LIVE_STRIP_WIDTH,
+      height: LIVE_STRIP_HEIGHT,
+      viewBox: "0 0 " + LIVE_STRIP_WIDTH + " " + LIVE_STRIP_HEIGHT,
+      role: "img",
+      "aria-label": label
+    },
+      el("title", null, label),
+      el("line", { x1: 0, y1: LIVE_STRIP_HEIGHT - 0.5, x2: LIVE_STRIP_WIDTH, y2: LIVE_STRIP_HEIGHT - 0.5, className: "olympus-lane-strip-base" }),
+      rows.map((tick, idx) => {
+        const age = Math.max(0, Math.min(1, (now - parseTime(tick.at)) / LIVE_WINDOW_MS));
+        return el("rect", {
+          key: tick.at + idx,
+          x: LIVE_STRIP_WIDTH - 2,
+          y: tick.error ? 1 : 5,
+          width: 2,
+          height: tick.error ? LIVE_STRIP_HEIGHT - 2 : LIVE_STRIP_HEIGHT - 6,
+          className: cx("olympus-lane-tick", tick.error && "olympus-lane-tick-error"),
+          style: { transform: "translateX(-" + (age * LIVE_STRIP_WIDTH).toFixed(1) + "px)" }
+        });
+      })
+    );
+  }
+
+  function ChildRow({ child, now }) {
+    const running = child.status === "running";
+    return el("li", { className: cx("olympus-lane-child", "olympus-lane-child-" + child.status), "data-status": child.status },
+      el("span", { className: "olympus-lane-cell olympus-lane-status" },
+        el("span", { className: cx("olympus-lane-dot", "olympus-lane-dot-" + child.status), "aria-hidden": "true" }),
+        CHILD_STATUS_TEXT[child.status] || child.status
+      ),
+      el("span", { className: "olympus-lane-cell olympus-lane-label" }, child.label),
+      el("span", { className: "olympus-lane-cell olympus-lane-time" }, running ? elapsed(child.started_at, now) : spanBetween(child.started_at, child.ended_at)),
+      el("span", { className: "olympus-lane-cell olympus-lane-tool-cell" }, el(ToolChip, { tool: child.last_tool })),
+      el("span", { className: "olympus-lane-cell olympus-lane-note" }, child.errors ? plural(child.errors, "failed call") : null)
+    );
+  }
+
+  function RunRow({ run, now }) {
+    const batch = run.batch;
+    const children = asList(run.children);
+    return el("li", { className: "olympus-lane-run" },
+      el("div", { className: "olympus-lane-run-row" },
+        el("span", { className: "olympus-lane-cell olympus-lane-source" }, sourceText(run.source)),
+        el("span", { className: "olympus-lane-cell olympus-lane-label" }, run.label),
+        el("span", { className: "olympus-lane-cell olympus-lane-time" }, elapsed(run.started_at, now)),
+        el("span", { className: "olympus-lane-cell olympus-lane-tool-cell" }, el(ToolChip, { tool: run.last_tool })),
+        el(ActivityStrip, { ticks: run.ticks, now })
+      ),
+      children.length ? el("ol", { className: "olympus-lane-children" }, children.map((child) => el(ChildRow, { key: child.ref, child, now }))) : null,
+      batch ? el("p", { className: "olympus-lane-batch" },
+        "Tasks done " + batch.done + " of " + batch.total + (batch.failed ? ", " + plural(batch.failed, "failed") : "")) : null
+    );
+  }
+
+  function Lane({ lane, ctx }) {
+    const agent = ctx.agentById[lane.agent.id] || lane.agent;
+    return el("section", { className: "olympus-lane", "aria-label": agent.label, "data-agent": agent.id },
+      el("header", { className: "olympus-lane-head" },
+        el(Avatar, { agent }),
+        el("button", { type: "button", className: "olympus-link-button olympus-lane-name", onClick: () => ctx.openAgent(agent.id) }, agent.label),
+        agent.status ? el(StatusPill, { status: agent.status, label: agent.status_label }) : null
+      ),
+      el("ol", { className: "olympus-lane-runs" }, asList(lane.runs).map((run) => el(RunRow, { key: run.ref, run, now: ctx.now })))
+    );
+  }
+
+  function liveCensus(summary) {
+    return [
+      plural(Number(summary.agents_running || 0), "agent") + " running",
+      plural(Number(summary.runs || 0), "run"),
+      plural(Number(summary.children || 0), "subagent") + " running"
+    ].join(" · ");
+  }
+
+  function LiveView({ ctx }) {
+    const [live, setLive] = useState(null);
+    const [error, setError] = useState(null);
+    useEffect(() => {
+      let alive = true;
+      let timer = null;
+      function load() {
+        SDK.fetchJSON(API + "/live")
+          .then((next) => { if (alive) { setLive(next); setError(null); } })
+          .catch((err) => { if (alive) setError(toErrorMessage(err)); })
+          .finally(() => { if (alive) timer = window.setTimeout(load, LIVE_REFRESH_MS); });
+      }
+      load();
+      return () => { alive = false; window.clearTimeout(timer); };
+    }, []);
+    const lanes = asList(live && live.lanes);
+    const idle = asList(live && live.idle);
+    return el("div", { className: "olympus-live" },
+      el("div", { className: "olympus-live-head" },
+        el("p", { className: "olympus-census" }, live ? liveCensus(live.summary || {}) : "Reading open runs…"),
+        live ? el("small", { className: "olympus-muted" }, "Updated " + ago(live.generated_at, ctx.now) + " · read again every " + live.poll_seconds + " s") : null
+      ),
+      error ? el("p", { className: "olympus-error-text", role: "alert" }, "Could not read live runs: " + error) : null,
+      !live && !error ? el(RosterSkeleton) : null,
+      live && !lanes.length ? el("p", { className: "olympus-muted olympus-live-empty" }, "Nothing is running. A run shows here within " + live.poll_seconds + " s of starting.") : null,
+      lanes.map((lane) => el(Lane, { key: lane.agent.id, lane, ctx })),
+      idle.length ? el("p", { className: "olympus-muted olympus-live-idle" },
+        "Idle: " + idle.map((agent) => (ctx.agentById[agent.id] || agent).label).join(", ")) : null
+    );
+  }
+
+  // ---------------------------------------------------------------------
   // Checks: the material that is not about one agent.
   // ---------------------------------------------------------------------
 
@@ -1564,7 +1713,7 @@
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(true);
     const [client, setClient] = useState(null);
-    const [view, setView] = useState(["performance", "checks"].includes(readParam("view")) ? readParam("view") : "agents");
+    const [view, setView] = useState(["live", "performance", "checks"].includes(readParam("view")) ? readParam("view") : "agents");
     const [days, setDays] = useState(readParam("days") === "30" ? 30 : 7);
     const [runRef, setRunRef] = useState(readParam("run"));
     const [selected, setSelected] = useState(readParam("agent"));
@@ -1743,6 +1892,7 @@
     else if (!data) body = el(RosterSkeleton);
     else if (data.static) body = el(React.Fragment, null, el(BackendOff, { info: data.static }), el(StaticRoster, { agents: data.static_agents }));
     else if (view === "checks") body = el(Checks, { data, ctx, client });
+    else if (view === "live") body = el(LiveView, { ctx });
     else if (view === "performance") body = el(PerformanceView, { ctx, days, onDays: changeDays, selected, onSelect: selectPerformance, runRef, onRun: showRun });
     else body = el(React.Fragment, null,
       el(NeedsYouBanner, { queue: data.needs_you, ctx }),

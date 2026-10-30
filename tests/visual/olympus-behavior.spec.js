@@ -219,7 +219,7 @@ test.describe("Olympus behaviour", () => {
     await expect(panel.locator(".olympus-facts")).toContainText("was 100% the 7 days before");
     await expect(perf.locator('tr[data-agent="profile:coder"] td[data-label="Trend"]')).toContainText("was 100% the 7 days before");
     const terminal = panel.locator(".olympus-table tbody tr").filter({ hasText: "terminal" });
-    await expect(terminal.locator("td")).toHaveText(["terminal", "12", "8", "67%"]);
+    await expect(terminal.locator("td")).toHaveText(["terminal", "15", "10", "67%"]);
 
     await panel.locator(".olympus-work-row").filter({ hasText: "Retry the flaky test until green" }).first().getByRole("button", { name: "Inspect run" }).click();
     const run = page.getByRole("complementary", { name: "Run detail" });

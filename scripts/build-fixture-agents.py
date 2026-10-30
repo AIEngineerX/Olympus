@@ -60,6 +60,37 @@ def seed(home: Path, now: float) -> None:
         con.commit()
         con.close()
 
+    def delegation(profile: Path, deleg_id: str, started: float, tasks: list[tuple]) -> None:
+        """What delegate_task writes per batch: manifest.json plus one live transcript per task."""
+        live = profile / "cache" / "delegation" / "live" / deleg_id
+        live.mkdir(parents=True)
+        stamp = lambda ts: time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))  # noqa: E731
+        manifest = {"delegation_id": deleg_id, "started": stamp(started), "task_count": len(tasks), "model": "claude-sonnet-5-5", "provider": None, "tasks": []}
+        for index, (goal, status, events, final) in enumerate(tasks):
+            log = live / f"task-{index}.log"
+            lines = [
+                "=== Hermes subagent live transcript ===",
+                f"delegation: {deleg_id}   task: {index}",
+                f"goal: {goal}",
+                f"started: {stamp(started)}",
+                "(append-only; streams while the subagent runs — tail -f me)",
+                "=" * 40,
+                f"{time.strftime('%H:%M:%S', time.localtime(started))} user     | kickoff: {goal}",
+            ]
+            for n, event in enumerate(events):
+                role = "tool" if event.startswith("-> ") else "result"
+                lines.append(f"{time.strftime('%H:%M:%S', time.localtime(started + 20 + n * 15))} {role:<9}| {event}")
+            if final:
+                lines.append(f"{time.strftime('%H:%M:%S', time.localtime(started + 400))} final    | {final}")
+            log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            task = {"index": index, "goal": goal, "log": str(log), "status": status}
+            if status != "running":
+                task["exit_reason"] = "completed" if status == "completed" else "error"
+            manifest["tasks"].append(task)
+        if all(t["status"] != "running" for t in manifest["tasks"]):
+            manifest["completed"] = stamp(started + 400)
+        (live / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
     # The performance windows start at UTC midnight, so a run seeded "N days
     # ago" must sit well inside its UTC day or the counts the visual tests
     # assert would depend on the hour of the rebuild. Runs start at noon UTC
@@ -79,9 +110,11 @@ def seed(home: Path, now: float) -> None:
     # Every agent has a prior week too, so the performance trend compares two
     # windows. Default's prior week has one failed run, so its trend improves
     # while researcher's and coder's worsen.
+    # Default's live run delegated two tasks: one finished, one still running.
     sessions(home, history("d", 14, 2, 18000) + [
         ("live-main", "cli", "Draft the weekly investor update", now - 1500, None, None, now - 40, 22000, 6100, 90000, 0.62, None),
-        ("live-sub", "subagent", "Collect revenue numbers", now - 400, None, None, now - 25, 8000, 900, 12000, 0.11, "live-main"),
+        ("live-sub2", "subagent", "Subagent: Summarize churn by plan", now - 900, now - 500, "completed", now - 500, 6000, 700, 9000, 0.08, "live-main"),
+        ("live-sub", "subagent", "Subagent: Collect revenue numbers", now - 400, None, None, now - 5, 8000, 900, 12000, 0.11, "live-main"),
         ("d-prev-fail", "cli", "Rebuild the weekly update", today - 9 * 86400 + 16 * 3600, today - 9 * 86400 + 16 * 3600 + 300,
          "completed", today - 9 * 86400 + 16 * 3600 + 300, 9000, 400, 20000, 0.05, None),
     ])
@@ -92,9 +125,18 @@ def seed(home: Path, now: float) -> None:
     con.executemany("INSERT INTO messages (session_id, role, tool_name, timestamp) VALUES ('live-main', 'tool', ?, ?)",
                     [(tool, now - 1400 + idx * 150) for idx, tool in enumerate(tools)])
     con.executemany("INSERT INTO messages (session_id, role, tool_name, timestamp) VALUES ('live-sub', 'tool', ?, ?)",
-                    [("web_extract", now - 300), ("web_extract", now - 200)])
+                    [("web_extract", now - 300), ("web_extract", now - 200), ("read_file", now - 50), ("web_extract", now - 5)])
+    con.executemany("INSERT INTO messages (session_id, role, tool_name, timestamp) VALUES ('live-sub2', 'tool', ?, ?)",
+                    [("read_file", now - 800), ("write_file", now - 600)])
     con.commit()
     con.close()
+    delegation(home, "deleg_fixture_d", now - 900, [
+        ("Summarize churn by plan", "completed", ["-> read_file(exports/churn.csv)", "read_file ok 0.4s: {\"total_lines\": 120}",
+                                                   "-> write_file(reports/churn.md)", "write_file ok 0.1s: {\"bytes_written\": 2140}"],
+         "end status=completed exit_reason=completed"),
+        ("Collect revenue numbers", "running", ["-> read_file(exports/plans.csv)", "read_file ok 0.3s: {\"total_lines\": 40}",
+                                                "-> web_extract(https://billing.example/reports/revenue)"], None),
+    ])
     sessions(home / "profiles" / "researcher", history("r", 14, 1, 30000) + [
         # This morning's digest: Hermes booked it complete, but its only tool
         # call failed and the reply just said so.
@@ -112,8 +154,36 @@ def seed(home: Path, now: float) -> None:
     )
     con.commit()
     con.close()
+    # Coder's Kanban run fanned out to three subagents: one done, one failed,
+    # one still patching.
     sessions(home / "profiles" / "coder", history("c", 14, 3, 24000) + [
         ("coder-kanban", "kanban", "Fix flaky checkout test", now - 2400, None, None, now - 60, 30000, 7000, 140000, 0.88, None),
+        ("c-sub-a", "subagent", "Subagent: Reproduce the failure", now - 2000, now - 1500, "completed", now - 1500, 7000, 600, 9000, 0.07, "coder-kanban"),
+        ("c-sub-b", "subagent", "Subagent: Run the suite", now - 1400, now - 40, "error", now - 40, 9000, 800, 12000, 0.1, "coder-kanban"),
+        ("c-sub-c", "subagent", "Subagent: Patch the retry loop", now - 1300, None, None, now - 8, 11000, 1900, 30000, 0.21, "coder-kanban"),
+    ])
+    con = sqlite3.connect(home / "profiles" / "coder" / "state.db")
+    con.executemany(
+        "INSERT INTO messages (session_id, role, tool_name, content, timestamp) VALUES (?, 'tool', ?, ?, ?)",
+        [
+            ("c-sub-a", "read_file", json.dumps({"content": "1|def test_checkout(): ..."}), now - 1900),
+            ("c-sub-b", "terminal", json.dumps({"exit_code": 1, "output": "3 failed, 41 passed"}), now - 1200),
+            ("c-sub-b", "terminal", json.dumps({"exit_code": 1, "output": "3 failed, 41 passed"}), now - 55),
+            ("c-sub-c", "read_file", json.dumps({"content": "1|retries = 3"}), now - 1100),
+            ("c-sub-c", "patch", json.dumps({"success": True}), now - 30),
+            ("c-sub-c", "terminal", json.dumps({"exit_code": 0, "output": "44 passed"}), now - 8),
+        ],
+    )
+    con.commit()
+    con.close()
+    delegation(home / "profiles" / "coder", "deleg_fixture_c", now - 2000, [
+        ("Reproduce the failure", "completed", ["-> read_file(tests/test_checkout.py)", "read_file ok 0.2s: {\"total_lines\": 88}"],
+         "end status=completed exit_reason=completed"),
+        ("Run the suite", "failed", ["-> terminal(npm test)", "terminal ERROR 42.0s: {\"exit_code\": 1, \"output\": \"3 failed, 41 passed\"}"],
+         "end status=failed exit_reason=error"),
+        ("Patch the retry loop", "running", ["-> read_file(src/checkout/retry.py)", "read_file ok 0.2s: {\"total_lines\": 61}",
+                                             "-> patch(src/checkout/retry.py)", "patch ok 0.1s: {\"success\": true}",
+                                             "-> terminal(npm test -- checkout)"], None),
     ])
     # Behaviour only Olympus sees: a coder run that looped (58 tool calls,
     # $2.40) and a researcher run that re-sent a huge context every call.
@@ -249,6 +319,7 @@ def scan(home: Path) -> dict:
         "details": {row["id"]: plugin_api.agent(row["id"]) for row in overview["agents"]["agents"]},
         "performance": performance,
         "runs": {ref: plugin_api.run_detail(ref) for ref in sorted(refs)},
+        "live": plugin_api.live(),
     }
 
 

@@ -5017,6 +5017,294 @@ def performance(days: int = 7) -> Dict[str, Any]:
     return build_performance(collect_profiles(), days)
 
 
+# ---------------------------------------------------------------------------
+# Live: every open run, its subagents, and the last minute of tool calls.
+#
+# A Hermes run is two levels deep by default: the parent session and the
+# subagent sessions delegate_task opened under it (``parent_session_id``,
+# source "subagent", title "Subagent: <goal>"). Each dispatch also writes
+# ``cache/delegation/live/<delegation_id>/manifest.json`` (per-task status)
+# and one append-only ``task-<n>.log`` per child with lines of the form
+# ``HH:MM:SS role     | text``. All of it is read as it is; nothing is written.
+# ---------------------------------------------------------------------------
+
+LIVE_POLL_SECONDS = 5
+LIVE_WINDOW_SECONDS = 60
+LIVE_CHILD_LIMIT = 12
+LIVE_TAIL_BYTES = 4096
+LIVE_MANIFEST_DAYS = 7
+LIVE_LINE_RE = re.compile(r"^(\d{2}:\d{2}:\d{2}) (\S+)\s*\| (.*)$")
+LIVE_TOOL_RE = re.compile(r"^-> ([A-Za-z0-9_.:-]+)\((.*)\)$", re.S)
+LIVE_RESULT_RE = re.compile(r"^([A-Za-z0-9_.:-]+) (ok|ERROR)\b")
+SUBAGENT_TITLE_PREFIX = "Subagent: "
+CHILD_FAILED_REASONS = {"error", "failed", "crashed", "timeout", "agent_error"}
+
+
+def parse_live_transcript_line(line: str) -> Optional[Dict[str, str]]:
+    """One event line of a Hermes live transcript; header and blank lines give None."""
+    match = LIVE_LINE_RE.match(line.rstrip("\r\n"))
+    if not match:
+        return None
+    return {"clock": match.group(1), "role": match.group(2), "text": match.group(3)}
+
+
+def read_live_transcript_tail(path: Path, max_bytes: int = LIVE_TAIL_BYTES) -> Dict[str, Any]:
+    """The end of one subagent's live transcript: its last tool call, its call and error counts, its final marker."""
+    empty: Dict[str, Any] = {"last_tool": None, "calls": 0, "errors": 0, "final": None}
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as fh:
+            if size > max_bytes:
+                fh.seek(size - max_bytes)
+            data = fh.read()
+    except OSError:
+        return empty
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    if size > max_bytes and lines:
+        lines = lines[1:]  # the first line is a fragment of a longer one
+    out = dict(empty)
+    for line in lines:
+        event = parse_live_transcript_line(line)
+        if not event:
+            continue
+        if event["role"] == "tool":
+            call = LIVE_TOOL_RE.match(event["text"])
+            if call:
+                out["calls"] += 1
+                out["last_tool"] = {"name": call.group(1), "args": call.group(2), "clock": event["clock"]}
+        elif event["role"] == "result":
+            result = LIVE_RESULT_RE.match(event["text"])
+            if result and result.group(2) == "ERROR":
+                out["errors"] += 1
+        elif event["role"] == "final":
+            out["final"] = event["text"]
+    return out
+
+
+def _local_stamp_ts(value: Any) -> Optional[float]:
+    """Hermes writes manifest times as local ``YYYY-MM-DD HH:MM:SS``."""
+    try:
+        return time.mktime(time.strptime(str(value), "%Y-%m-%d %H:%M:%S"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def read_delegation_manifests(home: Path, now: float) -> List[Dict[str, Any]]:
+    """Hermes' per-batch manifests under cache/delegation/live from the last week, newest first."""
+    root = home / "cache" / "delegation" / "live"
+    out: List[Dict[str, Any]] = []
+    try:
+        dirs = [d for d in root.iterdir() if d.is_dir()]
+    except OSError:
+        return out
+    for d in dirs:
+        manifest_path = d / "manifest.json"
+        try:
+            if now - manifest_path.stat().st_mtime > LIVE_MANIFEST_DAYS * 86400:
+                continue
+            data = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        tasks = []
+        for task in as_list(data.get("tasks")):
+            if not isinstance(task, dict):
+                continue
+            index = safe_int(task.get("index"))
+            log = Path(str(task.get("log"))) if task.get("log") else None
+            if log is None or not log.exists():
+                log = d / f"task-{index}.log"
+            tasks.append({"index": index, "goal": str(task.get("goal") or "").strip(), "status": str(task.get("status") or "running"), "log": log})
+        out.append({"started_ts": _local_stamp_ts(data.get("started")), "completed": bool(data.get("completed")), "tasks": tasks})
+    out.sort(key=lambda m: m["started_ts"] or 0.0, reverse=True)
+    return out
+
+
+def _store_live(db: Path, now: float) -> Dict[str, Any]:
+    """Open runs in one profile's state store, their subagent sessions, last tools and the last minute of tool calls."""
+    empty: Dict[str, Any] = {"runs": [], "children": {}, "last_tool": {}, "ticks": {}}
+    if not db.exists():
+        return empty
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    con.row_factory = sqlite3.Row
+    try:
+        cols = table_columns(con, "sessions")
+        if not {"id", "source", "started_at", "ended_at"}.issubset(cols):
+            return empty
+        wanted = [c for c in ("id", "source", "title", "started_at", "ended_at", "end_reason", "last_activity_at", "parent_session_id") if c in cols]
+        activity = recency_expr([c for c in ("last_activity_at", "started_at") if c in cols], "0")
+        open_rows = [dict(r) for r in con.execute(
+            f"SELECT {', '.join(wanted)} FROM sessions WHERE ended_at IS NULL AND {activity} >= ? ORDER BY started_at",
+            (now - ACTIVE_SECONDS,),
+        )]
+        open_ids = {str(r["id"]) for r in open_rows}
+        children: Dict[str, List[Dict[str, Any]]] = {}
+        if open_ids and "parent_session_id" in cols:
+            marks = ", ".join("?" for _ in open_ids)
+            for r in con.execute(
+                f"SELECT {', '.join(wanted)} FROM sessions WHERE parent_session_id IN ({marks}) ORDER BY started_at",
+                tuple(open_ids),
+            ):
+                children.setdefault(str(r["parent_session_id"]), []).append(dict(r))
+        runs = [r for r in open_rows if str(r.get("parent_session_id") or "") not in open_ids]
+        ids = [str(r["id"]) for r in runs] + [str(c["id"]) for rows in children.values() for c in rows]
+        last_tool: Dict[str, Dict[str, Any]] = {}
+        ticks: Dict[str, List[Dict[str, Any]]] = {}
+        message_cols = table_columns(con, "messages")
+        if ids and {"session_id", "tool_name", "timestamp"}.issubset(message_cols):
+            marks = ", ".join("?" for _ in ids)
+            role = " AND role = 'tool'" if "role" in message_cols else ""
+            for r in con.execute(
+                f"SELECT session_id, tool_name, MAX(timestamp) AS ts FROM messages WHERE session_id IN ({marks}){role} "
+                "AND tool_name IS NOT NULL AND tool_name != '' GROUP BY session_id",
+                tuple(ids),
+            ):
+                last_tool[str(r["session_id"])] = {"name": redact_text(r["tool_name"], 60), "at": ts_to_iso(r["ts"])}
+            content = "substr(content, 1, 600) AS head, length(content) AS size" if "content" in message_cols else "NULL AS head, 0 AS size"
+            for r in con.execute(
+                f"SELECT session_id, tool_name, {content}, timestamp FROM messages WHERE session_id IN ({marks}){role} "
+                "AND tool_name IS NOT NULL AND tool_name != '' AND timestamp >= ? ORDER BY timestamp",
+                (*ids, now - LIVE_WINDOW_SECONDS),
+            ):
+                failed = tool_result_failed(str(r["tool_name"]), r["head"], truncated=safe_int(r["size"]) > 600)
+                ticks.setdefault(str(r["session_id"]), []).append({"at": ts_to_iso(r["timestamp"]), "_ts": safe_float(r["timestamp"]), "error": failed})
+        return {"runs": runs, "children": children, "last_tool": last_tool, "ticks": ticks}
+    except sqlite3.Error as exc:
+        log_read_warning("live scan failed", exc)
+        return empty
+    finally:
+        con.close()
+
+
+def _child_goal(title: Any) -> str:
+    text = str(title or "").strip()
+    return text[len(SUBAGENT_TITLE_PREFIX):] if text.startswith(SUBAGENT_TITLE_PREFIX) else text
+
+
+def _goal_stem(title: Any) -> str:
+    """The start of a child's goal as Hermes keeps it in the session title.
+
+    Hermes cuts long titles with an ellipsis and numbers repeats ("… #2"),
+    so a task goal is matched on the stem that survives, never on equality.
+    """
+    stem = re.sub(r"\s#\d+$", "", _child_goal(title))
+    return stem.rstrip("…. ").strip()
+
+
+def _link_manifest(manifests: List[Dict[str, Any]], run: Dict[str, Any], children: List[Dict[str, Any]]) -> tuple[Optional[Dict[str, int]], Dict[str, Path]]:
+    """The batch this run dispatched, matched by the children's goals: its counts and each child's transcript."""
+    stems = [(_goal_stem(child.get("title")), str(child["id"])) for child in children]
+    run_started = safe_float(run.get("started_at"))
+
+    def child_for(goal: str) -> Optional[str]:
+        for stem, child_id in stems:
+            if stem and (goal == stem or (len(stem) >= 12 and goal.startswith(stem))):
+                return child_id
+        return None
+
+    for manifest in manifests:
+        started = manifest["started_ts"]
+        if started is not None and run_started and started < run_started - 60:
+            continue
+        logs: Dict[str, Path] = {}
+        for task in manifest["tasks"]:
+            child_id = child_for(task["goal"])
+            if child_id and child_id not in logs:
+                logs[child_id] = task["log"]
+        if not logs:
+            continue
+        statuses = [t["status"] for t in manifest["tasks"]]
+        done = sum(1 for s in statuses if s == "completed")
+        running = sum(1 for s in statuses if s == "running")
+        return {"done": done, "failed": len(statuses) - done - running, "running": running, "total": len(statuses)}, logs
+    return None, {}
+
+
+def _live_child(row: Dict[str, Any], store: Dict[str, Any], log: Optional[Path]) -> Dict[str, Any]:
+    session_id = str(row["id"])
+    reason = str(row.get("end_reason") or "")
+    if row.get("ended_at") is None:
+        status = "running"
+    else:
+        status = "failed" if reason in CHILD_FAILED_REASONS else "done"
+    tail = read_live_transcript_tail(log) if log else None
+    if tail and tail["last_tool"]:
+        last_tool: Optional[Dict[str, Any]] = {"name": redact_text(tail["last_tool"]["name"], 60), "at": None}
+        if EXPOSE_LOCAL_LABELS:
+            last_tool["args"] = redact_text(tail["last_tool"]["args"], 60)
+    else:
+        last_tool = store["last_tool"].get(session_id)
+    return {
+        "ref": public_ref(session_id, "session"),
+        "label": public_label(_child_goal(row.get("title")), "", "subagent"),
+        "status": status,
+        "started_at": ts_to_iso(row.get("started_at")),
+        "ended_at": ts_to_iso(row.get("ended_at")),
+        "last_tool": last_tool,
+        "errors": tail["errors"] if tail else 0,
+    }
+
+
+def build_live(profiles: List[Dict[str, Any]], now: Optional[float] = None) -> Dict[str, Any]:
+    """One lane per agent with an open run: the run, its subagents, batch progress and the last minute of tool calls."""
+    now = time.time() if now is None else now
+    lanes: List[Dict[str, Any]] = []
+    idle: List[Dict[str, Any]] = []
+    runs_total = children_running = 0
+    for profile in profiles:
+        home = Path(str(profile["_path"]))
+        store = _store_live(home / "state.db", now)
+        agent = {"id": profile["id"], "label": profile["label"], "avatar": agent_avatar(str(profile["label"]))}
+        if not store["runs"]:
+            idle.append(agent)
+            continue
+        manifests = read_delegation_manifests(home, now)
+        runs = []
+        for root in store["runs"]:
+            root_id = str(root["id"])
+            rows = store["children"].get(root_id, [])[:LIVE_CHILD_LIMIT]
+            batch, logs = _link_manifest(manifests, root, rows)
+            children = [_live_child(row, store, logs.get(str(row["id"]))) for row in rows]
+            children_running += sum(1 for c in children if c["status"] == "running")
+            ticks = sorted(
+                (t for sid in [root_id, *(str(r["id"]) for r in rows)] for t in store["ticks"].get(sid, [])),
+                key=lambda t: t["_ts"],
+            )
+            source = str(root.get("source") or "session")
+            runs.append({
+                "ref": public_ref(root_id, "session"),
+                "source": source,
+                "label": public_label(root.get("title"), source, "session"),
+                "started_at": ts_to_iso(root.get("started_at")),
+                "last_activity_at": ts_to_iso(root.get("last_activity_at") or root.get("started_at")),
+                "last_tool": store["last_tool"].get(root_id),
+                "children": children,
+                "batch": batch,
+                "ticks": [{"at": t["at"], "error": t["error"]} for t in ticks],
+            })
+        runs_total += len(runs)
+        lanes.append({"agent": agent, "runs": runs})
+    return {
+        "generated_at": now_iso(),
+        "poll_seconds": LIVE_POLL_SECONDS,
+        "summary": {"runs": runs_total, "children": children_running, "agents_running": len(lanes)},
+        "lanes": lanes,
+        "idle": idle,
+    }
+
+
+@router.get("/live")
+def live() -> Dict[str, Any]:
+    """Every open run with its subagents, for the Live view (polled every five seconds)."""
+    refresh_expose_local_labels()
+    started_at = time.perf_counter()
+    profiles = collect_profiles()
+    payload = build_live(profiles)
+    payload["diagnostics"] = runtime_diagnostics("/live", started_at, payload, profiles, [], {})
+    return payload
+
+
 @router.get("/run")
 def run_detail(ref: str) -> Dict[str, Any]:
     """One run step by step (``ref`` is a public session ref)."""

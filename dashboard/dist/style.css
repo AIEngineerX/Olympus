@@ -1764,3 +1764,278 @@
     transition: none;
   }
 }
+
+/* Live: one lane per agent with an open run. A run row, its subagents
+   indented under a hairline, the batch line, and a strip of the last
+   minute's tool calls. Motion only where state changes: a subagent slides
+   in from its parent as it appears, its dot fills or turns red as it ends,
+   the tool chip fades when it changes, ticks drift left a step a second. */
+.olympus-live-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px 16px;
+  margin: 0 0 8px;
+}
+
+.olympus-live-head .olympus-census {
+  margin: 0;
+}
+
+.olympus-lane {
+  padding: 12px 0 14px;
+  border-top: 1px solid var(--olympus-hairline);
+}
+
+.olympus-lane-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 6px;
+}
+
+.olympus-lane-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.olympus-lane-runs,
+.olympus-lane-children {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.olympus-lane-run {
+  padding: 2px 0;
+}
+
+.olympus-lane-run-row,
+.olympus-lane-child {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr) 96px minmax(0, 240px) 120px;
+  gap: 12px;
+  align-items: center;
+  min-height: 30px;
+  font-size: 13px;
+}
+
+.olympus-lane-cell {
+  min-width: 0;
+}
+
+.olympus-lane-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.olympus-lane-source {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--olympus-muted);
+}
+
+.olympus-lane-time,
+.olympus-lane-note {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--olympus-muted);
+  white-space: nowrap;
+}
+
+.olympus-page .olympus-lane-tool {
+  display: block;
+  overflow: hidden;
+  padding: 0;
+  border-radius: 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--olympus-fg);
+  background: transparent;
+  animation: olympus-lane-fade 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Subagents hang off one hairline; each row draws its own stub as it appears. */
+.olympus-lane-children {
+  position: relative;
+  margin: 2px 0 2px 11px;
+  padding-left: 16px;
+  border-left: 1px solid var(--olympus-hairline);
+}
+
+.olympus-lane-child {
+  position: relative;
+  animation: olympus-lane-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.olympus-lane-child::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -16px;
+  width: 11px;
+  height: 1px;
+  background: var(--olympus-hairline);
+  transform-origin: left center;
+  animation: olympus-lane-draw 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.olympus-lane-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.olympus-lane-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--olympus-muted);
+  background: transparent;
+  transition: background-color 200ms cubic-bezier(0.22, 1, 0.36, 1), border-color 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.olympus-lane-dot-running {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  animation: olympus-pulse 2.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.olympus-lane-dot-done {
+  border-color: var(--olympus-muted);
+  background: var(--olympus-muted);
+}
+
+.olympus-lane-dot-failed {
+  border-color: var(--color-destructive);
+  background: var(--color-destructive);
+}
+
+.olympus-lane-child-done {
+  color: var(--olympus-muted);
+  transition: color 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.olympus-lane-child-done .olympus-lane-tool {
+  color: var(--olympus-muted);
+}
+
+.olympus-lane-child-failed .olympus-lane-status {
+  color: var(--color-destructive);
+}
+
+.olympus-lane-batch {
+  margin: 2px 0 4px 27px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--olympus-muted);
+}
+
+.olympus-lane-strip {
+  display: block;
+  overflow: hidden;
+  justify-self: end;
+}
+
+.olympus-lane-strip-base {
+  stroke: var(--olympus-hairline);
+  stroke-width: 1;
+}
+
+.olympus-lane-tick {
+  fill: var(--color-primary);
+  transition: transform 1s linear;
+}
+
+.olympus-lane-tick-error {
+  fill: var(--color-destructive);
+}
+
+.olympus-live-empty,
+.olympus-live-idle {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+
+.olympus-live-idle {
+  padding-top: 12px;
+  border-top: 1px solid var(--olympus-hairline);
+}
+
+@keyframes olympus-lane-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes olympus-lane-draw {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes olympus-lane-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 720px) {
+  .olympus-lane-run-row,
+  .olympus-lane-child {
+    grid-template-columns: 84px minmax(0, 1fr);
+    gap: 2px 12px;
+    padding: 4px 0;
+  }
+
+  .olympus-lane-time,
+  .olympus-lane-tool-cell,
+  .olympus-lane-note {
+    grid-column: 2;
+  }
+
+  .olympus-lane-note:empty {
+    display: none;
+  }
+
+  .olympus-lane-strip {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .olympus-lane-child,
+  .olympus-lane-child::before,
+  .olympus-page .olympus-lane-tool,
+  .olympus-lane-dot-running {
+    animation: none;
+  }
+
+  .olympus-lane-dot,
+  .olympus-lane-child-done,
+  .olympus-lane-tick {
+    transition: none;
+  }
+}
