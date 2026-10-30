@@ -1332,36 +1332,42 @@
     return el("code", { key: text, className: cx("olympus-lane-tool", animate && "olympus-lane-tool-change"), title: text }, text);
   }
 
-  // The last minute of tool calls as ticks that drift left one pixel-step a
-  // second: a call in accent, a failed call taller and in the failure colour.
-  function ActivityStrip({ ticks, now }) {
+  // The last minute of tool calls as ticks: a call in accent, a failed call
+  // taller and in the failure colour. Positions are measured from the time of
+  // the read, so the strip moves only when a new read arrives.
+  function ActivityStrip({ ticks, readAt }) {
+    const anchor = parseTime(readAt);
     const rows = asList(ticks).filter((tick) => parseTime(tick.at) != null);
     const failed = rows.filter((tick) => tick.error).length;
     const label = rows.length
       ? plural(rows.length, "tool call") + " in the last minute" + (failed ? ", " + failed + " failed" : "")
       : "No tool calls in the last minute";
-    return el("svg", {
-      className: "olympus-lane-strip",
-      width: LIVE_STRIP_WIDTH,
-      height: LIVE_STRIP_HEIGHT,
-      viewBox: "0 0 " + LIVE_STRIP_WIDTH + " " + LIVE_STRIP_HEIGHT,
-      role: "img",
-      "aria-label": label
-    },
-      el("title", null, label),
-      el("line", { x1: 0, y1: LIVE_STRIP_HEIGHT - 0.5, x2: LIVE_STRIP_WIDTH, y2: LIVE_STRIP_HEIGHT - 0.5, className: "olympus-lane-strip-base" }),
-      rows.map((tick, idx) => {
-        const age = Math.max(0, Math.min(1, (now - parseTime(tick.at)) / LIVE_WINDOW_MS));
-        return el("rect", {
-          key: tick.at + idx,
-          x: LIVE_STRIP_WIDTH - 2,
-          y: tick.error ? 1 : 5,
-          width: 2,
-          height: tick.error ? LIVE_STRIP_HEIGHT - 2 : LIVE_STRIP_HEIGHT - 6,
-          className: cx("olympus-lane-tick", tick.error && "olympus-lane-tick-error"),
-          style: { transform: "translateX(-" + (age * LIVE_STRIP_WIDTH).toFixed(1) + "px)" }
-        });
-      })
+    return el("span", { className: "olympus-lane-strip-cell" },
+      el("svg", {
+        className: "olympus-lane-strip",
+        width: LIVE_STRIP_WIDTH,
+        height: LIVE_STRIP_HEIGHT,
+        viewBox: "0 0 " + LIVE_STRIP_WIDTH + " " + LIVE_STRIP_HEIGHT,
+        role: "img",
+        "aria-label": label
+      },
+        el("title", null, label),
+        el("line", { x1: 0, y1: LIVE_STRIP_HEIGHT - 0.5, x2: LIVE_STRIP_WIDTH, y2: LIVE_STRIP_HEIGHT - 0.5, className: "olympus-lane-strip-base" }),
+        rows.map((tick, idx) => {
+          const age = anchor == null ? 0 : Math.max(0, Math.min(1, (anchor - parseTime(tick.at)) / LIVE_WINDOW_MS));
+          return el("rect", {
+            key: tick.at + idx,
+            x: LIVE_STRIP_WIDTH - 2,
+            y: tick.error ? 1 : 5,
+            width: 2,
+            height: tick.error ? LIVE_STRIP_HEIGHT - 2 : LIVE_STRIP_HEIGHT - 6,
+            className: cx("olympus-lane-tick", tick.error && "olympus-lane-tick-error"),
+            style: { transform: "translateX(-" + (age * LIVE_STRIP_WIDTH).toFixed(1) + "px)" }
+          });
+        })
+      ),
+      el("small", { className: "olympus-lane-strip-caption", "aria-hidden": "true" },
+        rows.length ? plural(rows.length, "call") + (failed ? ", " + failed + " failed" : "") + " · last minute" : "no calls · last minute")
     );
   }
 
@@ -1381,7 +1387,7 @@
     );
   }
 
-  function RunRow({ run, now, freshRefs, settled }) {
+  function RunRow({ run, now, readAt, freshRefs, settled }) {
     const batch = run.batch;
     const children = asList(run.children);
     return el("li", { className: "olympus-lane-run" },
@@ -1390,7 +1396,7 @@
         el("span", { className: "olympus-lane-cell olympus-lane-label" }, run.label),
         el("span", { className: "olympus-lane-cell olympus-lane-time" }, elapsed(run.started_at, now)),
         el("span", { className: "olympus-lane-cell olympus-lane-tool-cell" }, el(ToolChip, { tool: run.last_tool, settled })),
-        el(ActivityStrip, { ticks: run.ticks, now })
+        el(ActivityStrip, { ticks: run.ticks, readAt })
       ),
       children.length ? el("ol", { className: "olympus-lane-children" },
         children.map((child) => el(ChildRow, { key: child.ref, child, now, fresh: freshRefs.has(child.ref), settled }))) : null,
@@ -1399,7 +1405,7 @@
     );
   }
 
-  function Lane({ lane, ctx, freshRefs, settled }) {
+  function Lane({ lane, ctx, readAt, freshRefs, settled }) {
     const agent = ctx.agentById[lane.agent.id] || lane.agent;
     return el("section", { className: "olympus-lane", "aria-label": agent.label, "data-agent": agent.id },
       el("header", { className: "olympus-lane-head" },
@@ -1407,7 +1413,7 @@
         el("button", { type: "button", className: "olympus-link-button olympus-lane-name", onClick: () => ctx.openAgent(agent.id) }, agent.label),
         agent.status ? el(StatusPill, { status: agent.status, label: agent.status_label }) : null
       ),
-      el("ol", { className: "olympus-lane-runs" }, asList(lane.runs).map((run) => el(RunRow, { key: run.ref, run, now: ctx.now, freshRefs, settled })))
+      el("ol", { className: "olympus-lane-runs" }, asList(lane.runs).map((run) => el(RunRow, { key: run.ref, run, now: ctx.now, readAt, freshRefs, settled })))
     );
   }
 
@@ -1473,7 +1479,7 @@
       !live && !error ? el(RosterSkeleton) : null,
       live && !lanes.length ? el("p", { className: "olympus-muted olympus-live-empty" },
         "Nothing is running. Start a chat, a cron job or a Kanban task and it shows here within " + live.poll_seconds + " s.") : null,
-      lanes.map((lane) => el(Lane, { key: lane.agent.id, lane, ctx, freshRefs, settled })),
+      lanes.map((lane) => el(Lane, { key: lane.agent.id, lane, ctx, readAt: live.generated_at, freshRefs, settled })),
       lanes.length && idle.length ? el("p", { className: "olympus-muted olympus-live-idle" }, noRunsLine(idle, ctx)) : null
     );
   }

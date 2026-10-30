@@ -47,17 +47,27 @@ test.describe("Live view", () => {
 
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(overflow).toBe(0);
-      if (size.width < 720) await expect(page.locator(".olympus-lane-strip").first()).toBeHidden();
-      else await expect(page.locator(".olympus-lane-strip").first()).toBeVisible();
+      if (size.width < 720) await expect(page.locator(".olympus-lane-strip-cell").first()).toBeHidden();
+      else await expect(page.locator(".olympus-lane-strip-cell").first()).toBeVisible();
       expect(errors).toEqual([]);
       await page.screenshot({ path: testInfo.outputPath(`live-${size.width}.png`), fullPage: true });
     });
   }
 
-  test("the activity strip shows the last minute's calls, failed ones marked", async ({ page }) => {
+  test("the activity strip shows the last minute's calls, failed ones marked, with a caption, and moves only per read", async ({ page }) => {
+    await page.clock.install();
     await openLive(page, { state: "noisy" }, DESKTOP);
     const strip = page.locator('.olympus-lane[data-agent="profile:coder"] .olympus-lane-strip');
     await expect(strip).toHaveAttribute("aria-label", "3 tool calls in the last minute, 1 failed");
+    await expect(page.locator('.olympus-lane[data-agent="profile:coder"] .olympus-lane-strip-caption')).toHaveText("3 calls, 1 failed · last minute");
+    // Ticks are placed from the time of the read, not the clock: seconds passing move nothing
+    // (the fixture answers every read with the same minute, so the next read moves nothing either).
+    const before = await strip.locator(".olympus-lane-tick").evaluateAll((ticks) => ticks.map((tick) => tick.style.transform));
+    await page.clock.runFor(2_000);
+    const later = await strip.locator(".olympus-lane-tick").evaluateAll((ticks) => ticks.map((tick) => tick.style.transform));
+    expect(later).toEqual(before);
+    const transition = await strip.locator(".olympus-lane-tick").first().evaluate((tick) => getComputedStyle(tick).transitionDuration);
+    expect(transition).toBe("0s");
     await expect(strip.locator(".olympus-lane-tick")).toHaveCount(3);
     await expect(strip.locator(".olympus-lane-tick-error")).toHaveCount(1);
     // Ticks sit inside the strip: older calls further left, none past the right edge.

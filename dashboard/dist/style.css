@@ -1941,10 +1941,23 @@
   color: var(--olympus-muted);
 }
 
+.olympus-lane-strip-cell {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  justify-self: end;
+}
+
 .olympus-lane-strip {
   display: block;
   overflow: hidden;
-  justify-self: end;
+}
+
+.olympus-lane-strip-caption {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--olympus-muted);
+  white-space: nowrap;
 }
 
 .olympus-lane-strip-base {
@@ -1954,7 +1967,6 @@
 
 .olympus-lane-tick {
   fill: var(--color-primary);
-  transition: transform 1s linear;
 }
 
 .olympus-lane-tick-error {
@@ -2012,7 +2024,7 @@
     display: none;
   }
 
-  .olympus-lane-strip {
+  .olympus-lane-strip-cell {
     display: none;
   }
 }
@@ -2025,8 +2037,7 @@
   }
 
   .olympus-lane-dot,
-  .olympus-lane-child-done,
-  .olympus-lane-tick {
+  .olympus-lane-child-done {
     transition: none;
   }
 }
