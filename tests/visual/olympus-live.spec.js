@@ -75,6 +75,9 @@ test.describe("Live view", () => {
     }
     await expect(page.locator(".olympus-lane-child-running .olympus-lane-tool").last()).toHaveText("terminal");
     await expect(page.locator(".olympus-lane-batch").last()).toHaveText("Tasks done 1 of 3, 1 failed");
+    // A hidden run label never repeats the source word beside it.
+    const labels = await page.locator(".olympus-lane-run-row .olympus-lane-label").allTextContents();
+    expect(labels).toEqual([expect.stringMatching(/^Run [0-9a-f]{6}$/), expect.stringMatching(/^Run [0-9a-f]{6}$/)]);
   });
 
   test("the lane name opens the agent's inspector on the Agents view", async ({ page }) => {

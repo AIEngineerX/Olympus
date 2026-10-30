@@ -183,7 +183,11 @@ class LiveViewTest(unittest.TestCase):
             self.assertNotIn(private, text)
         for key in ('"session_id"', '"run_id"', '"cwd"', '"workspace_path"', '"_name"'):
             self.assertNotIn(key, text)
-        child = payload["lanes"][0]["runs"][0]["children"][1]
+        run = payload["lanes"][0]["runs"][0]
+        # The source column already says "cli"; the hidden label is the run's public ref tail.
+        self.assertRegex(run["label"], r"^Run [0-9a-f]{6}$")
+        self.assertTrue(run["ref"].endswith(run["label"][4:]))
+        child = run["children"][1]
         self.assertNotIn("args", child["last_tool"])
         self.assertEqual(child["last_tool"]["name"], "terminal")
         self.assertEqual(payload["lanes"][0]["runs"][0]["batch"]["total"], 3)

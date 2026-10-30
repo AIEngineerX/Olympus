@@ -5272,10 +5272,14 @@ def build_live(profiles: List[Dict[str, Any]], now: Optional[float] = None) -> D
                 key=lambda t: t["_ts"],
             )
             source = str(root.get("source") or "session")
+            ref = public_ref(root_id, "session")
+            # The row already shows its source, so a hidden label is "Run" plus
+            # the tail of the public ref rather than the source word again.
+            label = redact_text(root["title"], 120) if EXPOSE_LOCAL_LABELS and root.get("title") else f"Run {str(ref)[-6:]}"
             runs.append({
-                "ref": public_ref(root_id, "session"),
+                "ref": ref,
                 "source": source,
-                "label": public_label(root.get("title"), source, "session"),
+                "label": label,
                 "started_at": ts_to_iso(root.get("started_at")),
                 "last_activity_at": ts_to_iso(root.get("last_activity_at") or root.get("started_at")),
                 "last_tool": store["last_tool"].get(root_id),
