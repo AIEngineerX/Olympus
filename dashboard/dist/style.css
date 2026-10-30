@@ -1855,8 +1855,17 @@
   font-size: 12px;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--olympus-fg);
+  font-weight: 400;
+  color: var(--olympus-muted);
   background: transparent;
+}
+
+.olympus-lane-run-row .olympus-lane-tool,
+.olympus-lane-child-running .olympus-lane-tool {
+  color: var(--olympus-fg);
+}
+
+.olympus-page .olympus-lane-tool-change {
   animation: olympus-lane-fade 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -1870,6 +1879,9 @@
 
 .olympus-lane-child {
   position: relative;
+}
+
+.olympus-lane-child-new {
   animation: olympus-lane-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -1881,8 +1893,6 @@
   width: 11px;
   height: 1px;
   background: var(--olympus-hairline);
-  transform-origin: left center;
-  animation: olympus-lane-draw 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .olympus-lane-status {
@@ -1911,7 +1921,12 @@
 
 .olympus-lane-dot-done {
   border-color: var(--olympus-muted);
-  background: var(--olympus-muted);
+  background: transparent;
+}
+
+.olympus-lane-child-running .olympus-lane-status {
+  font-weight: 600;
+  color: var(--olympus-fg);
 }
 
 .olympus-lane-dot-failed {
@@ -1924,15 +1939,11 @@
   transition: color 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.olympus-lane-child-done .olympus-lane-tool {
-  color: var(--olympus-muted);
-}
-
 .olympus-lane-child-failed .olympus-lane-status {
   color: var(--color-destructive);
 }
 
-.olympus-lane-batch {
+.olympus-page .olympus-lane-batch {
   margin: 2px 0 4px 27px;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -1982,16 +1993,6 @@
   }
 }
 
-@keyframes olympus-lane-draw {
-  from {
-    transform: scaleX(0);
-  }
-
-  to {
-    transform: scaleX(1);
-  }
-}
-
 @keyframes olympus-lane-fade {
   from {
     opacity: 0;
@@ -2026,9 +2027,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .olympus-lane-child,
-  .olympus-lane-child::before,
-  .olympus-page .olympus-lane-tool,
+  .olympus-lane-child-new,
+  .olympus-page .olympus-lane-tool-change,
   .olympus-lane-dot-running {
     animation: none;
   }

@@ -1322,11 +1322,14 @@
   }
 
   // The tool a session is on. Keyed by its text so a change remounts it and
-  // the stylesheet fades the new one in.
-  function ToolChip({ tool }) {
+  // the stylesheet fades the new one in; `settled` keeps the first paint still.
+  function ToolChip({ tool, settled }) {
+    // Fixed at mount: a chip that was on screen at first paint never gains
+    // the class later, so only a chip that replaces another fades in.
+    const [animate] = useState(settled);
     if (!tool || !tool.name) return null;
     const text = tool.name + (tool.args ? "(" + tool.args + ")" : "");
-    return el("code", { key: text, className: "olympus-lane-tool", title: text }, text);
+    return el("code", { key: text, className: cx("olympus-lane-tool", animate && "olympus-lane-tool-change"), title: text }, text);
   }
 
   // The last minute of tool calls as ticks that drift left one pixel-step a
@@ -1362,21 +1365,23 @@
     );
   }
 
-  function ChildRow({ child, now }) {
+  // `fresh`: the subagent appeared since the last read, so it slides in from
+  // its parent. Rows already on screen at first paint stay still.
+  function ChildRow({ child, now, fresh, settled }) {
     const running = child.status === "running";
-    return el("li", { className: cx("olympus-lane-child", "olympus-lane-child-" + child.status), "data-status": child.status },
+    return el("li", { className: cx("olympus-lane-child", "olympus-lane-child-" + child.status, fresh && "olympus-lane-child-new"), "data-status": child.status },
       el("span", { className: "olympus-lane-cell olympus-lane-status" },
         el("span", { className: cx("olympus-lane-dot", "olympus-lane-dot-" + child.status), "aria-hidden": "true" }),
         CHILD_STATUS_TEXT[child.status] || child.status
       ),
       el("span", { className: "olympus-lane-cell olympus-lane-label" }, child.label),
       el("span", { className: "olympus-lane-cell olympus-lane-time" }, running ? elapsed(child.started_at, now) : spanBetween(child.started_at, child.ended_at)),
-      el("span", { className: "olympus-lane-cell olympus-lane-tool-cell" }, el(ToolChip, { tool: child.last_tool })),
+      el("span", { className: "olympus-lane-cell olympus-lane-tool-cell" }, el(ToolChip, { tool: child.last_tool, settled })),
       el("span", { className: "olympus-lane-cell olympus-lane-note" }, child.errors ? plural(child.errors, "failed call") : null)
     );
   }
 
-  function RunRow({ run, now }) {
+  function RunRow({ run, now, freshRefs, settled }) {
     const batch = run.batch;
     const children = asList(run.children);
     return el("li", { className: "olympus-lane-run" },
@@ -1384,16 +1389,17 @@
         el("span", { className: "olympus-lane-cell olympus-lane-source" }, sourceText(run.source)),
         el("span", { className: "olympus-lane-cell olympus-lane-label" }, run.label),
         el("span", { className: "olympus-lane-cell olympus-lane-time" }, elapsed(run.started_at, now)),
-        el("span", { className: "olympus-lane-cell olympus-lane-tool-cell" }, el(ToolChip, { tool: run.last_tool })),
+        el("span", { className: "olympus-lane-cell olympus-lane-tool-cell" }, el(ToolChip, { tool: run.last_tool, settled })),
         el(ActivityStrip, { ticks: run.ticks, now })
       ),
-      children.length ? el("ol", { className: "olympus-lane-children" }, children.map((child) => el(ChildRow, { key: child.ref, child, now }))) : null,
+      children.length ? el("ol", { className: "olympus-lane-children" },
+        children.map((child) => el(ChildRow, { key: child.ref, child, now, fresh: freshRefs.has(child.ref), settled }))) : null,
       batch ? el("p", { className: "olympus-lane-batch" },
         "Tasks done " + batch.done + " of " + batch.total + (batch.failed ? ", " + plural(batch.failed, "failed") : "")) : null
     );
   }
 
-  function Lane({ lane, ctx }) {
+  function Lane({ lane, ctx, freshRefs, settled }) {
     const agent = ctx.agentById[lane.agent.id] || lane.agent;
     return el("section", { className: "olympus-lane", "aria-label": agent.label, "data-agent": agent.id },
       el("header", { className: "olympus-lane-head" },
@@ -1401,8 +1407,14 @@
         el("button", { type: "button", className: "olympus-link-button olympus-lane-name", onClick: () => ctx.openAgent(agent.id) }, agent.label),
         agent.status ? el(StatusPill, { status: agent.status, label: agent.status_label }) : null
       ),
-      el("ol", { className: "olympus-lane-runs" }, asList(lane.runs).map((run) => el(RunRow, { key: run.ref, run, now: ctx.now })))
+      el("ol", { className: "olympus-lane-runs" }, asList(lane.runs).map((run) => el(RunRow, { key: run.ref, run, now: ctx.now, freshRefs, settled })))
     );
+  }
+
+  function childRefs(payload) {
+    const refs = new Set();
+    asList(payload && payload.lanes).forEach((lane) => asList(lane.runs).forEach((run) => asList(run.children).forEach((child) => refs.add(child.ref))));
+    return refs;
   }
 
   function liveCensus(summary) {
@@ -1416,12 +1428,27 @@
   function LiveView({ ctx }) {
     const [live, setLive] = useState(null);
     const [error, setError] = useState(null);
+    // Which subagents are new since the last read, and whether the first
+    // read has painted: only those animate, never the whole list at once.
+    const [freshRefs, setFreshRefs] = useState(new Set());
+    const [settled, setSettled] = useState(false);
+    const seen = useRef(null);
     useEffect(() => {
       let alive = true;
       let timer = null;
       function load() {
         SDK.fetchJSON(API + "/live")
-          .then((next) => { if (alive) { setLive(next); setError(null); } })
+          .then((next) => {
+            if (!alive) return;
+            const refs = childRefs(next);
+            const fresh = new Set();
+            if (seen.current) refs.forEach((ref) => { if (!seen.current.has(ref)) fresh.add(ref); });
+            seen.current = refs;
+            setFreshRefs(fresh);
+            setLive(next);
+            setError(null);
+            window.requestAnimationFrame(() => { if (alive) setSettled(true); });
+          })
           .catch((err) => { if (alive) setError(toErrorMessage(err)); })
           .finally(() => { if (alive) timer = window.setTimeout(load, LIVE_REFRESH_MS); });
       }
@@ -1438,7 +1465,7 @@
       error ? el("p", { className: "olympus-error-text", role: "alert" }, "Could not read live runs: " + error) : null,
       !live && !error ? el(RosterSkeleton) : null,
       live && !lanes.length ? el("p", { className: "olympus-muted olympus-live-empty" }, "Nothing is running. A run shows here within " + live.poll_seconds + " s of starting.") : null,
-      lanes.map((lane) => el(Lane, { key: lane.agent.id, lane, ctx })),
+      lanes.map((lane) => el(Lane, { key: lane.agent.id, lane, ctx, freshRefs, settled })),
       idle.length ? el("p", { className: "olympus-muted olympus-live-idle" },
         "Idle: " + idle.map((agent) => (ctx.agentById[agent.id] || agent).label).join(", ")) : null
     );

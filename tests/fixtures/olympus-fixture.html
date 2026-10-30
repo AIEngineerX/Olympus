@@ -181,6 +181,7 @@
       const failPath = params.get("fail");
       if (params.get("base")) window.__HERMES_BASE_PATH__ = params.get("base");
       const fetchLog = window.__OLYMPUS_FETCH_LOG__ = { started: 0, settled: 0, inFlight: 0, peak: 0, writes: [] };
+      let liveReads = 0;
 
       async function fixtureFetchJSON(url, init) {
         fetchLog.started += 1;
@@ -252,7 +253,16 @@
           return agentData.runs[query(url).get("ref")] || { found: false };
         }
         if (path === "/api/plugins/olympus/live") {
-          return shifted(generated.live);
+          // ?grow=1: from the second read on, one more subagent has appeared
+          // under the first run, as it would when a batch fans out.
+          liveReads += 1;
+          const live = shifted(generated.live);
+          if (params.get("grow") && liveReads > 1 && live.lanes.length) {
+            const run = live.lanes[0].runs[0];
+            run.children = run.children.concat([{ ref: "session:grown", label: "Draft the cover note", status: "running",
+              started_at: new Date().toISOString(), ended_at: null, last_tool: { name: "read_file", at: null }, errors: 0 }]);
+          }
+          return live;
         }
         if (path === "/api/plugins/olympus/resolve") {
           if (!data.controls) return { allowed: false, reason: "Controls are off (dashboard.olympus.controls is false in config.yaml)." };

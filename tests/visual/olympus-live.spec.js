@@ -90,15 +90,53 @@ test.describe("Live view", () => {
     await expect(page.locator(".olympus-live-empty")).toHaveText("Nothing is running. A run shows here within 5 s of starting.");
   });
 
+  test("only a subagent that appears after the first read animates in", async ({ page }) => {
+    await page.clock.install();
+    await openLive(page, { state: "noisy", grow: "1" }, DESKTOP);
+    // First paint: every row is still; nothing is marked new and no chip fades.
+    await expect(page.locator(".olympus-lane-child")).toHaveCount(5);
+    await expect(page.locator(".olympus-lane-child-new")).toHaveCount(0);
+    const stillAnimations = await page.evaluate(() => document.getAnimations().map((a) => a.animationName).filter((n) => n && n.startsWith("olympus-lane")));
+    expect(stillAnimations).toEqual([]);
+    // Second read: one more subagent fanned out; it alone slides in.
+    await page.clock.runFor(5_200);
+    await expect(page.locator(".olympus-lane-child")).toHaveCount(6);
+    await expect(page.locator(".olympus-lane-child-new")).toHaveCount(1);
+    await expect(page.locator(".olympus-lane-child-new .olympus-lane-label")).toHaveText("Draft the cover note");
+    // The connector stub is static: no draw animation exists any more.
+    const stub = await page.locator(".olympus-lane-child-new").evaluate((node) => getComputedStyle(node, "::before").animationName);
+    expect(stub).toBe("none");
+  });
+
+  test("running is lifted over done without a new colour", async ({ page }) => {
+    await openLive(page, { state: "noisy" }, DESKTOP);
+    const coder = page.locator('.olympus-lane[data-agent="profile:coder"]');
+    const weights = await coder.locator(".olympus-lane-child .olympus-lane-status").evaluateAll((nodes) => nodes.map((n) => getComputedStyle(n).fontWeight));
+    expect(weights).toEqual(["400", "400", "600"]);
+    const doneDot = await coder.locator(".olympus-lane-child-done .olympus-lane-dot").evaluate((n) => getComputedStyle(n).backgroundColor);
+    expect(doneDot).toBe("rgba(0, 0, 0, 0)");
+    const chipWeight = await coder.locator(".olympus-lane-tool").first().evaluate((n) => getComputedStyle(n).fontWeight);
+    expect(chipWeight).toBe("400");
+    // The batch line keeps its indent under the tree, not the source column.
+    const [batchLeft, childLeft] = await Promise.all([
+      coder.locator(".olympus-lane-batch").evaluate((n) => n.getBoundingClientRect().left),
+      coder.locator(".olympus-lane-child").first().evaluate((n) => n.getBoundingClientRect().left)
+    ]);
+    expect(batchLeft).toBeGreaterThan(childLeft - 4);
+  });
+
   test("reduced motion turns every animation and transition off", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
-    await openLive(page, { state: "noisy" }, DESKTOP);
+    await page.clock.install();
+    await openLive(page, { state: "noisy", grow: "1" }, DESKTOP);
+    await page.clock.runFor(5_200);
+    await expect(page.locator(".olympus-lane-child-new")).toHaveCount(1);
     const motion = await page.evaluate(() => {
       const names = (selector, pseudo) => Array.from(document.querySelectorAll(selector)).map((node) => {
         const style = getComputedStyle(node, pseudo);
         return [style.animationName, style.transitionProperty];
       });
-      return names(".olympus-lane-child").concat(names(".olympus-lane-child", "::before"), names(".olympus-lane-tool"), names(".olympus-lane-tick"), names(".olympus-lane-dot-running"));
+      return names(".olympus-lane-child-new").concat(names(".olympus-lane-child", "::before"), names(".olympus-lane-tool"), names(".olympus-lane-tick"), names(".olympus-lane-dot-running"));
     });
     for (const [animation, transition] of motion) {
       expect(animation).toBe("none");
