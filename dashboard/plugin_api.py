@@ -5210,32 +5210,46 @@ def _goal_stem(title: Any) -> str:
 
 
 def _link_manifest(manifests: List[Dict[str, Any]], run: Dict[str, Any], children: List[Dict[str, Any]]) -> tuple[Optional[Dict[str, int]], Dict[str, Dict[str, Any]]]:
-    """The batch this run dispatched, matched by the children's goals: its counts and each child's manifest task."""
+    """The batches this run dispatched, matched by the children's goals: their summed counts and each child's manifest task.
+
+    A run can call delegate_task more than once, so every manifest that links a
+    child counts. Two tasks with the same goal are two children ("… #2" in the
+    second title, the same stem), so a child links to one task only, in start
+    order.
+    """
     stems = [(_goal_stem(child.get("title")), str(child["id"])) for child in children]
     run_started = safe_float(run.get("started_at"))
+    linked: Dict[str, Dict[str, Any]] = {}
 
     def child_for(goal: str) -> Optional[str]:
         for stem, child_id in stems:
+            if child_id in linked:
+                continue
             if stem and (goal == stem or (len(stem) >= 12 and goal.startswith(stem))):
                 return child_id
         return None
 
-    for manifest in manifests:
+    batch = {"done": 0, "failed": 0, "running": 0, "total": 0}
+    # Oldest batch first, so a repeated goal links to the earlier child first.
+    for manifest in sorted(manifests, key=lambda m: safe_float(m.get("started_ts"))):
         started = manifest["started_ts"]
         if started is not None and run_started and started < run_started - 60:
             continue
-        linked: Dict[str, Dict[str, Any]] = {}
+        before = len(linked)
         for task in manifest["tasks"]:
             child_id = child_for(task["goal"])
-            if child_id and child_id not in linked:
+            if child_id:
                 linked[child_id] = task
-        if not linked:
+        if len(linked) == before:
             continue
         statuses = [t["status"] for t in manifest["tasks"]]
         done = sum(1 for s in statuses if s == "completed")
         running = sum(1 for s in statuses if s in ("running", "dispatched"))
-        return {"done": done, "failed": len(statuses) - done - running, "running": running, "total": len(statuses)}, linked
-    return None, {}
+        batch["done"] += done
+        batch["running"] += running
+        batch["failed"] += len(statuses) - done - running
+        batch["total"] += len(statuses)
+    return (batch if batch["total"] else None), linked
 
 
 def _child_status(row: Dict[str, Any], task: Optional[Dict[str, Any]], tail: Optional[Dict[str, Any]]) -> str:
@@ -5300,10 +5314,12 @@ def build_live(profiles: List[Dict[str, Any]], now: Optional[float] = None) -> D
         runs = []
         for root in store["runs"]:
             root_id = str(root["id"])
-            rows = _children_shown(store["children"].get(root_id, []))
+            all_rows = store["children"].get(root_id, [])
+            rows = _children_shown(all_rows)
             batch, tasks = _link_manifest(manifests, root, rows)
             children = [_live_child(row, store, tasks.get(str(row["id"]))) for row in rows]
-            children_running += sum(1 for c in children if c["status"] == "running")
+            # The census counts every running subagent, not only the rows shown.
+            children_running += sum(1 for row in all_rows if row.get("ended_at") is None)
             ticks = sorted(
                 (t for sid in [root_id, *(str(r["id"]) for r in rows)] for t in store["ticks"].get(sid, [])),
                 key=lambda t: t["_ts"],

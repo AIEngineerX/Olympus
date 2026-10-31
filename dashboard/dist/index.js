@@ -1340,7 +1340,7 @@
   function ToolChip({ tool, settled }) {
     const [mountedLate] = useState(settled);
     const previous = useRef(undefined);
-    const text = tool && tool.name ? tool.name + (tool.args ? "(" + tool.args + ")" : "") : "";
+    const text = toolText(tool);
     // A chip appearing where there was none is a change too.
     const changed = previous.current !== undefined && previous.current !== text;
     previous.current = text;
@@ -1492,7 +1492,6 @@
       if (!active) return undefined;
       let alive = true;
       let timer = null;
-      setState((prev) => ({ ...prev, settled: false }));
       function load() {
         SDK.fetchJSON(API + "/live")
           .then((next) => {
@@ -1508,7 +1507,14 @@
           .finally(() => { if (alive) timer = window.setTimeout(load, LIVE_REFRESH_MS); });
       }
       load();
-      return () => { alive = false; window.clearTimeout(timer); };
+      // Leaving drops the snapshot: a view that comes back paints its first
+      // read still, instead of animating everything that happened meanwhile.
+      return () => {
+        alive = false;
+        window.clearTimeout(timer);
+        seen.current = null;
+        setState({ live: null, error: null, freshRefs: new Set(), settled: false });
+      };
     }, [active]);
     return state;
   }
@@ -1813,6 +1819,39 @@
     return tool && tool.name ? tool.name + (tool.args ? "(" + tool.args + ")" : "") : "";
   }
 
+  // "2 need you · 3 working · 7 agents", the glance and floor census.
+  function rosterCensus(summary, agentCount) {
+    const need = Number(summary.need_you || 0);
+    return [
+      need ? need + (need === 1 ? " needs you" : " need you") : "none need you",
+      Number(summary.working || 0) + " working",
+      plural(agentCount, "agent")
+    ];
+  }
+
+  // Plain-DOM element builder for a document (the tab's or the popout's).
+  function domMaker(doc) {
+    return (tag, className, text) => {
+      const node = doc.createElement(tag);
+      if (className) node.className = className;
+      if (text) node.textContent = text;
+      return node;
+    };
+  }
+
+  // A one-time entrance class leaves with its animation (or after its
+  // length under reduced motion), so a later move of the node, or a resize
+  // of a spoke, never replays it.
+  function entranceOnce(node, className, ms, done) {
+    const clear = () => {
+      if (!node.classList.contains(className)) return;
+      node.classList.remove(className);
+      if (done) done();
+    };
+    node.addEventListener("animationend", clear);
+    node.ownerDocument.defaultView.setTimeout(clear, ms);
+  }
+
   // Stations are in name order and never re-sorted by state (the overview
   // lists agents by status), so an agent is always where the operator last
   // saw it; the rings, not the order, say which ones need you.
@@ -1822,16 +1861,11 @@
     const summary = (data && data.agents && data.agents.summary) || {};
     const lanes = {};
     asList(live && live.lanes).forEach((lane) => { lanes[lane.agent.id] = lane; });
-    const need = Number(summary.need_you || 0);
     const children = Number((live && live.summary && live.summary.children) || 0);
     return {
       hasLive: Boolean(live),
-      census: [
-        need ? need + (need === 1 ? " needs you" : " need you") : "none need you",
-        Number(summary.working || 0) + " working",
-        plural(agents.length, "agent"),
-        live ? (children ? plural(children, "subagent") + " running" : "no subagents running") : ""
-      ].filter(Boolean).join(" · "),
+      census: rosterCensus(summary, agents.length)
+        .concat(live ? [children ? plural(children, "subagent") + " running" : "no subagents running"] : []).join(" · "),
       stations: agents.map((agent) => {
         const runs = lanes[agent.id] ? asList(lanes[agent.id].runs) : [];
         const line = glanceText(agent);
@@ -1874,12 +1908,7 @@
   }
 
   function buildStation(doc, row, opts) {
-    const make = (tag, className, text) => {
-      const node = doc.createElement(tag);
-      if (className) node.className = className;
-      if (text) node.textContent = text;
-      return node;
-    };
+    const make = domMaker(doc);
     const root = make("li", "olympus-floor-station");
     root.dataset.agent = row.id;
     const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -1974,7 +2003,10 @@
       let item = st.rows.get(sat.ref);
       if (!item) {
         item = buildSat(st, sat, opts);
-        if (live) item.row.classList.add("olympus-floor-sat-new");
+        if (live) {
+          item.row.classList.add("olympus-floor-sat-new");
+          entranceOnce(item.row, "olympus-floor-sat-new", FLOOR_PULSE_FALLBACK_MS);
+        }
         item.fresh = live;
         st.rows.set(sat.ref, item);
       }
@@ -2005,18 +2037,20 @@
 
   // A hairline from the node to each subagent's dot, measured from the
   // laid-out boxes; a fresh spoke draws in with its row.
+  // All layout reads first, then the writes, so a station costs one layout.
   function drawSpokes(st) {
     const box = st.root.getBoundingClientRect();
     if (!box.width) return;
     const node = st.node.getBoundingClientRect();
+    const dots = [];
+    st.rows.forEach((item, ref) => dots.push([ref, item, item.dot.getBoundingClientRect()]));
     const x1 = node.left + node.width / 2 - box.left;
     const y1 = node.top + node.height / 2 - box.top;
     st.svg.setAttribute("viewBox", "0 0 " + box.width + " " + box.height);
     st.svg.setAttribute("width", String(box.width));
     st.svg.setAttribute("height", String(box.height));
     const r = node.width / 2 - 2;
-    st.rows.forEach((item, ref) => {
-      const dot = item.dot.getBoundingClientRect();
+    dots.forEach(([ref, item, dot]) => {
       const x2 = dot.left + dot.width / 2 - box.left;
       const y2 = dot.top + dot.height / 2 - box.top;
       const len = Math.hypot(x2 - x1, y2 - y1) || 1;
@@ -2033,6 +2067,10 @@
           line.style.strokeDasharray = String(Math.ceil(len));
           line.style.strokeDashoffset = String(Math.ceil(len));
           line.classList.add("olympus-floor-spoke-new");
+          entranceOnce(line, "olympus-floor-spoke-new", FLOOR_PULSE_FALLBACK_MS, () => {
+            line.style.strokeDasharray = "";
+            line.style.strokeDashoffset = "";
+          });
         }
         st.svg.appendChild(line);
       }
@@ -2042,6 +2080,14 @@
       line.setAttribute("x2", ex.toFixed(1));
       line.setAttribute("y2", ey.toFixed(1));
     });
+  }
+
+  // Drops the floor's state and its window listener when its host leaves.
+  function destroyFloor(host) {
+    const state = host && host.__olympusFloor;
+    if (!state) return;
+    host.ownerDocument.defaultView.removeEventListener("resize", state.onResize);
+    delete host.__olympusFloor;
   }
 
   // Builds or updates the floor in `host`. Nothing animates on the first
@@ -2057,9 +2103,8 @@
       section.appendChild(doc.createElement("p")).className = "olympus-floor-census";
       section.appendChild(doc.createElement("ol")).className = "olympus-floor-stations";
       host.replaceChildren(section);
-      state = host.__olympusFloor = { section, stations: new Map(), renders: 0 };
-      const win = doc.defaultView;
-      win.addEventListener("resize", () => state.stations.forEach(drawSpokes));
+      state = host.__olympusFloor = { section, stations: new Map(), renders: 0, onResize: () => state.stations.forEach(drawSpokes) };
+      doc.defaultView.addEventListener("resize", state.onResize);
     }
     setText(state.section.firstChild, model.census);
     const list = state.section.lastChild;
@@ -2108,6 +2153,7 @@
     const opts = { onOpenAgent: ctx.openAgent, onOpenRun: ctx.openRun, compact: false };
     useEffect(() => { renderFloor(host.current, floorModel(data, live.live, ctx.now, false), opts); }, [data, live.live]);
     useEffect(() => { tickFloor(host.current, floorModel(data, live.live, ctx.now, false)); }, [ctx.now]);
+    useEffect(() => () => destroyFloor(host.current), []);
     return el("div", { className: "olympus-floor-view" },
       live.error ? el("p", { className: "olympus-error-text", role: "alert" }, "Could not read live runs: " + live.error) : null,
       el("div", { className: "olympus-floor-host", ref: host })
@@ -2146,13 +2192,8 @@
   function glanceModel(data, now) {
     const agents = asList(data && data.agents && data.agents.agents).slice().sort(SORTS.status);
     const summary = (data && data.agents && data.agents.summary) || {};
-    const need = Number(summary.need_you || 0);
     return {
-      census: [
-        need ? need + (need === 1 ? " needs you" : " need you") : "none need you",
-        Number(summary.working || 0) + " working",
-        plural(agents.length, "agent")
-      ].join(" · "),
+      census: rosterCensus(summary, agents.length).join(" · "),
       rows: agents.map((agent) => {
         const line = glanceText(agent);
         const subagents = Number((agent.helpers && agent.helpers.subagents) || 0);
@@ -2180,13 +2221,7 @@
   // in the Olympus tab) or the floor. The list is rebuilt on every read;
   // the floor keeps its DOM between reads so only what changed moves.
   function renderGlance(host, model, onOpen, glance, floor) {
-    const doc = host.ownerDocument;
-    const make = (tag, className, text) => {
-      const node = doc.createElement(tag);
-      if (className) node.className = className;
-      if (text) node.textContent = text;
-      return node;
-    };
+    const make = domMaker(host.ownerDocument);
     const mode = glance.mode === "floor" ? "floor" : "list";
     const previous = host.querySelector(".olympus-glance");
     if (previous && previous.dataset.mode === "floor" && mode === "floor") {
@@ -2195,6 +2230,7 @@
       renderFloor(previous.lastChild, floor.model, { onOpenAgent: onOpen, onOpenRun: floor.onOpenRun, compact: true });
       return;
     }
+    if (previous && previous.dataset.mode === "floor") destroyFloor(previous.lastChild);
     const section = make("section", "olympus-glance");
     section.setAttribute("aria-label", "Your agents at a glance");
     section.dataset.mode = mode;
@@ -2348,6 +2384,10 @@
     const floor = () => ({ model: floorModel(data, glance.live, now, true), onOpenRun });
     useEffect(() => { renderGlance(host.current, glanceModel(data, now), onOpen, glance, floor()); }, [data, glance.live, glance.mode]);
     useEffect(() => { tickGlance(host.current, glanceModel(data, now), floor()); }, [now]);
+    useEffect(() => () => {
+      const section = host.current && host.current.querySelector(".olympus-glance");
+      if (section && section.dataset.mode === "floor") destroyFloor(section.lastChild);
+    }, []);
     return el("div", { className: "olympus-glance-host", ref: host });
   }
 

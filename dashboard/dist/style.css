@@ -2395,10 +2395,12 @@
   border: 1px dashed var(--olympus-muted);
 }
 
+/* Invisible until its turn (a staggered pulse must not sit as a ring), gone
+   after. */
 .olympus-floor-pulse {
   border: 1px solid var(--color-primary);
   opacity: 0;
-  animation: olympus-floor-pulse 700ms cubic-bezier(0.25, 1, 0.5, 1) both;
+  animation: olympus-floor-pulse 700ms cubic-bezier(0.25, 1, 0.5, 1) forwards;
 }
 
 .olympus-floor-pulse-error {

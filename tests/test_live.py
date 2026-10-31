@@ -175,6 +175,48 @@ class LiveViewTest(unittest.TestCase):
         (live / "task-2.log").write_text(TRANSCRIPT + "12:34:10 final    | end status=completed exit_reason=completed\n", encoding="utf-8")
         self.assertEqual(statuses(), ["done", "running", "done"])
 
+    def add_child(self, session_id, title, started, ended):
+        con = sqlite3.connect(self.home / "state.db")
+        con.execute("INSERT INTO sessions VALUES (?, 'subagent', ?, ?, ?, ?, ?, 6, 4, 'run-1')",
+                    (session_id, title, started, ended, "agent_close" if ended else None, ended or started))
+        con.commit()
+        con.close()
+
+    def test_two_tasks_with_the_same_goal_are_two_children_each_with_its_own_task(self):
+        # Hermes numbers the second child "… #2"; the stems are equal, so each task must take the next unlinked child.
+        self.add_child("child-d", "Subagent: Run the suite #2", self.now - 100, self.now - 20)
+        self.write_manifest([
+            {"goal": "Reproduce the failure", "status": "completed", "exit_reason": "completed"},
+            {"goal": "Patch the retry loop", "status": "running"},
+            {"goal": "Run the suite", "status": "completed", "exit_reason": "completed"},
+            {"goal": "Run the suite", "status": "failed", "exit_reason": "error"},
+        ])
+        run = self.live()["lanes"][0]["runs"][0]
+        self.assertEqual([(c["label"], c["status"]) for c in run["children"]],
+                         [("Reproduce the failure", "done"), ("Patch the retry loop", "running"), ("Run the suite", "done"), ("Run the suite #2", "failed")])
+        self.assertEqual(run["batch"], {"done": 2, "failed": 1, "running": 1, "total": 4})
+
+    def test_a_run_that_delegated_twice_links_both_batches_and_sums_them(self):
+        self.add_child("child-e", "Subagent: Write the release note", self.now - 80, self.now - 30)
+        live = self.home / "cache" / "delegation" / "live" / "deleg_second"
+        live.mkdir(parents=True)
+        (live / "manifest.json").write_text(json.dumps({
+            "delegation_id": "deleg_second", "started": local_stamp(self.now - 90), "task_count": 1, "model": "test-model",
+            "tasks": [{"index": 0, "goal": "Write the release note", "log": str(live / "task-0.log"), "status": "failed", "exit_reason": "error"}],
+        }), encoding="utf-8")
+        run = self.live()["lanes"][0]["runs"][0]
+        # The earlier batch keeps its outcomes; the later batch's failed child is not read as Done.
+        self.assertEqual([(c["label"], c["status"]) for c in run["children"]],
+                         [("Reproduce the failure", "done"), ("Patch the retry loop", "running"), ("Run the suite", "failed"), ("Write the release note", "failed")])
+        self.assertEqual(run["batch"], {"done": 1, "failed": 2, "running": 1, "total": 4})
+
+    def test_the_census_counts_every_running_subagent_not_only_the_rows_shown(self):
+        for n in range(plugin_api.LIVE_CHILD_LIMIT + 3):
+            self.add_child(f"many-{n}", f"Subagent: Many task {n}", self.now - 50 + n * 0.01, None)
+        payload = self.live()
+        self.assertEqual(payload["summary"]["children"], plugin_api.LIVE_CHILD_LIMIT + 4)
+        self.assertEqual(len(payload["lanes"][0]["runs"][0]["children"]), plugin_api.LIVE_CHILD_LIMIT)
+
     def test_every_running_subagent_shows_and_the_newest_finished_fill_the_rest(self):
         now = self.now
         con = sqlite3.connect(self.home / "state.db")
