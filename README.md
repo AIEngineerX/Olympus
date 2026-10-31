@@ -36,6 +36,13 @@ problems it targets, and the Hermes issues that show people have them, are in
   one line.
 ![Live: one lane per working agent, its run, the subagents under it with their status and last tool, and the last minute of tool calls](screenshots/live.png)
 
+- **Pop out.** Your agents in a small window that stays on top while you work
+  elsewhere: one line per agent, the ones that need you first, with the status
+  word, what each is on and for how long. A click opens that agent in the
+  Olympus tab. Chrome and Edge open an always-on-top window (Document
+  Picture-in-Picture); other browsers get a plain popup of the same list.
+![Pop out: a small window listing every agent with its status, what it is on and for how long](screenshots/glance.png)
+
 - **Performance.** For 7 or 30 days: runs, how many succeeded, typical and slow
   run time, tool calls that failed, and cost, per agent and across all of them,
   each compared with the same number of days before ("96% of 25, was 100% the

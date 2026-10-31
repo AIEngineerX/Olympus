@@ -519,9 +519,12 @@
     { id: "checks", label: "Checks" }
   ];
 
-  function Header({ data, view, onView, loading, now }) {
+  // The glance view is the whole page (it is what the popup shows), so it
+  // carries neither the view switch nor the popout button.
+  function Header({ data, view, onView, loading, now, popout }) {
     const summary = (data && data.agents && data.agents.summary) || {};
     const updated = data && data.generated_at ? ago(data.generated_at, now) : null;
+    const chrome = data && !data.static && view !== "glance";
     return el("header", { className: "olympus-header" },
       el("div", { className: "olympus-brand" },
         el(Laurel),
@@ -531,7 +534,7 @@
         data && data.agents ? census(summary, data.agents.agents) : data && data.static ? "Agents only: the Olympus backend is off" : "Reading your agents…"),
       el("div", { className: "olympus-header-meta" },
         el("span", { className: "olympus-updated" }, loading && !data ? "Loading" : updated ? "Updated " + updated : ""),
-        data && !data.static ? el("nav", { className: "olympus-views", "aria-label": "Olympus views" },
+        chrome ? el("nav", { className: "olympus-views", "aria-label": "Olympus views" },
           VIEWS.map((item) => el("button", {
             key: item.id,
             type: "button",
@@ -539,7 +542,14 @@
             "aria-current": view === item.id ? "page" : undefined,
             onClick: () => onView(item.id)
           }, item.label))
-        ) : null
+        ) : null,
+        chrome ? el("button", {
+          type: "button",
+          className: cx("olympus-view-switch olympus-popout", popout.open && "olympus-view-current"),
+          "aria-pressed": popout.open ? "true" : "false",
+          title: popout.open ? "Close the small window" : "Your agents in a small window that stays on top",
+          onClick: popout.toggle
+        }, popout.open ? "Close popout" : "Pop out") : null
       )
     );
   }
@@ -1772,6 +1782,187 @@
   }
 
   // ---------------------------------------------------------------------
+  // Glance: the roster in one small always-on-top window, so the agents
+  // stay in view while the operator works elsewhere. A bet (PRODUCT.md):
+  // nobody has asked for it. The list is plain DOM, not React: the Hermes
+  // SDK exposes no ReactDOM, so a second window cannot host a React root.
+  // The same builder draws ?view=glance in the tab, which is also what the
+  // popup shows in browsers without Document Picture-in-Picture.
+  // ---------------------------------------------------------------------
+
+  const GLANCE_WIDTH = 340;
+  const GLANCE_ROW_HEIGHT = 40;
+  const GLANCE_LINE_HEIGHT = 28;
+  const GLANCE_CHROME_HEIGHT = 42;
+  const GLANCE_MIN_HEIGHT = 160;
+  const GLANCE_MAX_HEIGHT = 480;
+
+  // What the line says after the status word: for a working agent the task
+  // or session it is on, for one that needs you the reason, for idle
+  // nothing. The elapsed time shows only when it belongs to that text.
+  function glanceText(agent) {
+    const current = agent.current;
+    if (agent.status === "working") return { text: current ? current.label : "", since: current ? current.since : null };
+    if (agent.status === "waiting") {
+      if (current && current.kind === "waiting") return { text: current.label, since: current.since };
+      return { text: agent.status_reason || "", since: null };
+    }
+    return { text: agent.status === "idle" || agent.status === "unknown" ? "" : agent.status_reason || "", since: null };
+  }
+
+  function glanceModel(data, now) {
+    const agents = asList(data && data.agents && data.agents.agents).slice().sort(SORTS.status);
+    const summary = (data && data.agents && data.agents.summary) || {};
+    const need = Number(summary.need_you || 0);
+    return {
+      census: [
+        need ? need + (need === 1 ? " needs you" : " need you") : "none need you",
+        Number(summary.working || 0) + " working",
+        plural(agents.length, "agent")
+      ].join(" · "),
+      rows: agents.map((agent) => {
+        const line = glanceText(agent);
+        const subagents = Number((agent.helpers && agent.helpers.subagents) || 0);
+        return {
+          id: agent.id,
+          label: agent.label,
+          status: agent.status || "unknown",
+          state: agent.status_label || "Not checked",
+          text: [line.text, subagents ? plural(subagents, "subagent") : ""].filter(Boolean).join(" · "),
+          since: line.since ? elapsed(line.since, now) : ""
+        };
+      })
+    };
+  }
+
+  // The window opens as tall as its rows (two lines for an agent with
+  // something to say, one for idle), between 160 and 480 px.
+  function glanceHeight(model) {
+    const rows = model.rows.reduce((sum, row) => sum + (row.text ? GLANCE_ROW_HEIGHT : GLANCE_LINE_HEIGHT), 0);
+    return Math.max(GLANCE_MIN_HEIGHT, Math.min(GLANCE_MAX_HEIGHT, GLANCE_CHROME_HEIGHT + rows));
+  }
+
+  // Builds the list into `host`, replacing what was there. Every row is a
+  // button that opens that agent in the Olympus tab.
+  function renderGlance(host, model, onOpen) {
+    const doc = host.ownerDocument;
+    const make = (tag, className, text) => {
+      const node = doc.createElement(tag);
+      if (className) node.className = className;
+      if (text) node.textContent = text;
+      return node;
+    };
+    const section = make("section", "olympus-glance");
+    section.setAttribute("aria-label", "Your agents at a glance");
+    section.appendChild(make("p", "olympus-glance-census", model.census));
+    const list = make("ol", "olympus-glance-list");
+    model.rows.forEach((row) => {
+      const item = make("li");
+      const button = make("button", "olympus-glance-row");
+      button.type = "button";
+      button.dataset.agent = row.id;
+      button.dataset.status = row.status;
+      button.addEventListener("click", () => onOpen(row.id));
+      const dot = make("span", "olympus-glance-dot olympus-glance-dot-" + row.status);
+      dot.setAttribute("aria-hidden", "true");
+      button.appendChild(dot);
+      button.appendChild(make("span", "olympus-glance-name", row.label));
+      button.appendChild(make("span", "olympus-glance-state olympus-glance-state-" + row.status, row.state));
+      button.appendChild(make("span", "olympus-glance-since", row.since));
+      if (row.text) button.appendChild(make("span", "olympus-glance-text", row.text));
+      item.appendChild(button);
+      list.appendChild(item);
+    });
+    section.appendChild(list);
+    const previous = host.querySelector(".olympus-glance");
+    section.dataset.render = String(previous ? Number(previous.dataset.render || 0) + 1 : 1);
+    host.replaceChildren(section);
+  }
+
+  // Elapsed times tick every second without rebuilding the rows.
+  function tickGlance(host, model) {
+    model.rows.forEach((row) => {
+      const node = host.querySelector('.olympus-glance-row[data-agent="' + CSS.escape(row.id) + '"] .olympus-glance-since');
+      if (node && node.textContent !== row.since) node.textContent = row.since;
+    });
+  }
+
+  // The popout document gets the dashboard's stylesheets, the root
+  // element's inline style (Hermes writes the active theme's tokens there),
+  // and its attributes, so Olympus is native there in every Hermes theme.
+  function adoptStyles(target) {
+    Array.from(document.styleSheets).forEach((sheet) => {
+      if (sheet.href) {
+        const link = target.createElement("link");
+        link.rel = "stylesheet";
+        link.href = sheet.href;
+        target.head.appendChild(link);
+        return;
+      }
+      const style = target.createElement("style");
+      style.textContent = Array.from(sheet.cssRules).map((rule) => rule.cssText).join("\n");
+      target.head.appendChild(style);
+    });
+    Array.from(document.documentElement.attributes).forEach((attr) => {
+      if (attr.name !== "class") target.documentElement.setAttribute(attr.name, attr.value);
+    });
+    target.documentElement.className = cx(document.documentElement.className, "olympus-glance-window");
+    target.body.className = document.body.className;
+  }
+
+  function glanceUrl() {
+    const params = new URLSearchParams(window.location.search);
+    ["agent", "run", "days"].forEach((name) => params.delete(name));
+    params.set("view", "glance");
+    return window.location.pathname + "?" + params.toString();
+  }
+
+  function usePopout(data, now, onOpen) {
+    const [open, setOpen] = useState(false);
+    const win = useRef(null);
+    const host = () => (win.current ? win.current.document.body.firstElementChild : null);
+    useEffect(() => {
+      if (win.current && data && !data.static) renderGlance(host(), glanceModel(data, now), onOpen);
+    }, [data]);
+    useEffect(() => {
+      if (win.current && data && !data.static) tickGlance(host(), glanceModel(data, now));
+    }, [now]);
+    function toggle() {
+      if (win.current) {
+        win.current.close();
+        return;
+      }
+      if (!window.documentPictureInPicture) {
+        window.open(glanceUrl(), "olympus-glance", "popup,width=" + (GLANCE_WIDTH + 20) + ",height=" + GLANCE_MAX_HEIGHT);
+        return;
+      }
+      const model = glanceModel(data, now);
+      window.documentPictureInPicture.requestWindow({ width: GLANCE_WIDTH, height: glanceHeight(model) }).then((pip) => {
+        adoptStyles(pip.document);
+        pip.document.title = "Olympus";
+        const page = pip.document.createElement("div");
+        page.className = "olympus-page olympus-glance-page";
+        pip.document.body.appendChild(page);
+        pip.addEventListener("pagehide", () => {
+          win.current = null;
+          setOpen(false);
+        });
+        win.current = pip;
+        setOpen(true);
+        renderGlance(page, model, onOpen);
+      });
+    }
+    return { open, toggle };
+  }
+
+  function GlanceView({ data, now, onOpen }) {
+    const host = useRef(null);
+    useEffect(() => { renderGlance(host.current, glanceModel(data, now), onOpen); }, [data]);
+    useEffect(() => { tickGlance(host.current, glanceModel(data, now)); }, [now]);
+    return el("div", { className: "olympus-glance-host", ref: host });
+  }
+
+  // ---------------------------------------------------------------------
   // Page
   // ---------------------------------------------------------------------
 
@@ -1780,7 +1971,7 @@
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(true);
     const [client, setClient] = useState(null);
-    const [view, setView] = useState(["live", "performance", "checks"].includes(readParam("view")) ? readParam("view") : "agents");
+    const [view, setView] = useState(["live", "performance", "checks", "glance"].includes(readParam("view")) ? readParam("view") : "agents");
     const [days, setDays] = useState(readParam("days") === "30" ? 30 : 7);
     const [runRef, setRunRef] = useState(readParam("run"));
     const [selected, setSelected] = useState(readParam("agent"));
@@ -1932,13 +2123,44 @@
       if (!inFlight.current) load();
     }
 
+    // A glance popup (the browsers without Document Picture-in-Picture)
+    // asks this tab to open an agent; only a same-origin window is heard.
     useEffect(() => {
       function onKey(event) {
         if (event.key === "Escape" && selectedRef.current && !event.defaultPrevented) closeAgent();
       }
+      function onMessage(event) {
+        if (event.origin !== window.location.origin || !event.data || event.data.olympus !== "open-agent") return;
+        openAgent(String(event.data.id));
+        window.focus();
+      }
       document.addEventListener("keydown", onKey);
-      return () => document.removeEventListener("keydown", onKey);
+      window.addEventListener("message", onMessage);
+      return () => {
+        document.removeEventListener("keydown", onKey);
+        window.removeEventListener("message", onMessage);
+      };
     }, []);
+
+    // From the popout a row opens the agent here and asks for this tab.
+    function openFromPopout(agentId) {
+      openAgent(agentId);
+      window.focus();
+    }
+
+    // In the glance view itself a row opens the agent in the tab that
+    // opened this popup, or here when there is none.
+    function openFromGlance(agentId) {
+      const opener = window.opener;
+      if (opener && !opener.closed && window.location.origin !== "null") {
+        opener.postMessage({ olympus: "open-agent", id: agentId }, window.location.origin);
+        opener.focus();
+        return;
+      }
+      openAgent(agentId);
+    }
+
+    const popout = usePopout(data, now, openFromPopout);
 
     const agents = asList(data && data.agents && data.agents.agents);
     const agentById = {};
@@ -1962,6 +2184,7 @@
     else if (data.static) body = el(React.Fragment, null, el(BackendOff, { info: data.static }), el(StaticRoster, { agents: data.static_agents }));
     else if (view === "checks") body = el(Checks, { data, ctx, client });
     else if (view === "live") body = el(LiveView, { ctx });
+    else if (view === "glance") body = el(GlanceView, { data, now, onOpen: openFromGlance });
     else if (view === "performance") body = el(PerformanceView, { ctx, days, onDays: changeDays, selected, onSelect: selectPerformance, runRef, onRun: showRun });
     else body = el(React.Fragment, null,
       el(NeedsYouBanner, { queue: data.needs_you, ctx }),
@@ -1976,7 +2199,7 @@
     );
 
     return el("div", { className: "olympus-page" },
-      el(Header, { data, view, onView: changeView, loading, now }),
+      el(Header, { data, view, onView: changeView, loading, now, popout }),
       el(GreekKey),
       el("p", { className: cx("olympus-notice", notice && "olympus-notice-shown"), role: "status" }, notice || ""),
       body

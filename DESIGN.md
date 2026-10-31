@@ -101,6 +101,12 @@ the inspector sitting beside the roster.
   (worst success first), and a run view that lists every step.
 - **Confirmation popover:** anchored to the button, states the exact effect,
   Confirm and Cancel. Never a modal.
+- **Pop out:** the roster in a 340 px window that stays on top (Document
+  Picture-in-Picture; a plain popup elsewhere). One row per agent: dot, name,
+  status word, elapsed time, then what it is on in muted text. Same order as
+  the roster. The popout copies the dashboard's stylesheets and the root
+  element's theme tokens, so it is native in every Hermes theme. The only
+  motion is the working dot.
 - **Charts:** hairline axes, tabular labels, one accent plus two muted tints.
   No chart without a labelled unit.
 

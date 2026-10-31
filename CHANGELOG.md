@@ -20,6 +20,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   eyes: a failed subagent first, then the most subagents running, then the
   latest activity. New endpoint `GET /api/plugins/olympus/live`.
   Built as a bet against #143077, #132468 and #58725, not a counted problem.
+- Pop out: the roster in a small window that stays on top, one line per
+  agent with its status word, what it is on and for how long, the ones that
+  need you first; a click opens the agent in the tab. Chrome and Edge use
+  Document Picture-in-Picture; other browsers get a popup of the same list
+  (`?view=glance`). Reads the roster's own ten-second poll, no new endpoint.
+  A bet: no Hermes user has asked for it (#58725 has no reactions); it
+  follows what people have adopted for other agent tools, an always-visible
+  view of every agent keyed to real activity.
 
 ## [2.0.1] - 2026-10-27
 

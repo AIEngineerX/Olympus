@@ -296,7 +296,8 @@
           return { recorded: true };
         }
         if (path.startsWith("/api/cron/jobs/") || path.startsWith("/api/plugins/kanban/")) return hermesWrite(url, init);
-        if (fixtureState !== "static-user-plugin") return data;
+        // A fresh object each read, as fetchJSON gives: a poll must re-render.
+        if (fixtureState !== "static-user-plugin") return Object.assign({}, data);
         if (path === "/api/plugins/olympus/overview") throw new Error("404 /api/plugins/olympus/overview");
         if (path === "/api/profiles") return { profiles: [{ name: "default" }, { name: "vulcan" }, { name: "iris" }] };
         return {};

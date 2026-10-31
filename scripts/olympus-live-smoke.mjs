@@ -205,7 +205,7 @@ async function collectMetrics(page, sections) {
             (route.startsWith("/") && !allowedRoutes.includes(route));
         }),
       svgTextCount: pageEl.querySelectorAll("svg text").length,
-      views: Array.from(pageEl.querySelectorAll(".olympus-view-switch")).filter(visible).map((el) => ({
+      views: Array.from(pageEl.querySelectorAll(".olympus-views .olympus-view-switch")).filter(visible).map((el) => ({
         label: (el.textContent || "").trim(),
         current: el.getAttribute("aria-current") === "page",
       })),
@@ -214,8 +214,8 @@ async function collectMetrics(page, sections) {
 }
 
 async function showView(page, label, sections) {
-  await page.locator(".olympus-view-switch", { hasText: label }).click();
-  await page.waitForFunction((name) => Array.from(document.querySelectorAll(".olympus-view-switch"))
+  await page.locator(".olympus-views .olympus-view-switch", { hasText: label }).click();
+  await page.waitForFunction((name) => Array.from(document.querySelectorAll(".olympus-views .olympus-view-switch"))
     .some((el) => el.textContent.trim() === name && el.getAttribute("aria-current") === "page"), label, { timeout: 5000 });
   // Checks keeps scan and payload numbers behind one disclosure.
   if (label === "Checks") await page.locator(".olympus-debug > summary").click();

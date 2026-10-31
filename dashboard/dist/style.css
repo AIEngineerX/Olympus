@@ -2113,3 +2113,165 @@
     transition: none;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Glance: the roster in one small window that stays on top. One line  */
+/* per agent, the ones that need you first; the only motion is the     */
+/* working dot. The same rules draw ?view=glance in the tab.           */
+/* ------------------------------------------------------------------ */
+
+.olympus-glance-window,
+.olympus-glance-window body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--color-card);
+  color: var(--color-card-foreground);
+}
+
+.olympus-glance-window .olympus-page {
+  padding: 8px 10px 10px;
+}
+
+.olympus-glance-host {
+  max-width: 560px;
+}
+
+.olympus-page .olympus-glance-census {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 6px;
+  color: var(--olympus-muted);
+  font-size: 12px;
+}
+
+.olympus-page .olympus-glance-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.olympus-glance-row {
+  display: grid;
+  grid-template-columns: 7px max-content minmax(0, 1fr) max-content;
+  grid-template-areas:
+    "dot name state since"
+    ". text text text";
+  align-items: center;
+  align-content: center;
+  column-gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--olympus-radius-sm);
+  background: transparent;
+  color: var(--olympus-fg);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+
+.olympus-glance-row:hover {
+  background: var(--color-accent);
+}
+
+.olympus-glance-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--olympus-muted);
+}
+
+.olympus-glance-dot-working {
+  background: var(--color-primary);
+  animation: olympus-pulse 2.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.olympus-glance-dot-waiting {
+  background: var(--color-warning);
+}
+
+.olympus-glance-dot-failed,
+.olympus-glance-dot-stalled {
+  background: var(--color-destructive);
+}
+
+.olympus-glance-dot-idle,
+.olympus-glance-dot-unknown,
+.olympus-glance-dot-offline {
+  border: 1px solid var(--olympus-muted);
+  background: transparent;
+}
+
+.olympus-glance-dot-offline {
+  opacity: 0.5;
+}
+
+.olympus-glance-dot {
+  grid-area: dot;
+}
+
+.olympus-glance-name {
+  grid-area: name;
+  overflow: hidden;
+  max-width: 160px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.olympus-glance-state {
+  grid-area: state;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.olympus-glance-text {
+  grid-area: text;
+  overflow: hidden;
+  color: var(--olympus-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.olympus-glance-state-waiting {
+  color: var(--color-warning);
+}
+
+.olympus-glance-state-failed,
+.olympus-glance-state-stalled {
+  color: var(--color-destructive);
+}
+
+.olympus-glance-state-idle,
+.olympus-glance-state-unknown,
+.olympus-glance-state-offline {
+  font-weight: 400;
+}
+
+.olympus-glance-since {
+  grid-area: since;
+  color: var(--olympus-muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+/* Touch height in the tab on a phone; the popout is a desktop window. */
+@media (max-width: 720px) {
+  html:not(.olympus-glance-window) .olympus-glance-row {
+    min-height: 40px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .olympus-glance-dot-working {
+    animation: none;
+  }
+}
