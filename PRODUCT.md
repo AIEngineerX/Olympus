@@ -26,6 +26,7 @@ NousResearch/hermes-agent issues (all 17,003 read by title and body on
 | Cost per job or task | #106615, #107744, #131119 (7 people) | Spend per cron job in Checks |
 | Which subagents are still running, on what, and how far a batch is | #143077, #132468, #58725 (3 people, 0 to 1 comments each): a **bet**, not a counted problem | Live view: lanes of open runs with their subagents, last tool, tasks done of dispatched |
 | Keeping every agent in view while working in other windows | No Hermes user has asked (#58725, 0 reactions). Analogy only: always-visible agent views for other tools are the most adopted pattern (pixel-agents 9,985 stars, Star-Office-UI 7,547, clawd-on-desk 6,589 on 2026-10-30). A **bet** approved by the owner | Pop out: the roster in a small always-on-top window |
+| Reading the whole fleet from across a room, with motion only where an agent is really working | No Hermes user has asked. Same analogy as Pop out: the pixel-office views win on ambient presence (every agent in one frame, each with a place, motion only on real work). The owner said no to an office itself. A **bet** approved by the owner, with the anti-slop rules in `docs/superpowers/plans/2026-10-31-floor-view.md` | Floor: every agent at a fixed place, pulses from recorded tool calls, subagents joined to their agent; also a popout mode |
 
 Not possible as a plugin: approvals nobody sees (#133514, about 73 people).
 Hermes keeps pending approvals in gateway memory, with no table or API to read.

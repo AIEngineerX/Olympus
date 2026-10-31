@@ -2275,3 +2275,437 @@
     animation: none;
   }
 }
+
+/* Floor: every agent at a fixed place, in profile order, one frame. A
+   station is the agent's node (its avatar disc) with a ring only when it
+   needs you, then name, status word, what it is on, the last minute's call
+   count, and its subagents as rows joined to the node by hairline spokes.
+   Motion only from Hermes' records: a tool call expands one ring from the
+   node and fades, a new subagent enters from the node as its spoke draws,
+   a waiting ring breathes. Idle and finished never move. Flat throughout:
+   no shadow, filter, gradient or blur. */
+.olympus-page .olympus-floor-census {
+  margin: 0 0 12px;
+}
+
+.olympus-floor-stations {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 0 32px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.olympus-floor-station {
+  position: relative;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 0 12px;
+  min-width: 0;
+  padding: 14px 0 16px;
+  border-top: 1px solid var(--olympus-hairline);
+}
+
+.olympus-floor-station[data-status="idle"],
+.olympus-floor-station[data-status="unknown"] {
+  opacity: 0.62;
+}
+
+.olympus-floor-station[data-status="offline"] {
+  opacity: 0.5;
+}
+
+.olympus-floor-spokes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.olympus-floor-spoke {
+  fill: none;
+  stroke: var(--olympus-hairline);
+  stroke-width: 1;
+}
+
+.olympus-floor-spoke-failed {
+  stroke: var(--color-destructive);
+}
+
+/* The line's dash length is set inline from its measured length. */
+.olympus-floor-spoke-new {
+  animation: olympus-floor-draw 260ms cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+.olympus-floor-node-cell {
+  position: relative;
+  z-index: 1;
+}
+
+.olympus-page button.olympus-floor-node {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+}
+
+.olympus-page button.olympus-floor-node:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+.olympus-floor-node .olympus-avatar {
+  width: 44px;
+  height: 44px;
+  font-size: 17px;
+}
+
+.olympus-floor-ring,
+.olympus-floor-pulse {
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.olympus-floor-ring {
+  border: 2px solid transparent;
+}
+
+.olympus-floor-station[data-status="waiting"] .olympus-floor-ring {
+  border-color: var(--color-warning);
+  animation: olympus-pulse 2.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.olympus-floor-station[data-status="failed"] .olympus-floor-ring,
+.olympus-floor-station[data-status="stalled"] .olympus-floor-ring {
+  border-color: var(--color-destructive);
+}
+
+.olympus-floor-station[data-status="offline"] .olympus-floor-ring {
+  border: 1px dashed var(--olympus-muted);
+}
+
+.olympus-floor-pulse {
+  border: 1px solid var(--color-primary);
+  opacity: 0;
+  animation: olympus-floor-pulse 700ms cubic-bezier(0.25, 1, 0.5, 1) both;
+}
+
+.olympus-floor-pulse-error {
+  border-width: 2px;
+  border-color: var(--color-destructive);
+}
+
+.olympus-floor-body {
+  min-width: 0;
+}
+
+.olympus-floor-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  min-height: 24px;
+}
+
+.olympus-page button.olympus-floor-name {
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration-color: transparent;
+}
+
+.olympus-page button.olympus-floor-name:hover {
+  text-decoration-color: currentColor;
+}
+
+.olympus-floor-now {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.olympus-floor-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.olympus-floor-text:empty + .olympus-floor-since,
+.olympus-floor-now:has(> .olympus-floor-text:empty) {
+  display: none;
+}
+
+.olympus-floor-since {
+  flex: none;
+  color: var(--olympus-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.olympus-floor-calls {
+  display: block;
+  margin-top: 3px;
+  color: var(--olympus-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.olympus-floor-calls:empty,
+.olympus-floor-more:empty,
+.olympus-floor-sats:empty {
+  display: none;
+}
+
+.olympus-floor-sats {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.olympus-floor-sat {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) max-content max-content;
+  grid-template-areas:
+    "dot label state time"
+    ". tool tool tool";
+  align-items: center;
+  gap: 0 10px;
+  min-height: 24px;
+  font-size: 13px;
+}
+
+.olympus-floor-sat-dot {
+  grid-area: dot;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--color-primary);
+}
+
+.olympus-floor-sat-running .olympus-floor-sat-dot {
+  animation: olympus-pulse 2.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.olympus-floor-sat-done .olympus-floor-sat-dot {
+  background: var(--olympus-muted);
+}
+
+.olympus-floor-sat-failed .olympus-floor-sat-dot {
+  background: var(--color-destructive);
+}
+
+.olympus-page button.olympus-floor-sat-label {
+  grid-area: label;
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.olympus-floor-sat-state {
+  grid-area: state;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--olympus-muted);
+}
+
+.olympus-floor-sat-failed .olympus-floor-sat-state {
+  color: var(--color-destructive);
+}
+
+.olympus-floor-sat-state:empty {
+  display: none;
+}
+
+.olympus-floor-sat-time {
+  grid-area: time;
+  color: var(--olympus-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.olympus-floor-sat-tool {
+  grid-area: tool;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--olympus-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.olympus-floor-sat-tool:empty {
+  display: none;
+}
+
+.olympus-floor-sat-done,
+.olympus-floor-sat-failed {
+  opacity: 0.72;
+}
+
+.olympus-floor-sat-new {
+  animation: olympus-floor-enter 260ms cubic-bezier(0.25, 1, 0.5, 1) both;
+}
+
+.olympus-floor-more {
+  margin: 4px 0 0;
+  color: var(--olympus-muted);
+  font-size: 12px;
+}
+
+@keyframes olympus-floor-pulse {
+  from {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(2.2);
+  }
+}
+
+@keyframes olympus-floor-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes olympus-floor-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The floor inside the popout and the glance popup: one column, a smaller
+   node, three subagents per station, the glance census line instead of
+   the floor's own. */
+.olympus-glance-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.olympus-glance-head .olympus-glance-census {
+  min-height: 0;
+}
+
+.olympus-glance-modes {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+}
+
+.olympus-page button.olympus-glance-mode {
+  min-height: 22px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--olympus-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.olympus-page button.olympus-glance-mode-current {
+  border-color: var(--olympus-hairline);
+  color: var(--olympus-fg);
+}
+
+.olympus-glance .olympus-floor-census {
+  display: none;
+}
+
+.olympus-floor-compact .olympus-floor-stations {
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+.olympus-floor-compact .olympus-floor-station {
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 0 8px;
+  padding: 8px 0 10px;
+}
+
+.olympus-floor-compact .olympus-page button.olympus-floor-node,
+.olympus-floor-compact button.olympus-floor-node {
+  width: 40px;
+  height: 40px;
+}
+
+.olympus-floor-compact .olympus-floor-node .olympus-avatar {
+  width: 32px;
+  height: 32px;
+  font-size: 13px;
+}
+
+.olympus-floor-compact .olympus-floor-ring,
+.olympus-floor-compact .olympus-floor-pulse {
+  inset: 1px;
+}
+
+.olympus-floor-compact button.olympus-floor-name {
+  font-size: 13px;
+}
+
+.olympus-floor-compact .olympus-floor-now {
+  font-size: 12px;
+}
+
+.olympus-floor-compact .olympus-floor-sat {
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .olympus-floor-stations {
+    grid-template-columns: 1fr;
+  }
+
+  .olympus-floor-sat {
+    min-height: 32px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .olympus-floor-station[data-status="waiting"] .olympus-floor-ring,
+  .olympus-floor-sat-running .olympus-floor-sat-dot,
+  .olympus-floor-sat-new {
+    animation: none;
+  }
+
+  .olympus-floor-spoke-new {
+    animation: none;
+    stroke-dashoffset: 0 !important;
+  }
+
+  .olympus-floor-pulse {
+    display: none;
+  }
+}

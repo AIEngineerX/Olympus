@@ -43,6 +43,16 @@ problems it targets, and the Hermes issues that show people have them, are in
   Picture-in-Picture); other browsers get a plain popup of the same list.
 ![Pop out: a small window listing every agent with its status, what it is on and for how long](screenshots/glance.png)
 
+- **Floor.** Every agent at a fixed place in one frame, in name order, so the
+  whole fleet reads from across a room: the agent's disc with a ring only when
+  it needs you (waiting breathes, failed and stalled hold still), what it is
+  on, the last minute's call count, and its subagents joined to it by
+  hairlines. Nothing moves unless Hermes recorded it: a tool call expands one
+  ring from the disc and fades (red for a failed call), a new subagent enters
+  from the disc, a finished one keeps its slot and turns Done. Idle agents
+  dim. The popout can show the floor instead of the list.
+![Floor: one station per agent, its ring, what it is on and its subagents joined to it](screenshots/floor.png)
+
 - **Performance.** For 7 or 30 days: runs, how many succeeded, typical and slow
   run time, tool calls that failed, and cost, per agent and across all of them,
   each compared with the same number of days before ("96% of 25, was 100% the

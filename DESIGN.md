@@ -106,7 +106,23 @@ the inspector sitting beside the roster.
   status word, elapsed time, then what it is on in muted text. Same order as
   the roster. The popout copies the dashboard's stylesheets and the root
   element's theme tokens, so it is native in every Hermes theme. The only
-  motion is the working dot.
+  motion is the working dot. A List / Floor switch shows the floor instead,
+  at one column with three subagents per station.
+- **Floor:** every agent as a station at a fixed place, in name order, on a
+  grid of 300 px columns (one column under 720 px). A station is the agent's
+  avatar disc at 44 px with a 2 px ring only for attention (waiting: warning,
+  breathing with the pulse curve; failed and stalled: destructive, still;
+  offline: dashed hairline), then name, status pill, what it is on with its
+  elapsed time, the last minute's call count, and one row per subagent (dot,
+  label, Done or Failed, time, last tool in monospace) joined to the disc by
+  a hairline spoke in one SVG per station. Motion is only a record: a tool
+  call since the last read expands one 1 px accent ring from the disc, 700 ms
+  ease-out-quart, 2 px destructive for a failed call, at most six per read 90
+  ms apart; a new subagent slides 16 px in from the disc in 260 ms as its
+  spoke draws; a finished one keeps its slot. Idle stations sit at 62%
+  opacity, offline at 50%. Nothing animates on first paint or on a read with
+  no change. Flat: no shadow, filter, gradient or blur, which the visual tests
+  assert.
 - **Charts:** hairline axes, tabular labels, one accent plus two muted tints.
   No chart without a labelled unit.
 

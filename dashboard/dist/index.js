@@ -515,6 +515,7 @@
   const VIEWS = [
     { id: "agents", label: "Agents" },
     { id: "live", label: "Live" },
+    { id: "floor", label: "Floor" },
     { id: "performance", label: "Performance" },
     { id: "checks", label: "Checks" }
   ];
@@ -1479,17 +1480,19 @@
       + " · " + (children ? plural(children, "subagent") + " running" : "no subagents running");
   }
 
-  function LiveView({ ctx }) {
-    const [live, setLive] = useState(null);
-    const [error, setError] = useState(null);
-    // Which subagents are new since the last read, and whether the first
-    // read has painted: only those animate, never the whole list at once.
-    const [freshRefs, setFreshRefs] = useState(new Set());
-    const [settled, setSettled] = useState(false);
+  // The one live poll, shared by the Live view, the Floor and the popout
+  // so no two of them read /live at once. `freshRefs`: the subagents new
+  // since the last read; `settled`: the first read has painted. Only those
+  // animate, never the whole list at once. The poll stops while nothing
+  // shows it and starts again, unsettled, when something does.
+  function useLivePoll(active) {
+    const [state, setState] = useState({ live: null, error: null, freshRefs: new Set(), settled: false });
     const seen = useRef(null);
     useEffect(() => {
+      if (!active) return undefined;
       let alive = true;
       let timer = null;
+      setState((prev) => ({ ...prev, settled: false }));
       function load() {
         SDK.fetchJSON(API + "/live")
           .then((next) => {
@@ -1498,17 +1501,20 @@
             const fresh = new Set();
             if (seen.current) refs.forEach((ref) => { if (!seen.current.has(ref)) fresh.add(ref); });
             seen.current = refs;
-            setFreshRefs(fresh);
-            setLive(next);
-            setError(null);
-            window.requestAnimationFrame(() => { if (alive) setSettled(true); });
+            setState((prev) => ({ ...prev, live: next, error: null, freshRefs: fresh }));
+            window.requestAnimationFrame(() => { if (alive) setState((prev) => (prev.settled ? prev : { ...prev, settled: true })); });
           })
-          .catch((err) => { if (alive) setError(toErrorMessage(err)); })
+          .catch((err) => { if (alive) setState((prev) => ({ ...prev, error: toErrorMessage(err) })); })
           .finally(() => { if (alive) timer = window.setTimeout(load, LIVE_REFRESH_MS); });
       }
       load();
       return () => { alive = false; window.clearTimeout(timer); };
-    }, []);
+    }, [active]);
+    return state;
+  }
+
+  function LiveView({ ctx, poll }) {
+    const { live, error, freshRefs, settled } = poll;
     const lanes = asList(live && live.lanes);
     const idle = asList(live && live.idle);
     // The header already says when Olympus last read Hermes, so this view
@@ -1785,6 +1791,330 @@
   }
 
   // ---------------------------------------------------------------------
+  // Floor: every agent at a fixed place in one frame, so the whole fleet
+  // reads from across a room. Motion only where Hermes recorded something:
+  // a tool call pulses from the agent's node, a subagent enters from it and
+  // keeps its slot, a ring says which agent needs you. A bet (PRODUCT.md).
+  // Plain DOM like the glance list, so the popout can show it too; one
+  // builder keeps the tab and the popout identical.
+  // ---------------------------------------------------------------------
+
+  const FLOOR_PULSE_LIMIT = 6;
+  const FLOOR_PULSE_STEP_MS = 90;
+  const FLOOR_PULSE_FALLBACK_MS = 1600;
+  const FLOOR_COMPACT_SATS = 3;
+  const SAT_STATE_TEXT = { done: "Done", failed: "Failed" };
+
+  function tickKey(tick) {
+    return String(tick.at) + (tick.error ? "!" : "");
+  }
+
+  function toolText(tool) {
+    return tool && tool.name ? tool.name + (tool.args ? "(" + tool.args + ")" : "") : "";
+  }
+
+  // Stations are in name order and never re-sorted by state (the overview
+  // lists agents by status), so an agent is always where the operator last
+  // saw it; the rings, not the order, say which ones need you.
+  function floorModel(data, live, now, compact) {
+    const agents = asList(data && data.agents && data.agents.agents).slice()
+      .sort((a, b) => String(a.label).localeCompare(String(b.label)) || String(a.id).localeCompare(String(b.id)));
+    const summary = (data && data.agents && data.agents.summary) || {};
+    const lanes = {};
+    asList(live && live.lanes).forEach((lane) => { lanes[lane.agent.id] = lane; });
+    const need = Number(summary.need_you || 0);
+    const children = Number((live && live.summary && live.summary.children) || 0);
+    return {
+      hasLive: Boolean(live),
+      census: [
+        need ? need + (need === 1 ? " needs you" : " need you") : "none need you",
+        Number(summary.working || 0) + " working",
+        plural(agents.length, "agent"),
+        live ? (children ? plural(children, "subagent") + " running" : "no subagents running") : ""
+      ].filter(Boolean).join(" · "),
+      stations: agents.map((agent) => {
+        const runs = lanes[agent.id] ? asList(lanes[agent.id].runs) : [];
+        const line = glanceText(agent);
+        const ticks = [];
+        const sats = [];
+        runs.forEach((run) => {
+          asList(run.ticks).forEach((tick) => ticks.push({ at: tick.at, error: Boolean(tick.error) }));
+          asList(run.children).forEach((child) => sats.push({
+            ref: child.ref,
+            label: child.label,
+            status: child.status,
+            tool: toolText(child.last_tool),
+            time: (child.status === "running" ? elapsed(child.started_at, now) : spanBetween(child.started_at, child.ended_at)) || ""
+          }));
+        });
+        const failedCalls = ticks.filter((tick) => tick.error).length;
+        const hidden = compact && sats.length > FLOOR_COMPACT_SATS ? sats.length - FLOOR_COMPACT_SATS : 0;
+        return {
+          id: agent.id,
+          label: agent.label,
+          avatar: agent.avatar || String(agent.label || "?").slice(0, 1).toUpperCase(),
+          hue: avatarHue(agent.id),
+          status: agent.status || "unknown",
+          state: agent.status_label || "Not checked",
+          text: line.text,
+          since: line.since ? elapsed(line.since, now) : "",
+          calls: !runs.length ? "" : ticks.length
+            ? plural(ticks.length, "call") + " in the last minute" + (failedCalls ? ", " + failedCalls + " failed" : "")
+            : "no calls in the last minute",
+          ticks,
+          sats: hidden ? sats.slice(0, FLOOR_COMPACT_SATS) : sats,
+          hidden
+        };
+      })
+    };
+  }
+
+  function setText(node, text) {
+    if (node.textContent !== text) node.textContent = text;
+  }
+
+  function buildStation(doc, row, opts) {
+    const make = (tag, className, text) => {
+      const node = doc.createElement(tag);
+      if (className) node.className = className;
+      if (text) node.textContent = text;
+      return node;
+    };
+    const root = make("li", "olympus-floor-station");
+    root.dataset.agent = row.id;
+    const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "olympus-floor-spokes");
+    svg.setAttribute("aria-hidden", "true");
+    root.appendChild(svg);
+    const nodeCell = make("div", "olympus-floor-node-cell");
+    const node = make("button", "olympus-floor-node");
+    node.type = "button";
+    node.addEventListener("click", () => opts.onOpenAgent(row.id));
+    const avatar = make("span", "olympus-avatar", row.avatar);
+    avatar.style.setProperty("--olympus-avatar-hue", String(row.hue));
+    avatar.setAttribute("aria-hidden", "true");
+    node.appendChild(avatar);
+    const ring = make("span", "olympus-floor-ring");
+    ring.setAttribute("aria-hidden", "true");
+    node.appendChild(ring);
+    nodeCell.appendChild(node);
+    root.appendChild(nodeCell);
+    const body = make("div", "olympus-floor-body");
+    const head = make("div", "olympus-floor-head");
+    const name = make("button", "olympus-link-button olympus-floor-name", row.label);
+    name.type = "button";
+    name.addEventListener("click", () => opts.onOpenAgent(row.id));
+    head.appendChild(name);
+    const pill = make("span", "olympus-status");
+    const dot = make("span", "olympus-status-dot");
+    dot.setAttribute("aria-hidden", "true");
+    pill.appendChild(dot);
+    pill.appendChild(make("span", "olympus-floor-state"));
+    head.appendChild(pill);
+    body.appendChild(head);
+    const now = make("p", "olympus-floor-now");
+    now.appendChild(make("span", "olympus-floor-text"));
+    now.appendChild(make("span", "olympus-floor-since"));
+    body.appendChild(now);
+    body.appendChild(make("small", "olympus-floor-calls"));
+    body.appendChild(make("ul", "olympus-floor-sats"));
+    body.appendChild(make("p", "olympus-floor-more"));
+    root.appendChild(body);
+    return { root, svg, node, ring, name, pill, state: pill.lastChild, text: now.firstChild, since: now.lastChild, calls: body.children[2], sats: body.children[3], more: body.children[4], rows: new Map(), spokes: new Map(), ticks: null, hadLive: false, make };
+  }
+
+  function buildSat(st, sat, opts) {
+    const make = st.make;
+    const row = make("li", "olympus-floor-sat");
+    row.dataset.ref = sat.ref;
+    const dot = make("span", "olympus-floor-sat-dot");
+    dot.setAttribute("aria-hidden", "true");
+    row.appendChild(dot);
+    const label = make("button", "olympus-link-button olympus-floor-sat-label");
+    label.type = "button";
+    label.addEventListener("click", () => opts.onOpenRun(sat.ref));
+    row.appendChild(label);
+    row.appendChild(make("span", "olympus-floor-sat-time"));
+    row.appendChild(make("span", "olympus-floor-sat-state"));
+    row.appendChild(make("code", "olympus-floor-sat-tool"));
+    return { row, dot, label, time: row.children[2], state: row.children[3], tool: row.children[4] };
+  }
+
+  // Pulses are DOM for the length of their animation, then gone; a
+  // timer covers reduced motion, where no animation ends.
+  function spawnPulses(st, fresh) {
+    fresh.slice(-FLOOR_PULSE_LIMIT).forEach((tick, idx) => {
+      const pulse = st.make("span", cx("olympus-floor-pulse", tick.error && "olympus-floor-pulse-error"));
+      pulse.setAttribute("aria-hidden", "true");
+      pulse.dataset.at = tick.at;
+      pulse.style.animationDelay = (idx * FLOOR_PULSE_STEP_MS) + "ms";
+      const remove = () => pulse.remove();
+      pulse.addEventListener("animationend", remove);
+      st.node.ownerDocument.defaultView.setTimeout(remove, FLOOR_PULSE_FALLBACK_MS + idx * FLOOR_PULSE_STEP_MS);
+      st.node.appendChild(pulse);
+    });
+  }
+
+  function updateStation(st, row, opts, animate) {
+    st.root.dataset.status = row.status;
+    st.root.setAttribute("aria-label", row.label + ": " + row.state);
+    st.node.setAttribute("aria-label", "Open " + row.label);
+    st.pill.className = "olympus-status olympus-status-" + row.status;
+    setText(st.state, row.state);
+    setText(st.name, row.label);
+    setText(st.text, row.text);
+    setText(st.since, row.since);
+    setText(st.calls, row.calls);
+    setText(st.more, row.hidden ? "+" + plural(row.hidden, "more subagent") : "");
+    // Subagents keep their slot by ref; a new one enters from the node.
+    const keep = new Set();
+    const live = animate && st.hadLive;
+    row.sats.forEach((sat, index) => {
+      keep.add(sat.ref);
+      let item = st.rows.get(sat.ref);
+      if (!item) {
+        item = buildSat(st, sat, opts);
+        if (live) item.row.classList.add("olympus-floor-sat-new");
+        item.fresh = live;
+        st.rows.set(sat.ref, item);
+      }
+      item.row.className = cx("olympus-floor-sat", "olympus-floor-sat-" + sat.status, item.row.classList.contains("olympus-floor-sat-new") && "olympus-floor-sat-new");
+      item.row.dataset.status = sat.status;
+      setText(item.label, sat.label);
+      item.label.title = sat.label;
+      setText(item.time, sat.time);
+      setText(item.state, SAT_STATE_TEXT[sat.status] || "");
+      setText(item.tool, sat.tool);
+      item.tool.title = sat.tool;
+      const current = st.sats.children[index];
+      if (current !== item.row) st.sats.insertBefore(item.row, current || null);
+    });
+    st.rows.forEach((item, ref) => {
+      if (!keep.has(ref)) {
+        item.row.remove();
+        st.rows.delete(ref);
+        const spoke = st.spokes.get(ref);
+        if (spoke) { spoke.remove(); st.spokes.delete(ref); }
+      }
+    });
+    // One pulse per tool call Hermes recorded since the last read.
+    const keys = new Set(row.ticks.map(tickKey));
+    if (live && st.ticks) spawnPulses(st, row.ticks.filter((tick) => !st.ticks.has(tickKey(tick))));
+    st.ticks = keys;
+  }
+
+  // A hairline from the node to each subagent's dot, measured from the
+  // laid-out boxes; a fresh spoke draws in with its row.
+  function drawSpokes(st) {
+    const box = st.root.getBoundingClientRect();
+    if (!box.width) return;
+    const node = st.node.getBoundingClientRect();
+    const x1 = node.left + node.width / 2 - box.left;
+    const y1 = node.top + node.height / 2 - box.top;
+    st.svg.setAttribute("viewBox", "0 0 " + box.width + " " + box.height);
+    st.svg.setAttribute("width", String(box.width));
+    st.svg.setAttribute("height", String(box.height));
+    const r = node.width / 2 - 2;
+    st.rows.forEach((item, ref) => {
+      const dot = item.dot.getBoundingClientRect();
+      const x2 = dot.left + dot.width / 2 - box.left;
+      const y2 = dot.top + dot.height / 2 - box.top;
+      const len = Math.hypot(x2 - x1, y2 - y1) || 1;
+      // Start at the ring's edge, end at the dot's edge.
+      const sx = x1 + (x2 - x1) * (r / len);
+      const sy = y1 + (y2 - y1) * (r / len);
+      const ex = x2 - (x2 - x1) * (5 / len);
+      const ey = y2 - (y2 - y1) * (5 / len);
+      let line = st.spokes.get(ref);
+      if (!line) {
+        line = st.svg.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "line");
+        st.spokes.set(ref, line);
+        if (item.fresh) {
+          line.style.strokeDasharray = String(Math.ceil(len));
+          line.style.strokeDashoffset = String(Math.ceil(len));
+          line.classList.add("olympus-floor-spoke-new");
+        }
+        st.svg.appendChild(line);
+      }
+      line.setAttribute("class", cx("olympus-floor-spoke", item.row.dataset.status === "failed" && "olympus-floor-spoke-failed", line.classList.contains("olympus-floor-spoke-new") && "olympus-floor-spoke-new"));
+      line.setAttribute("x1", sx.toFixed(1));
+      line.setAttribute("y1", sy.toFixed(1));
+      line.setAttribute("x2", ex.toFixed(1));
+      line.setAttribute("y2", ey.toFixed(1));
+    });
+  }
+
+  // Builds or updates the floor in `host`. Nothing animates on the first
+  // paint; afterwards only what changed since the previous read moves.
+  function renderFloor(host, model, opts) {
+    const doc = host.ownerDocument;
+    let state = host.__olympusFloor;
+    const first = !state;
+    if (first) {
+      const section = doc.createElement("section");
+      section.className = cx("olympus-floor", opts.compact && "olympus-floor-compact");
+      section.setAttribute("aria-label", "Your agents on the floor");
+      section.appendChild(doc.createElement("p")).className = "olympus-floor-census";
+      section.appendChild(doc.createElement("ol")).className = "olympus-floor-stations";
+      host.replaceChildren(section);
+      state = host.__olympusFloor = { section, stations: new Map(), renders: 0 };
+      const win = doc.defaultView;
+      win.addEventListener("resize", () => state.stations.forEach(drawSpokes));
+    }
+    setText(state.section.firstChild, model.census);
+    const list = state.section.lastChild;
+    const keep = new Set();
+    model.stations.forEach((row, index) => {
+      keep.add(row.id);
+      let st = state.stations.get(row.id);
+      if (!st) {
+        st = buildStation(doc, row, opts);
+        state.stations.set(row.id, st);
+      }
+      updateStation(st, row, opts, !first);
+      st.hadLive = model.hasLive;
+      const current = list.children[index];
+      if (current !== st.root) list.insertBefore(st.root, current || null);
+    });
+    state.stations.forEach((st, id) => {
+      if (!keep.has(id)) {
+        st.root.remove();
+        state.stations.delete(id);
+      }
+    });
+    state.renders += 1;
+    state.section.dataset.render = String(state.renders);
+    state.stations.forEach(drawSpokes);
+    state.stations.forEach((st) => st.rows.forEach((item) => { item.fresh = false; }));
+  }
+
+  // Elapsed times tick every second without touching anything else.
+  function tickFloor(host, model) {
+    const state = host.__olympusFloor;
+    if (!state) return;
+    model.stations.forEach((row) => {
+      const st = state.stations.get(row.id);
+      if (!st) return;
+      setText(st.since, row.since);
+      row.sats.forEach((sat) => {
+        const item = st.rows.get(sat.ref);
+        if (item) setText(item.time, sat.time);
+      });
+    });
+  }
+
+  function FloorView({ ctx, data, live }) {
+    const host = useRef(null);
+    const opts = { onOpenAgent: ctx.openAgent, onOpenRun: ctx.openRun, compact: false };
+    useEffect(() => { renderFloor(host.current, floorModel(data, live.live, ctx.now, false), opts); }, [data, live.live]);
+    useEffect(() => { tickFloor(host.current, floorModel(data, live.live, ctx.now, false)); }, [ctx.now]);
+    return el("div", { className: "olympus-floor-view" },
+      live.error ? el("p", { className: "olympus-error-text", role: "alert" }, "Could not read live runs: " + live.error) : null,
+      el("div", { className: "olympus-floor-host", ref: host })
+    );
+  }
+
+  // ---------------------------------------------------------------------
   // Glance: the roster in one small always-on-top window, so the agents
   // stay in view while the operator works elsewhere. A bet (PRODUCT.md):
   // nobody has asked for it. The list is plain DOM, not React: the Hermes
@@ -1845,9 +2175,11 @@
     return Math.max(GLANCE_MIN_HEIGHT, Math.min(GLANCE_MAX_HEIGHT, GLANCE_CHROME_HEIGHT + rows));
   }
 
-  // Builds the list into `host`, replacing what was there. Every row is a
-  // button that opens that agent in the Olympus tab.
-  function renderGlance(host, model, onOpen) {
+  // Builds the glance into `host`: the census line with its List / Floor
+  // switch, then either the list (every row a button that opens that agent
+  // in the Olympus tab) or the floor. The list is rebuilt on every read;
+  // the floor keeps its DOM between reads so only what changed moves.
+  function renderGlance(host, model, onOpen, glance, floor) {
     const doc = host.ownerDocument;
     const make = (tag, className, text) => {
       const node = doc.createElement(tag);
@@ -1855,9 +2187,39 @@
       if (text) node.textContent = text;
       return node;
     };
+    const mode = glance.mode === "floor" ? "floor" : "list";
+    const previous = host.querySelector(".olympus-glance");
+    if (previous && previous.dataset.mode === "floor" && mode === "floor") {
+      setText(previous.querySelector(".olympus-glance-census"), model.census);
+      previous.dataset.render = String(Number(previous.dataset.render || 0) + 1);
+      renderFloor(previous.lastChild, floor.model, { onOpenAgent: onOpen, onOpenRun: floor.onOpenRun, compact: true });
+      return;
+    }
     const section = make("section", "olympus-glance");
     section.setAttribute("aria-label", "Your agents at a glance");
-    section.appendChild(make("p", "olympus-glance-census", model.census));
+    section.dataset.mode = mode;
+    const head = make("div", "olympus-glance-head");
+    head.appendChild(make("p", "olympus-glance-census", model.census));
+    const modes = make("div", "olympus-glance-modes");
+    modes.setAttribute("role", "group");
+    modes.setAttribute("aria-label", "Show as");
+    [["list", "List"], ["floor", "Floor"]].forEach(([id, label]) => {
+      const button = make("button", cx("olympus-glance-mode", mode === id && "olympus-glance-mode-current"), label);
+      button.type = "button";
+      button.dataset.mode = id;
+      button.setAttribute("aria-pressed", mode === id ? "true" : "false");
+      button.addEventListener("click", () => glance.onMode(id));
+      modes.appendChild(button);
+    });
+    head.appendChild(modes);
+    section.appendChild(head);
+    section.dataset.render = String(previous ? Number(previous.dataset.render || 0) + 1 : 1);
+    if (mode === "floor") {
+      section.appendChild(make("div", "olympus-floor-host"));
+      host.replaceChildren(section);
+      renderFloor(section.lastChild, floor.model, { onOpenAgent: onOpen, onOpenRun: floor.onOpenRun, compact: true });
+      return;
+    }
     const list = make("ol", "olympus-glance-list");
     model.rows.forEach((row) => {
       const item = make("li");
@@ -1877,13 +2239,16 @@
       list.appendChild(item);
     });
     section.appendChild(list);
-    const previous = host.querySelector(".olympus-glance");
-    section.dataset.render = String(previous ? Number(previous.dataset.render || 0) + 1 : 1);
     host.replaceChildren(section);
   }
 
   // Elapsed times tick every second without rebuilding the rows.
-  function tickGlance(host, model) {
+  function tickGlance(host, model, floor) {
+    const section = host.querySelector(".olympus-glance");
+    if (section && section.dataset.mode === "floor") {
+      tickFloor(section.lastChild, floor.model);
+      return;
+    }
     model.rows.forEach((row) => {
       const node = host.querySelector('.olympus-glance-row[data-agent="' + CSS.escape(row.id) + '"] .olympus-glance-since');
       if (node && node.textContent !== row.since) node.textContent = row.since;
@@ -1920,20 +2285,28 @@
     return window.location.pathname + "?" + params.toString();
   }
 
-  function usePopout(data, now, onOpen) {
+  // `glance`: the List / Floor mode, its setter, and the live payload the
+  // floor draws from. `onOpenChange` tells the page the window is open, so
+  // the live poll runs while the popout shows the floor.
+  function usePopout(data, now, onOpen, glance, onOpenChange) {
     const [open, setOpen] = useState(false);
     const win = useRef(null);
     const pending = useRef(false);
     const host = () => (win.current ? win.current.document.body.firstElementChild : null);
+    const floor = () => ({ model: floorModel(data, glance.live, now, true), onOpenRun: glance.onOpenRun });
+    function setOpenState(next) {
+      setOpen(next);
+      onOpenChange(next);
+    }
     // The popout shows the roster, so when the backend goes off and the
     // roster turns static the popout closes rather than going stale.
     useEffect(() => {
       if (!win.current || !data) return;
       if (data.static) win.current.close();
-      else renderGlance(host(), glanceModel(data, now), onOpen);
-    }, [data]);
+      else renderGlance(host(), glanceModel(data, now), onOpen, glance, floor());
+    }, [data, glance.live, glance.mode]);
     useEffect(() => {
-      if (win.current && data && !data.static) tickGlance(host(), glanceModel(data, now));
+      if (win.current && data && !data.static) tickGlance(host(), glanceModel(data, now), floor());
     }, [now]);
     function openPopup() {
       window.open(glanceUrl(), "olympus-glance", "popup,width=" + (GLANCE_WIDTH + 20) + ",height=" + GLANCE_MAX_HEIGHT);
@@ -1958,11 +2331,11 @@
         pip.document.body.appendChild(page);
         pip.addEventListener("pagehide", () => {
           win.current = null;
-          setOpen(false);
+          setOpenState(false);
         });
         win.current = pip;
-        setOpen(true);
-        renderGlance(page, model, onOpen);
+        setOpenState(true);
+        renderGlance(page, model, onOpen, glance, floor());
       // The browser can refuse the window (no user gesture left, a policy);
       // then the plain popup carries the same list.
       }).catch(openPopup).finally(() => { pending.current = false; });
@@ -1970,10 +2343,11 @@
     return { open, toggle };
   }
 
-  function GlanceView({ data, now, onOpen }) {
+  function GlanceView({ data, now, onOpen, glance, onOpenRun }) {
     const host = useRef(null);
-    useEffect(() => { renderGlance(host.current, glanceModel(data, now), onOpen); }, [data]);
-    useEffect(() => { tickGlance(host.current, glanceModel(data, now)); }, [now]);
+    const floor = () => ({ model: floorModel(data, glance.live, now, true), onOpenRun });
+    useEffect(() => { renderGlance(host.current, glanceModel(data, now), onOpen, glance, floor()); }, [data, glance.live, glance.mode]);
+    useEffect(() => { tickGlance(host.current, glanceModel(data, now), floor()); }, [now]);
     return el("div", { className: "olympus-glance-host", ref: host });
   }
 
@@ -1986,7 +2360,10 @@
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(true);
     const [client, setClient] = useState(null);
-    const [view, setView] = useState(["live", "performance", "checks", "glance"].includes(readParam("view")) ? readParam("view") : "agents");
+    const [view, setView] = useState(["live", "floor", "performance", "checks", "glance"].includes(readParam("view")) ? readParam("view") : "agents");
+    // The popout (and the ?view=glance popup) shows the list or the floor.
+    const [glanceMode, setGlanceMode] = useState(readParam("mode") === "floor" ? "floor" : "list");
+    const [popoutOpen, setPopoutOpen] = useState(false);
     const [days, setDays] = useState(readParam("days") === "30" ? 30 : 7);
     const [runRef, setRunRef] = useState(readParam("run"));
     const [selected, setSelected] = useState(readParam("agent"));
@@ -2145,8 +2522,10 @@
         if (event.key === "Escape" && selectedRef.current && !event.defaultPrevented) closeAgent();
       }
       function onMessage(event) {
-        if (event.origin !== window.location.origin || !event.data || event.data.olympus !== "open-agent") return;
-        openAgent(String(event.data.id));
+        if (event.origin !== window.location.origin || !event.data) return;
+        if (event.data.olympus === "open-agent") openAgent(String(event.data.id));
+        else if (event.data.olympus === "open-run") openRunHere(String(event.data.ref));
+        else return;
         window.focus();
       }
       document.addEventListener("keydown", onKey);
@@ -2157,10 +2536,32 @@
       };
     }, []);
 
-    // From the popout a row opens the agent here and asks for this tab.
+    // A session's steps live in the run view under Performance.
+    function openRunHere(ref) {
+      changeView("performance");
+      showRun(ref);
+    }
+
+    // From the popout a row opens the agent (or a subagent's run) here and
+    // asks for this tab.
     function openFromPopout(agentId) {
       openAgent(agentId);
       window.focus();
+    }
+
+    function openRunFromPopout(ref) {
+      openRunHere(ref);
+      window.focus();
+    }
+
+    function openRunFromGlance(ref) {
+      const opener = window.opener;
+      if (opener && !opener.closed && window.location.origin !== "null") {
+        opener.postMessage({ olympus: "open-run", ref }, window.location.origin);
+        opener.focus();
+        return;
+      }
+      openRunHere(ref);
     }
 
     // In the glance view itself a row opens the agent in the tab that
@@ -2175,7 +2576,15 @@
       openAgent(agentId);
     }
 
-    const popout = usePopout(data, now, openFromPopout);
+    function changeGlanceMode(mode) {
+      setGlanceMode(mode);
+      writeParam("mode", mode === "floor" ? "floor" : null);
+    }
+
+    const floorShown = glanceMode === "floor" && (popoutOpen || view === "glance");
+    const livePoll = useLivePoll(Boolean(data && !data.static) && (view === "live" || view === "floor" || floorShown));
+    const glance = { mode: glanceMode, onMode: changeGlanceMode, live: livePoll.live, onOpenRun: openRunFromPopout };
+    const popout = usePopout(data, now, openFromPopout, glance, setPopoutOpen);
 
     const agents = asList(data && data.agents && data.agents.agents);
     const agentById = {};
@@ -2188,7 +2597,7 @@
       openAgent,
       openPerformance: () => changeView("performance"),
       // A session's steps live in the run view under Performance.
-      openRun: (ref) => { changeView("performance"); showRun(ref); },
+      openRun: openRunHere,
       onActionDone
     };
     const open = selected && (agentById[selected] || detail);
@@ -2198,8 +2607,9 @@
     else if (!data) body = el(RosterSkeleton);
     else if (data.static) body = el(React.Fragment, null, el(BackendOff, { info: data.static }), el(StaticRoster, { agents: data.static_agents }));
     else if (view === "checks") body = el(Checks, { data, ctx, client });
-    else if (view === "live") body = el(LiveView, { ctx });
-    else if (view === "glance") body = el(GlanceView, { data, now, onOpen: openFromGlance });
+    else if (view === "live") body = el(LiveView, { ctx, poll: livePoll });
+    else if (view === "floor") body = el(FloorView, { ctx, data, live: livePoll });
+    else if (view === "glance") body = el(GlanceView, { data, now, onOpen: openFromGlance, glance, onOpenRun: openRunFromGlance });
     else if (view === "performance") body = el(PerformanceView, { ctx, days, onDays: changeDays, selected, onSelect: selectPerformance, runRef, onRun: showRun });
     else body = el(React.Fragment, null,
       el(NeedsYouBanner, { queue: data.needs_you, ctx }),

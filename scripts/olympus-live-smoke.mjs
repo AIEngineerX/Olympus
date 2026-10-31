@@ -38,6 +38,9 @@ const viewSections = {
   Live: [
     [".olympus-live", ""],
   ],
+  Floor: [
+    [".olympus-floor-station", ""],
+  ],
   Performance: [
     [".olympus-performance", ""],
   ],

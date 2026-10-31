@@ -27,6 +27,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   need you first; a click opens the agent in the tab. Chrome and Edge use
   Document Picture-in-Picture; other browsers get a popup of the same list
   (`?view=glance`). Reads the roster's own ten-second poll, no new endpoint.
+- Floor: a fourth view with every agent at a fixed place in one frame, in
+  name order. A station is the agent's disc with a ring only when it needs
+  you, its status word, what it is on, the last minute's call count, and its
+  subagents joined to the disc by hairlines. Motion only from Hermes'
+  records: each tool call since the last read expands one ring from the disc
+  (red when the call failed), a new subagent enters from the disc, a finished
+  one keeps its slot. Nothing animates on first paint or on a read with no
+  change; reduced motion turns every entrance and pulse into a plain state
+  change. The popout gets a List / Floor switch (`?mode=floor`). Joins the
+  roster's poll with the Live view's; the live poll is now one hook shared by
+  Live, Floor and the popout. A bet with no issue behind it, like Pop out.
   A bet: no Hermes user has asked for it (#58725 has no reactions); it
   follows what people have adopted for other agent tools, an always-visible
   view of every agent keyed to real activity.

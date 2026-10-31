@@ -287,6 +287,20 @@
             run.children = run.children.concat([{ ref: "session:grown", label: "Draft the cover note", status: "running",
               started_at: new Date().toISOString(), ended_at: null, last_tool: { name: "read_file", at: null }, errors: 0 }]);
           }
+          // ?calls=1: from the second read on, the first run has made two more
+          // tool calls, the second of them failed, as the Floor's pulses need.
+          if (params.get("calls") && liveReads > 1 && live.lanes.length) {
+            const run = live.lanes[0].runs[0];
+            const at = Date.now() - 1000 * (liveReads - 1);
+            run.ticks = run.ticks.concat([{ at: new Date(at - 400).toISOString(), error: false }, { at: new Date(at).toISOString(), error: true }]);
+          }
+          // ?finish=1: from the third read on, the first run's first running
+          // subagent has finished.
+          if (params.get("finish") && liveReads > 2 && live.lanes.length) {
+            const run = live.lanes[0].runs[0];
+            const child = run.children.find((row) => row.status === "running");
+            if (child) Object.assign(child, { status: "done", ended_at: new Date().toISOString() });
+          }
           return live;
         }
         if (path === "/api/plugins/olympus/resolve") {
