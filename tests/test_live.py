@@ -93,9 +93,10 @@ class LiveViewTest(unittest.TestCase):
         con.execute(MESSAGES_SQL)
         con.executemany("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, 6, 4, ?)", [
             ("run-1", "cli", "Fix flaky checkout test", now - 600, None, None, now - 5, None),
-            ("child-a", "subagent", "Subagent: Reproduce the failure", now - 190, now - 60, "completed", now - 60, "run-1"),
+            # Hermes ends every subagent session with "agent_close", whatever happened.
+            ("child-a", "subagent", "Subagent: Reproduce the failure", now - 190, now - 60, "agent_close", now - 60, "run-1"),
             ("child-b", "subagent", "Subagent: Patch the retry loop", now - 180, None, None, now - 10, "run-1"),
-            ("child-c", "subagent", "Subagent: Run the suite", now - 170, now - 40, "error", now - 40, "run-1"),
+            ("child-c", "subagent", "Subagent: Run the suite", now - 170, now - 40, "agent_close", now - 40, "run-1"),
             ("old-1", "cli", "Write the summary", now - 7200, now - 7000, "completed", now - 7000, None),
             ("stale-1", "cron", "Nightly digest", now - 9000, None, None, now - 8000, None),
         ])
@@ -144,7 +145,57 @@ class LiveViewTest(unittest.TestCase):
         self.assertEqual(payload["summary"], {"runs": 1, "children": 1, "agents_running": 1})
         self.assertEqual(payload["poll_seconds"], plugin_api.LIVE_POLL_SECONDS)
 
-    def test_lanes_are_ordered_by_a_failed_subagent_then_running_count_then_recency(self):
+    def write_manifest(self, tasks):
+        live = self.home / "cache" / "delegation" / "live" / "deleg_test"
+        (live / "manifest.json").write_text(json.dumps({
+            "delegation_id": "deleg_test", "started": local_stamp(self.now - 200), "task_count": len(tasks), "model": "test-model",
+            "tasks": [dict({"index": i, "log": str(live / f"task-{i}.log")}, **task) for i, task in enumerate(tasks)],
+        }), encoding="utf-8")
+
+    def test_a_failed_subagent_is_known_from_its_manifest_task_not_the_session_row(self):
+        statuses = lambda: [c["status"] for c in self.live()["lanes"][0]["runs"][0]["children"]]
+        self.assertEqual(statuses(), ["done", "running", "failed"])
+        # The manifest says the suite completed: the session row cannot contradict it.
+        self.write_manifest([
+            {"goal": "Reproduce the failure", "status": "completed", "exit_reason": "completed"},
+            {"goal": "Patch the retry loop", "status": "running"},
+            {"goal": "Run the suite", "status": "completed", "exit_reason": "completed"},
+        ])
+        self.assertEqual(statuses(), ["done", "running", "done"])
+        # The manifest has not caught up (still "running") but the session ended:
+        # the transcript's end line decides.
+        self.write_manifest([
+            {"goal": "Reproduce the failure", "status": "completed", "exit_reason": "completed"},
+            {"goal": "Patch the retry loop", "status": "running"},
+            {"goal": "Run the suite", "status": "running"},
+        ])
+        live = self.home / "cache" / "delegation" / "live" / "deleg_test"
+        (live / "task-2.log").write_text(TRANSCRIPT + "12:34:10 final    | end status=failed exit_reason=error\n", encoding="utf-8")
+        self.assertEqual(statuses(), ["done", "running", "failed"])
+        (live / "task-2.log").write_text(TRANSCRIPT + "12:34:10 final    | end status=completed exit_reason=completed\n", encoding="utf-8")
+        self.assertEqual(statuses(), ["done", "running", "done"])
+
+    def test_every_running_subagent_shows_and_the_newest_finished_fill_the_rest(self):
+        now = self.now
+        con = sqlite3.connect(self.home / "state.db")
+        con.executemany("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, 6, 4, ?)", [
+            (f"bulk-{i}", "subagent", f"Subagent: Bulk task {i}", now - 5000 + i * 10, now - 4900 + i * 10, "agent_close", now - 4900 + i * 10, "run-1")
+            for i in range(20)
+        ] + [
+            (f"late-{i}", "subagent", f"Subagent: Late task {i}", now - 20 + i, None, None, now - 1, "run-1") for i in range(3)
+        ])
+        con.commit()
+        con.close()
+        children = self.live()["lanes"][0]["runs"][0]["children"]
+        self.assertEqual(len(children), plugin_api.LIVE_CHILD_LIMIT)
+        self.assertEqual(sum(1 for c in children if c["status"] == "running"), 4)  # child-b and the three late ones
+        labels = [c["label"] for c in children]
+        self.assertEqual(labels[-3:], ["Late task 0", "Late task 1", "Late task 2"])
+        self.assertNotIn("Bulk task 0", labels)
+        self.assertIn("Bulk task 19", labels)
+        self.assertEqual(self.live()["summary"]["children"], 4)
+
+    def test_lanes_are_ordered_by_a_failed_subagent_then_running_count(self):
         # Coder: a newer run with two running subagents and no failure.
         now = self.now
         con = sqlite3.connect(self.home / "profiles" / "coder" / "state.db")
@@ -159,10 +210,11 @@ class LiveViewTest(unittest.TestCase):
         con.close()
         # Default's failed subagent outranks Coder's two running ones and its newer activity.
         self.assertEqual([lane["agent"]["id"] for lane in self.live()["lanes"]], ["profile:default", "profile:coder"])
-        con = sqlite3.connect(self.home / "state.db")
-        con.execute("UPDATE sessions SET end_reason = 'completed' WHERE id = 'child-c'")
-        con.commit()
-        con.close()
+        self.write_manifest([
+            {"goal": "Reproduce the failure", "status": "completed", "exit_reason": "completed"},
+            {"goal": "Patch the retry loop", "status": "running"},
+            {"goal": "Run the suite", "status": "completed", "exit_reason": "completed"},
+        ])
         # With no failure anywhere, the lane with more subagents running comes first.
         self.assertEqual([lane["agent"]["id"] for lane in self.live()["lanes"]], ["profile:coder", "profile:default"])
 

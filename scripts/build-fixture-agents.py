@@ -113,7 +113,7 @@ def seed(home: Path, now: float) -> None:
     # Default's live run delegated two tasks: one finished, one still running.
     sessions(home, history("d", 14, 2, 18000) + [
         ("live-main", "cli", "Draft the weekly investor update", now - 1500, None, None, now - 40, 22000, 6100, 90000, 0.62, None),
-        ("live-sub2", "subagent", "Subagent: Summarize churn by plan", now - 900, now - 500, "completed", now - 500, 6000, 700, 9000, 0.08, "live-main"),
+        ("live-sub2", "subagent", "Subagent: Summarize churn by plan", now - 900, now - 500, "agent_close", now - 500, 6000, 700, 9000, 0.08, "live-main"),
         ("live-sub", "subagent", "Subagent: Collect revenue numbers", now - 400, None, None, now - 5, 8000, 900, 12000, 0.11, "live-main"),
         ("d-prev-fail", "cli", "Rebuild the weekly update", today - 9 * 86400 + 16 * 3600, today - 9 * 86400 + 16 * 3600 + 300,
          "completed", today - 9 * 86400 + 16 * 3600 + 300, 9000, 400, 20000, 0.05, None),
@@ -158,8 +158,8 @@ def seed(home: Path, now: float) -> None:
     # one still patching.
     sessions(home / "profiles" / "coder", history("c", 14, 3, 24000) + [
         ("coder-kanban", "kanban", "Fix flaky checkout test", now - 2400, None, None, now - 60, 30000, 7000, 140000, 0.88, None),
-        ("c-sub-a", "subagent", "Subagent: Reproduce the failure", now - 2000, now - 1500, "completed", now - 1500, 7000, 600, 9000, 0.07, "coder-kanban"),
-        ("c-sub-b", "subagent", "Subagent: Run the suite", now - 1400, now - 40, "error", now - 40, 9000, 800, 12000, 0.1, "coder-kanban"),
+        ("c-sub-a", "subagent", "Subagent: Reproduce the failure", now - 2000, now - 1500, "agent_close", now - 1500, 7000, 600, 9000, 0.07, "coder-kanban"),
+        ("c-sub-b", "subagent", "Subagent: Run the suite", now - 1400, now - 40, "agent_close", now - 40, 9000, 800, 12000, 0.1, "coder-kanban"),
         ("c-sub-c", "subagent", "Subagent: Patch the retry loop", now - 1300, None, None, now - 8, 11000, 1900, 30000, 0.21, "coder-kanban"),
     ])
     con = sqlite3.connect(home / "profiles" / "coder" / "state.db")

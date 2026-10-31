@@ -171,6 +171,17 @@ test.describe("Live view", () => {
     expect(stub).toBe("none");
   });
 
+  test("a chip that replaces another fades in; chips already on screen stay still", async ({ page }) => {
+    await page.clock.install();
+    await openLive(page, { state: "noisy", tool: "1" }, DESKTOP);
+    await expect(page.locator(".olympus-lane-tool-change")).toHaveCount(0);
+    await page.clock.runFor(5_200);
+    const changed = page.locator(".olympus-lane-tool-change");
+    await expect(changed).toHaveCount(1);
+    await expect(changed).toHaveText("terminal(npm run build)");
+    expect(await changed.evaluate((node) => getComputedStyle(node).animationName)).toBe("olympus-lane-fade");
+  });
+
   test("running is lifted over done without a new colour", async ({ page }) => {
     await openLive(page, { state: "noisy" }, DESKTOP);
     const coder = page.locator('.olympus-lane[data-agent="profile:coder"]');

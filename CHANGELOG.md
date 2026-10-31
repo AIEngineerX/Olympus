@@ -17,8 +17,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from Hermes' live transcript (`task-<n>.log`); its arguments show only with
   `expose_local_labels` on. Running subagents are rows; finished ones fold
   under the batch line and open on a click. Lanes are ordered by what needs
-  eyes: a failed subagent first, then the most subagents running, then the
-  latest activity. New endpoint `GET /api/plugins/olympus/live`.
+  eyes: a failed subagent first, then the most subagents running; ties keep
+  profile order so lanes hold still. A subagent's outcome comes from Hermes'
+  manifest task or its transcript's end line, since every subagent session
+  ends with the same reason. New endpoint `GET /api/plugins/olympus/live`.
   Built as a bet against #143077, #132468 and #58725, not a counted problem.
 - Pop out: the roster in a small window that stays on top, one line per
   agent with its status word, what it is on and for how long, the ones that

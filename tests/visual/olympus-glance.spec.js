@@ -142,6 +142,38 @@ test.describe("Pop out", () => {
     expect(popErrors).toEqual([]);
   });
 
+  test("closes itself when the backend goes off, since a stale roster would mislead", async ({ page, context }) => {
+    const errors = await openFixture(page, origin + FIXTURE, { state: "noisy" }, DESKTOP);
+    const opened = context.waitForEvent("page");
+    await page.locator(".olympus-popout").click();
+    const popout = await opened;
+    await popout.locator(".olympus-glance-row").first().waitFor();
+    await page.evaluate(() => { window.__OLYMPUS_FIXTURE_OFFLINE__ = true; });
+    // The next ten-second poll fails; the tab falls back to the static roster and the popout goes.
+    await expect(page.locator(".olympus-backend-off")).toBeVisible({ timeout: 15000 });
+    await expect.poll(() => popout.isClosed()).toBe(true);
+    await expect(page.locator(".olympus-popout")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
+  test("when the browser refuses the window, the plain popup carries the list", async ({ page, context }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "documentPictureInPicture", {
+        value: { requestWindow: () => Promise.reject(new DOMException("blocked", "NotAllowedError")) },
+        configurable: true
+      });
+    });
+    const errors = await openFixture(page, origin + FIXTURE, { state: "noisy" }, DESKTOP);
+    const opened = context.waitForEvent("page");
+    await page.locator(".olympus-popout").click();
+    const popup = await opened;
+    await popup.waitForLoadState();
+    expect(new URL(popup.url()).searchParams.get("view")).toBe("glance");
+    await expect(popup.locator(".olympus-glance-row").first()).toBeVisible();
+    await expect(page.locator(".olympus-popout")).toHaveText("Pop out");
+    expect(errors).toEqual([]);
+  });
+
   test("without Document Picture-in-Picture the button opens a popup of the glance view", async ({ page, context }) => {
     await page.addInitScript(() => { Object.defineProperty(window, "documentPictureInPicture", { value: undefined, configurable: true }); });
     const errors = await openFixture(page, origin + FIXTURE, { state: "noisy" }, DESKTOP);

@@ -1311,7 +1311,7 @@
   // One lane per agent with an open run; a run is two levels deep (the run,
   // then the subagents delegate_task opened under it), so each lane is a
   // short tree, not a graph. The backend orders lanes by what needs eyes
-  // (a failed subagent, then the most running, then the latest activity).
+  // (a failed subagent, then the most running; ties keep profile order).
   // Idle agents fold into one line at the end.
   // ---------------------------------------------------------------------
 
@@ -1333,15 +1333,18 @@
     return start == null || end == null ? null : formatSpan(Math.max(0, end - start));
   }
 
-  // The tool a session is on. Keyed by its text so a change remounts it and
-  // the stylesheet fades the new one in; `settled` keeps the first paint still.
+  // The tool a session is on. The code element is keyed by its text so a
+  // change remounts it and the stylesheet fades the new one in. A chip that
+  // was on screen at first paint stays still until its text changes.
   function ToolChip({ tool, settled }) {
-    // Fixed at mount: a chip that was on screen at first paint never gains
-    // the class later, so only a chip that replaces another fades in.
-    const [animate] = useState(settled);
-    if (!tool || !tool.name) return null;
-    const text = tool.name + (tool.args ? "(" + tool.args + ")" : "");
-    return el("code", { key: text, className: cx("olympus-lane-tool", animate && "olympus-lane-tool-change"), title: text }, text);
+    const [mountedLate] = useState(settled);
+    const previous = useRef(undefined);
+    const text = tool && tool.name ? tool.name + (tool.args ? "(" + tool.args + ")" : "") : "";
+    // A chip appearing where there was none is a change too.
+    const changed = previous.current !== undefined && previous.current !== text;
+    previous.current = text;
+    if (!text) return null;
+    return el("code", { key: text, className: cx("olympus-lane-tool", (mountedLate || changed) && "olympus-lane-tool-change"), title: text }, text);
   }
 
   // The last minute of tool calls as ticks: a call in accent, a failed call
@@ -1920,23 +1923,33 @@
   function usePopout(data, now, onOpen) {
     const [open, setOpen] = useState(false);
     const win = useRef(null);
+    const pending = useRef(false);
     const host = () => (win.current ? win.current.document.body.firstElementChild : null);
+    // The popout shows the roster, so when the backend goes off and the
+    // roster turns static the popout closes rather than going stale.
     useEffect(() => {
-      if (win.current && data && !data.static) renderGlance(host(), glanceModel(data, now), onOpen);
+      if (!win.current || !data) return;
+      if (data.static) win.current.close();
+      else renderGlance(host(), glanceModel(data, now), onOpen);
     }, [data]);
     useEffect(() => {
       if (win.current && data && !data.static) tickGlance(host(), glanceModel(data, now));
     }, [now]);
+    function openPopup() {
+      window.open(glanceUrl(), "olympus-glance", "popup,width=" + (GLANCE_WIDTH + 20) + ",height=" + GLANCE_MAX_HEIGHT);
+    }
     function toggle() {
       if (win.current) {
         win.current.close();
         return;
       }
+      if (pending.current) return;
       if (!window.documentPictureInPicture) {
-        window.open(glanceUrl(), "olympus-glance", "popup,width=" + (GLANCE_WIDTH + 20) + ",height=" + GLANCE_MAX_HEIGHT);
+        openPopup();
         return;
       }
       const model = glanceModel(data, now);
+      pending.current = true;
       window.documentPictureInPicture.requestWindow({ width: GLANCE_WIDTH, height: glanceHeight(model) }).then((pip) => {
         adoptStyles(pip.document);
         pip.document.title = "Olympus";
@@ -1950,7 +1963,9 @@
         win.current = pip;
         setOpen(true);
         renderGlance(page, model, onOpen);
-      });
+      // The browser can refuse the window (no user gesture left, a policy);
+      // then the plain popup carries the same list.
+      }).catch(openPopup).finally(() => { pending.current = false; });
     }
     return { open, toggle };
   }

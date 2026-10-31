@@ -31,7 +31,7 @@ problems it targets, and the Hermes issues that show people have them, are in
   running, with its own last tool. Finished subagents fold under "Tasks done
   1 of 3, 1 failed" (from Hermes' own batch manifest) and open on a click. A
   strip of the last minute's tool calls marks the failed ones. Lanes with a
-  failed subagent come first, then the busiest, then the most recent. A
+  failed subagent come first, then the busiest; ties keep your profile order. A
   subagent slides in under its parent when it starts. Idle agents fold into
   one line.
 ![Live: one lane per working agent, its run, the subagents under it with their status and last tool, and the last minute of tool calls](screenshots/live.png)

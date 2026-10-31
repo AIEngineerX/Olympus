@@ -5037,7 +5037,13 @@ LIVE_LINE_RE = re.compile(r"^(\d{2}:\d{2}:\d{2}) (\S+)\s*\| (.*)$")
 LIVE_TOOL_RE = re.compile(r"^-> ([A-Za-z0-9_.:-]+)\((.*)\)$", re.S)
 LIVE_RESULT_RE = re.compile(r"^([A-Za-z0-9_.:-]+) (ok|ERROR)\b")
 SUBAGENT_TITLE_PREFIX = "Subagent: "
+# Hermes ends every subagent session with end_reason "agent_close" whatever
+# happened, so a child's outcome comes from its manifest task status, else
+# the "end status=…" line delegate_task writes at the end of its transcript,
+# and only last from the session row.
+TASK_FAILED_STATUSES = {"failed", "error", "timeout", "interrupted"}
 CHILD_FAILED_REASONS = {"error", "failed", "crashed", "timeout", "agent_error"}
+LIVE_END_RE = re.compile(r"\bstatus=([A-Za-z_]+)")
 
 
 def parse_live_transcript_line(line: str) -> Optional[Dict[str, str]]:
@@ -5089,8 +5095,14 @@ def _local_stamp_ts(value: Any) -> Optional[float]:
         return None
 
 
-def read_delegation_manifests(home: Path, now: float) -> List[Dict[str, Any]]:
-    """Hermes' per-batch manifests under cache/delegation/live from the last week, newest first."""
+def read_delegation_manifests(home: Path, now: float, since: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Hermes' per-batch manifests under cache/delegation/live from the last week, newest first.
+
+    `since` skips manifests last written before that time (a manifest is
+    written at dispatch and after, so one older than the oldest open run
+    cannot belong to it), which keeps a five-second poll from parsing a
+    week of batches.
+    """
     root = home / "cache" / "delegation" / "live"
     out: List[Dict[str, Any]] = []
     try:
@@ -5100,7 +5112,8 @@ def read_delegation_manifests(home: Path, now: float) -> List[Dict[str, Any]]:
     for d in dirs:
         manifest_path = d / "manifest.json"
         try:
-            if now - manifest_path.stat().st_mtime > LIVE_MANIFEST_DAYS * 86400:
+            mtime = manifest_path.stat().st_mtime
+            if now - mtime > LIVE_MANIFEST_DAYS * 86400 or (since is not None and mtime < since):
                 continue
             data = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError):
@@ -5126,7 +5139,11 @@ def _store_live(db: Path, now: float) -> Dict[str, Any]:
     empty: Dict[str, Any] = {"runs": [], "children": {}, "last_tool": {}, "ticks": {}}
     if not db.exists():
         return empty
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)
+    except sqlite3.Error as exc:
+        log_read_warning("live store open failed", exc)
+        return empty
     con.row_factory = sqlite3.Row
     try:
         cols = table_columns(con, "sessions")
@@ -5192,8 +5209,8 @@ def _goal_stem(title: Any) -> str:
     return stem.rstrip("…. ").strip()
 
 
-def _link_manifest(manifests: List[Dict[str, Any]], run: Dict[str, Any], children: List[Dict[str, Any]]) -> tuple[Optional[Dict[str, int]], Dict[str, Path]]:
-    """The batch this run dispatched, matched by the children's goals: its counts and each child's transcript."""
+def _link_manifest(manifests: List[Dict[str, Any]], run: Dict[str, Any], children: List[Dict[str, Any]]) -> tuple[Optional[Dict[str, int]], Dict[str, Dict[str, Any]]]:
+    """The batch this run dispatched, matched by the children's goals: its counts and each child's manifest task."""
     stems = [(_goal_stem(child.get("title")), str(child["id"])) for child in children]
     run_started = safe_float(run.get("started_at"))
 
@@ -5207,28 +5224,38 @@ def _link_manifest(manifests: List[Dict[str, Any]], run: Dict[str, Any], childre
         started = manifest["started_ts"]
         if started is not None and run_started and started < run_started - 60:
             continue
-        logs: Dict[str, Path] = {}
+        linked: Dict[str, Dict[str, Any]] = {}
         for task in manifest["tasks"]:
             child_id = child_for(task["goal"])
-            if child_id and child_id not in logs:
-                logs[child_id] = task["log"]
-        if not logs:
+            if child_id and child_id not in linked:
+                linked[child_id] = task
+        if not linked:
             continue
         statuses = [t["status"] for t in manifest["tasks"]]
         done = sum(1 for s in statuses if s == "completed")
-        running = sum(1 for s in statuses if s == "running")
-        return {"done": done, "failed": len(statuses) - done - running, "running": running, "total": len(statuses)}, logs
+        running = sum(1 for s in statuses if s in ("running", "dispatched"))
+        return {"done": done, "failed": len(statuses) - done - running, "running": running, "total": len(statuses)}, linked
     return None, {}
 
 
-def _live_child(row: Dict[str, Any], store: Dict[str, Any], log: Optional[Path]) -> Dict[str, Any]:
-    session_id = str(row["id"])
-    reason = str(row.get("end_reason") or "")
+def _child_status(row: Dict[str, Any], task: Optional[Dict[str, Any]], tail: Optional[Dict[str, Any]]) -> str:
+    """Running until the session ends; then failed by the manifest task, the transcript's end line, or the session's own reason."""
     if row.get("ended_at") is None:
-        status = "running"
-    else:
-        status = "failed" if reason in CHILD_FAILED_REASONS else "done"
-    tail = read_live_transcript_tail(log) if log else None
+        return "running"
+    if task and task.get("status") in TASK_FAILED_STATUSES:
+        return "failed"
+    if task and task.get("status") == "completed":
+        return "done"
+    end = LIVE_END_RE.search(str(tail["final"] or "")) if tail and tail.get("final") else None
+    if end:
+        return "failed" if end.group(1).lower() in TASK_FAILED_STATUSES else "done"
+    return "failed" if str(row.get("end_reason") or "") in CHILD_FAILED_REASONS else "done"
+
+
+def _live_child(row: Dict[str, Any], store: Dict[str, Any], task: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    session_id = str(row["id"])
+    tail = read_live_transcript_tail(task["log"]) if task and task.get("log") else None
+    status = _child_status(row, task, tail)
     if tail and tail["last_tool"]:
         last_tool: Optional[Dict[str, Any]] = {"name": redact_text(tail["last_tool"]["name"], 60), "at": None}
         if EXPOSE_LOCAL_LABELS:
@@ -5246,10 +5273,19 @@ def _live_child(row: Dict[str, Any], store: Dict[str, Any], log: Optional[Path])
     }
 
 
+def _children_shown(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every running child and the newest finished ones up to the limit, in start order."""
+    running = [r for r in rows if r.get("ended_at") is None]
+    finished = [r for r in rows if r.get("ended_at") is not None]
+    room = max(0, LIVE_CHILD_LIMIT - len(running))
+    kept = running[:LIVE_CHILD_LIMIT] + (finished[-room:] if room else [])
+    return sorted(kept, key=lambda r: safe_float(r.get("started_at")))
+
+
 def build_live(profiles: List[Dict[str, Any]], now: Optional[float] = None) -> Dict[str, Any]:
     """One lane per agent with an open run: the run, its subagents, batch progress and the last minute of tool calls."""
     now = time.time() if now is None else now
-    keyed: List[Tuple[Tuple[int, int, float], Dict[str, Any]]] = []
+    keyed: List[Tuple[Tuple[int, int], Dict[str, Any]]] = []
     idle: List[Dict[str, Any]] = []
     runs_total = children_running = 0
     for profile in profiles:
@@ -5259,13 +5295,14 @@ def build_live(profiles: List[Dict[str, Any]], now: Optional[float] = None) -> D
         if not store["runs"]:
             idle.append(agent)
             continue
-        manifests = read_delegation_manifests(home, now)
+        oldest = min(safe_float(root.get("started_at")) for root in store["runs"])
+        manifests = read_delegation_manifests(home, now, since=oldest - 60 if oldest else None)
         runs = []
         for root in store["runs"]:
             root_id = str(root["id"])
-            rows = store["children"].get(root_id, [])[:LIVE_CHILD_LIMIT]
-            batch, logs = _link_manifest(manifests, root, rows)
-            children = [_live_child(row, store, logs.get(str(row["id"]))) for row in rows]
+            rows = _children_shown(store["children"].get(root_id, []))
+            batch, tasks = _link_manifest(manifests, root, rows)
+            children = [_live_child(row, store, tasks.get(str(row["id"]))) for row in rows]
             children_running += sum(1 for c in children if c["status"] == "running")
             ticks = sorted(
                 (t for sid in [root_id, *(str(r["id"]) for r in rows)] for t in store["ticks"].get(sid, [])),
@@ -5289,12 +5326,12 @@ def build_live(profiles: List[Dict[str, Any]], now: Optional[float] = None) -> D
             })
         runs_total += len(runs)
         # Lanes that need eyes come first: a failed subagent, then the most
-        # subagents running, then the latest activity. Ties keep profile order.
+        # subagents running. Ties keep profile order, so a lane never moves
+        # under the reader just because another agent made a tool call.
         kids = [child for run in runs for child in run["children"]]
-        latest = max(float(root.get("last_activity_at") or root.get("started_at") or 0) for root in store["runs"])
         failed = sum(1 for child in kids if child["status"] == "failed")
         running = sum(1 for child in kids if child["status"] == "running")
-        keyed.append(((-failed, -running, -latest), {"agent": agent, "runs": runs}))
+        keyed.append(((-failed, -running), {"agent": agent, "runs": runs}))
     lanes = [lane for _, lane in sorted(keyed, key=lambda item: item[0])]
     return {
         "generated_at": now_iso(),

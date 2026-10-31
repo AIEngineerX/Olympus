@@ -221,6 +221,9 @@
 
       async function fixtureResponse(url, init) {
         const path = url.split("?")[0];
+        // Set window.__OLYMPUS_FIXTURE_OFFLINE__ to make the backend go off
+        // mid-session: the next overview read fails as a missing plugin does.
+        if (window.__OLYMPUS_FIXTURE_OFFLINE__ && path === "/api/plugins/olympus/overview") throw new Error("404 /api/plugins/olympus/overview");
         if (path === "/api/plugins/olympus/fixes") {
           const key = query(url).get("key");
           if (init.method === "DELETE") {
@@ -274,6 +277,10 @@
             }
             live.summary = Object.assign({}, live.summary, { agents_running: live.lanes.length, runs: live.lanes.reduce((s, l) => s + l.runs.length, 0),
               children: live.lanes.reduce((s, l) => s + l.runs.reduce((t, r) => t + r.children.filter((c) => c.status === "running").length, 0), 0) });
+          }
+          // ?tool=1: from the second read on, the first run has moved to another tool.
+          if (params.get("tool") && liveReads > 1 && live.lanes.length) {
+            live.lanes[0].runs[0].last_tool = { name: "terminal", args: "npm run build", at: new Date().toISOString() };
           }
           if (params.get("grow") && liveReads > 1 && live.lanes.length) {
             const run = live.lanes[0].runs[0];
