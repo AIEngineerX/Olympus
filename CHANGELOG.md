@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-01
+
 ### Added
 
 - A Live view: every open run as it happens, polled every five seconds. One
@@ -27,6 +29,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   need you first; a click opens the agent in the tab. Chrome and Edge use
   Document Picture-in-Picture; other browsers get a popup of the same list
   (`?view=glance`). Reads the roster's own ten-second poll, no new endpoint.
+  A bet: no Hermes user has asked for it (#58725 has no reactions); it
+  follows what people have adopted for other agent tools, an always-visible
+  view of every agent keyed to real activity.
 - Floor: a fourth view with every agent at a fixed place in one frame, in
   name order. A station is the agent's disc with a ring only when it needs
   you, its status word, what it is on, the last minute's call count, and its
@@ -48,9 +53,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   how the window compares with the one before it ("96% succeeded, was 99% the
   7 days before", "7% faster than before"), as the per-agent rows already
   did. The Agents inspector's tokens chart is the same chart.
-  A bet: no Hermes user has asked for it (#58725 has no reactions); it
-  follows what people have adopted for other agent tools, an always-visible
-  view of every agent keyed to real activity.
 
 ## [2.0.1] - 2026-10-27
 
@@ -355,6 +357,7 @@ credentials, or config.
 - `verify` workflow runs backend compile, backend unit tests, frontend parse,
   whitespace check, and the visual smoke on push and pull request.
 
+[2.1.0]: https://github.com/AIEngineerX/Olympus/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/AIEngineerX/Olympus/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/AIEngineerX/Olympus/compare/v1.0.3...v2.0.0
 [1.0.3]: https://github.com/AIEngineerX/Olympus/compare/v1.0.2...v1.0.3

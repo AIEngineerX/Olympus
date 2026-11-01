@@ -212,6 +212,8 @@ Seen on the test install; not yet fixed.
   ends. The next release will end the agent's status with the run.
 - While a worker runs, "Now" shows its task but not the tool it is using.
 - At 390 px the confirm popup for a control can overflow its row by a pixel.
+- In Live and Floor, a subagent still running after its parent run has ended
+  (a background delegation) shows as a run of its own, not under its parent.
 
 If you hit anything else, [open an issue](https://github.com/AIEngineerX/Olympus/issues)
 and say what Olympus showed and what Hermes' own page showed.
