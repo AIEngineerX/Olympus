@@ -39,6 +39,10 @@ def local_stamp(ts: float) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
 
 
+def r_ids(rows):
+    return [str(r["id"]) for r in rows]
+
+
 class LiveTranscriptTest(unittest.TestCase):
     def test_parses_event_lines_and_skips_the_header(self):
         self.assertIsNone(plugin_api.parse_live_transcript_line("=== Hermes subagent live transcript ==="))
@@ -318,6 +322,85 @@ class LiveViewTest(unittest.TestCase):
         run = self.live()["lanes"][0]["runs"][0]
         self.assertEqual(run["batch"], {"done": 1, "failed": 1, "running": 1, "total": 3})
         self.assertEqual(run["children"][1]["last_tool"]["args"], "npm test")
+
+    def write_batch(self, deleg, started, tasks):
+        live = self.home / "cache" / "delegation" / "live" / deleg
+        live.mkdir(parents=True)
+        (live / "manifest.json").write_text(json.dumps({
+            "delegation_id": deleg, "started": local_stamp(started), "task_count": len(tasks), "model": "test-model",
+            "tasks": [{"index": i, "goal": goal, "log": str(live / f"task-{i}.log"), "status": status} for i, (goal, status) in enumerate(tasks)],
+        }), encoding="utf-8")
+
+    def test_two_runs_in_one_profile_with_the_same_task_goal_keep_their_own_batches(self):
+        # Two chats each delegate "Review the PR". The manifest carries no session id, so a
+        # child links to the manifest written just before it started, never the other run's.
+        now = self.now
+        con = sqlite3.connect(self.home / "state.db")
+        con.executemany("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, 6, 4, ?)", [
+            ("run-2", "cli", "Second chat", now - 300, None, None, now - 3, None),
+            ("r1-x", "subagent", "Subagent: Review the PR", now - 248, now - 200, "agent_close", now - 200, "run-1"),
+            ("r2-x", "subagent", "Subagent: Review the PR", now - 98, now - 50, "agent_close", now - 50, "run-2"),
+        ])
+        con.commit()
+        con.close()
+        self.write_batch("deleg_r1", now - 250, [("Review the PR", "completed")])
+        self.write_batch("deleg_r2", now - 100, [("Review the PR", "failed")])
+        runs = {run["label"]: run for run in self.live()["lanes"][0]["runs"]}
+        first = next(c for c in runs["Fix flaky checkout test"]["children"] if c["label"] == "Review the PR")
+        self.assertEqual((first["status"], runs["Second chat"]["children"][0]["status"]), ("done", "failed"))
+        self.assertEqual(runs["Fix flaky checkout test"]["batch"], {"done": 2, "failed": 1, "running": 1, "total": 4})
+        self.assertEqual(runs["Second chat"]["batch"], {"done": 0, "failed": 1, "running": 0, "total": 1})
+
+    def test_a_batch_whose_finished_children_are_not_among_the_rows_still_counts(self):
+        # Batch one: fifteen finished; batch two: twelve running. The rows show the running
+        # ones only, but Tasks done counts both batches.
+        now = self.now
+        for i in range(15):
+            self.add_child(f"b1-{i}", f"Subagent: Batch one task {i}", now - 150 + i, now - 120 + i)
+        for i in range(12):
+            self.add_child(f"b2-{i}", f"Subagent: Batch two task {i}", now - 60 + i, None)
+        self.write_batch("deleg_b1", now - 155, [(f"Batch one task {i}", "completed") for i in range(15)])
+        self.write_batch("deleg_b2", now - 65, [(f"Batch two task {i}", "running") for i in range(12)])
+        run = self.live()["lanes"][0]["runs"][0]
+        self.assertEqual(len(run["children"]), plugin_api.LIVE_CHILD_LIMIT)
+        self.assertTrue(all(c["status"] == "running" for c in run["children"]))
+        self.assertEqual(run["batch"], {"done": 16, "failed": 1, "running": 13, "total": 30})
+
+    def test_a_subagent_still_running_after_its_parent_ended_stays_under_the_parent(self):
+        now = self.now
+        con = sqlite3.connect(self.home / "state.db")
+        con.executemany("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, 6, 4, ?)", [
+            ("gone-run", "cli", "Background research", now - 900, now - 400, "completed", now - 400, None),
+            ("gone-child", "subagent", "Subagent: Read the papers", now - 850, None, None, now - 4, "gone-run"),
+        ])
+        con.commit()
+        con.close()
+        payload = self.live()
+        runs = payload["lanes"][0]["runs"]
+        self.assertEqual([run["label"] for run in runs], ["Background research", "Fix flaky checkout test"])
+        self.assertEqual([(c["label"], c["status"]) for c in runs[0]["children"]], [("Read the papers", "running")])
+        self.assertEqual(payload["summary"], {"runs": 2, "children": 2, "agents_running": 1})
+
+    def test_an_ended_subagent_with_no_task_and_no_end_line_is_ended_not_done(self):
+        self.add_child("child-z", "Subagent: Tidy the notes", self.now - 100, self.now - 20)
+        child = next(c for c in self.live()["lanes"][0]["runs"][0]["children"] if c["label"] == "Tidy the notes")
+        self.assertEqual(child["status"], "ended")
+
+    def test_only_the_newest_finished_subagents_are_read_per_run(self):
+        for i in range(plugin_api.LIVE_FINISHED_KEPT + 10):
+            self.add_child(f"fin-{i}", f"Subagent: Old task {i}", self.now - 3000 + i, self.now - 2900 + i)
+        store = plugin_api._store_live(self.home / "state.db", self.now)
+        rows = store["children"]["run-1"]
+        self.assertEqual(len(rows), plugin_api.LIVE_FINISHED_KEPT + 1)  # child-b runs; the oldest finished are not read
+        self.assertEqual(sum(1 for r in r_ids(rows) if r.startswith("fin-")), plugin_api.LIVE_FINISHED_KEPT - 2)
+        self.assertNotIn("fin-0", r_ids(rows))
+        self.assertIn("child-b", r_ids(rows))
+
+    def test_runs_between_two_times(self):
+        db = self.home / "state.db"
+        started = lambda **kw: sorted(round(self.now - r["started"]) for r in plugin_api._store_runs(db, self.now - 1000, now=self.now, **kw))  # noqa: E731
+        self.assertEqual(started(), [600, 190, 180, 170][::-1])
+        self.assertEqual(started(until=self.now - 185), [600, 190][::-1])
 
     def test_no_internal_keys_leave_the_payload(self):
         text = json.dumps(self.live())

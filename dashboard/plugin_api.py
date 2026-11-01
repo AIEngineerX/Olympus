@@ -4294,8 +4294,8 @@ def _sessions_with_every_tool_failed(con: sqlite3.Connection, where: str, params
     return {session_id: failed for session_id, failed in sessions.items() if failed is not None}
 
 
-def _store_runs(db: Path, since: float, session_id: Optional[str] = None, now: Optional[float] = None) -> List[Dict[str, Any]]:
-    """Every session started since ``since`` (or the one ``session_id``) with its outcome, cost and size."""
+def _store_runs(db: Path, since: float, session_id: Optional[str] = None, now: Optional[float] = None, until: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Every session started since ``since`` (and before ``until``), or the one ``session_id``, with its outcome, cost and size."""
     now = time.time() if now is None else now
     if not db.exists():
         return []
@@ -4319,7 +4319,12 @@ def _store_runs(db: Path, since: float, session_id: Optional[str] = None, now: O
                     "FROM sessions s LEFT JOIN messages m ON m.id = (SELECT MAX(id) FROM messages WHERE session_id = s.id)")
         else:
             last = ", NULL AS last_role, NULL AS last_finish, 0 AS last_pending FROM sessions s"
-        where, params = ("s.id = ?", (session_id,)) if session_id is not None else ("s.started_at >= ?", (since,))
+        if session_id is not None:
+            where, params = "s.id = ?", (session_id,)
+        elif until is not None:
+            where, params = "s.started_at >= ? AND s.started_at < ?", (since, until)
+        else:
+            where, params = "s.started_at >= ?", (since,)
         rows = con.execute(
             f"SELECT {', '.join('s.' + c for c in wanted)}{last} WHERE {where} ORDER BY s.started_at",
             params,
@@ -4571,8 +4576,8 @@ def build_day_runs(profiles: List[Dict[str, Any]], day: str, agent: Optional[str
         if agent is not None and profile["id"] != agent:
             continue
         who = {"id": profile["id"], "label": profile["label"], "avatar": agent_avatar(str(profile["label"]))}
-        for run in _store_runs(Path(str(profile["_path"])) / "state.db", since):
-            if run["started"] < until and not run["subagent"] and not run["rotated"]:
+        for run in _store_runs(Path(str(profile["_path"])) / "state.db", since, until=until):
+            if not run["subagent"] and not run["rotated"]:
                 runs.append({**run, "_agent": who})
     runs.sort(key=lambda r: -r["started"])
     return {
@@ -5071,6 +5076,8 @@ def performance_day(day: str, agent: Optional[str] = None) -> Dict[str, Any]:
 LIVE_POLL_SECONDS = 5
 LIVE_WINDOW_SECONDS = 60
 LIVE_CHILD_LIMIT = 12
+LIVE_FINISHED_KEPT = 48  # finished subagents read per run, newest first; the rows show LIVE_CHILD_LIMIT
+LIVE_MANIFEST_SLACK = 5  # seconds a manifest's start stamp may trail the child it spawned
 LIVE_TAIL_BYTES = 4096
 LIVE_MANIFEST_DAYS = 7
 LIVE_LINE_RE = re.compile(r"^(\d{2}:\d{2}:\d{2}) (\S+)\s*\| (.*)$")
@@ -5196,16 +5203,38 @@ def _store_live(db: Path, now: float) -> Dict[str, Any]:
             (now - ACTIVE_SECONDS,),
         )]
         open_ids = {str(r["id"]) for r in open_rows}
+        has_parent = "parent_session_id" in cols
+        parent_of = lambda r: str(r.get("parent_session_id") or "") if has_parent else ""  # noqa: E731
+        # A run is an open session with no open parent. A subagent still
+        # running after its parent run ended (a background delegation) stays
+        # under that parent: the parent row joins the runs with its children.
+        runs = [r for r in open_rows if not parent_of(r)]
+        orphans = [r for r in open_rows if parent_of(r) and parent_of(r) not in open_ids]
+        if orphans:
+            parent_ids = sorted({parent_of(r) for r in orphans})
+            marks = ", ".join("?" for _ in parent_ids)
+            parents = {str(r["id"]): dict(r) for r in con.execute(f"SELECT {', '.join(wanted)} FROM sessions WHERE id IN ({marks})", tuple(parent_ids))}
+            runs += [parents[pid] for pid in parent_ids if pid in parents]
+            runs += [r for r in orphans if parent_of(r) not in parents]
+        runs.sort(key=lambda r: safe_float(r.get("started_at")))
+        # Every running child and the newest finished ones: a run open for days
+        # can have delegated thousands of tasks, and the rows show twelve.
         children: Dict[str, List[Dict[str, Any]]] = {}
-        if open_ids and "parent_session_id" in cols:
-            marks = ", ".join("?" for _ in open_ids)
-            for r in con.execute(
-                f"SELECT {', '.join(wanted)} FROM sessions WHERE parent_session_id IN ({marks}) ORDER BY started_at",
-                tuple(open_ids),
-            ):
-                children.setdefault(str(r["parent_session_id"]), []).append(dict(r))
-        runs = [r for r in open_rows if str(r.get("parent_session_id") or "") not in open_ids]
-        ids = [str(r["id"]) for r in runs] + [str(c["id"]) for rows in children.values() for c in rows]
+        shown: List[str] = []
+        if has_parent:
+            for root in runs:
+                root_id = str(root["id"])
+                rows = [dict(r) for r in con.execute(
+                    f"SELECT {', '.join(wanted)} FROM sessions WHERE parent_session_id = ? AND ended_at IS NULL", (root_id,),
+                )] + [dict(r) for r in con.execute(
+                    f"SELECT {', '.join(wanted)} FROM sessions WHERE parent_session_id = ? AND ended_at IS NOT NULL ORDER BY started_at DESC LIMIT ?",
+                    (root_id, LIVE_FINISHED_KEPT),
+                )]
+                if rows:
+                    rows.sort(key=lambda r: safe_float(r.get("started_at")))
+                    children[root_id] = rows
+                    shown += [str(r["id"]) for r in _children_shown(rows)]
+        ids = [str(r["id"]) for r in runs] + shown
         last_tool: Dict[str, Dict[str, Any]] = {}
         ticks: Dict[str, List[Dict[str, Any]]] = {}
         message_cols = table_columns(con, "messages")
@@ -5253,35 +5282,47 @@ def _link_manifest(manifests: List[Dict[str, Any]], run: Dict[str, Any], childre
     """The batches this run dispatched, matched by the children's goals: their summed counts and each child's manifest task.
 
     A run can call delegate_task more than once, so every manifest that links a
-    child counts. Two tasks with the same goal are two children ("… #2" in the
-    second title, the same stem), so a child links to one task only, in start
-    order.
+    child counts. The manifest carries no session id, and two runs of one
+    profile can delegate the same goal, so a child links to the manifest
+    written just before it started (Hermes writes the manifest, then spawns
+    the tasks), never to one written after it. Two tasks with the same goal
+    are two children ("… #2" in the second title, the same stem), so a task
+    links one child only, in start order.
     """
-    stems = [(_goal_stem(child.get("title")), str(child["id"])) for child in children]
     run_started = safe_float(run.get("started_at"))
+    usable = [m for m in manifests if not (m["started_ts"] is not None and run_started and m["started_ts"] < run_started - 60)]
     linked: Dict[str, Dict[str, Any]] = {}
+    used: set = set()
+    counted: Dict[int, Dict[str, Any]] = {}
 
-    def child_for(goal: str) -> Optional[str]:
-        for stem, child_id in stems:
-            if child_id in linked:
-                continue
-            if stem and (goal == stem or (len(stem) >= 12 and goal.startswith(stem))):
-                return child_id
-        return None
+    def task_for(manifest: Dict[str, Any], stem: str) -> Optional[Dict[str, Any]]:
+        free = [t for t in manifest["tasks"] if id(t) not in used]
+        exact = next((t for t in free if t["goal"] == stem), None)
+        if exact or len(stem) < 12:
+            return exact
+        return next((t for t in free if t["goal"].startswith(stem)), None)
+
+    for child in sorted(children, key=lambda c: safe_float(c.get("started_at"))):
+        stem = _goal_stem(child.get("title"))
+        child_started = safe_float(child.get("started_at"))
+        if not stem:
+            continue
+        # Nearest manifest written before this child first; one with no
+        # readable start stamp is tried last.
+        candidates = sorted(
+            (m for m in usable if m["started_ts"] is None or not child_started or m["started_ts"] <= child_started + LIVE_MANIFEST_SLACK),
+            key=lambda m: -(m["started_ts"] or 0.0),
+        )
+        for manifest in candidates:
+            task = task_for(manifest, stem)
+            if task:
+                used.add(id(task))
+                linked[str(child["id"])] = task
+                counted.setdefault(id(manifest), manifest)
+                break
 
     batch = {"done": 0, "failed": 0, "running": 0, "total": 0}
-    # Oldest batch first, so a repeated goal links to the earlier child first.
-    for manifest in sorted(manifests, key=lambda m: safe_float(m.get("started_ts"))):
-        started = manifest["started_ts"]
-        if started is not None and run_started and started < run_started - 60:
-            continue
-        before = len(linked)
-        for task in manifest["tasks"]:
-            child_id = child_for(task["goal"])
-            if child_id:
-                linked[child_id] = task
-        if len(linked) == before:
-            continue
+    for manifest in counted.values():
         statuses = [t["status"] for t in manifest["tasks"]]
         done = sum(1 for s in statuses if s == "completed")
         running = sum(1 for s in statuses if s in ("running", "dispatched"))
@@ -5293,7 +5334,11 @@ def _link_manifest(manifests: List[Dict[str, Any]], run: Dict[str, Any], childre
 
 
 def _child_status(row: Dict[str, Any], task: Optional[Dict[str, Any]], tail: Optional[Dict[str, Any]]) -> str:
-    """Running until the session ends; then failed by the manifest task, the transcript's end line, or the session's own reason."""
+    """Running until the session ends; then failed by the manifest task, the transcript's end line, or the session's own reason.
+
+    Hermes ends every subagent session with the same reason, so a child with
+    no task and no end line is "ended", not done.
+    """
     if row.get("ended_at") is None:
         return "running"
     if task and task.get("status") in TASK_FAILED_STATUSES:
@@ -5303,7 +5348,9 @@ def _child_status(row: Dict[str, Any], task: Optional[Dict[str, Any]], tail: Opt
     end = LIVE_END_RE.search(str(tail["final"] or "")) if tail and tail.get("final") else None
     if end:
         return "failed" if end.group(1).lower() in TASK_FAILED_STATUSES else "done"
-    return "failed" if str(row.get("end_reason") or "") in CHILD_FAILED_REASONS else "done"
+    if str(row.get("end_reason") or "") in CHILD_FAILED_REASONS:
+        return "failed"
+    return "done" if task else "ended"
 
 
 def _live_child(row: Dict[str, Any], store: Dict[str, Any], task: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -5356,7 +5403,9 @@ def build_live(profiles: List[Dict[str, Any]], now: Optional[float] = None) -> D
             root_id = str(root["id"])
             all_rows = store["children"].get(root_id, [])
             rows = _children_shown(all_rows)
-            batch, tasks = _link_manifest(manifests, root, rows)
+            # Batches link through every child read, not only the rows shown,
+            # so a batch whose children all finished still counts.
+            batch, tasks = _link_manifest(manifests, root, all_rows)
             children = [_live_child(row, store, tasks.get(str(row["id"]))) for row in rows]
             # The census counts every running subagent, not only the rows shown.
             children_running += sum(1 for row in all_rows if row.get("ended_at") is None)

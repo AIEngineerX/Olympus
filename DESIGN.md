@@ -121,7 +121,7 @@ the inspector sitting beside the roster.
   breathing with the pulse curve; failed and stalled: destructive, still;
   offline: dashed hairline), then name, status pill, what it is on with its
   elapsed time, the last minute's call count, and one row per subagent (dot,
-  label, Done or Failed, time, last tool in monospace) joined to the disc by
+  label, Done, Failed or Ended, time, last tool in monospace) joined to the disc by
   a hairline spoke in one SVG per station. Motion is only a record: a tool
   call since the last read expands one 1 px accent ring from the disc, 700 ms
   ease-out-quart, 2 px destructive for a failed call, at most six per read 90

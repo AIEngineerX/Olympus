@@ -2037,7 +2037,8 @@ button.olympus-token-day {
   background: var(--color-destructive);
 }
 
-.olympus-lane-child-done {
+.olympus-lane-child-done,
+.olympus-lane-child-ended {
   color: var(--olympus-muted);
   transition: color 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -2199,6 +2200,7 @@ button.olympus-token-day {
 
   .olympus-lane-dot,
   .olympus-lane-child-done,
+  .olympus-lane-child-ended,
   .olympus-lane-fold-toggle {
     transition: none;
   }
@@ -2593,7 +2595,8 @@ button.olympus-token-day {
   animation: olympus-pulse 2.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
 
-.olympus-floor-sat-done .olympus-floor-sat-dot {
+.olympus-floor-sat-done .olympus-floor-sat-dot,
+.olympus-floor-sat-ended .olympus-floor-sat-dot {
   background: var(--olympus-muted);
 }
 
@@ -2648,6 +2651,7 @@ button.olympus-token-day {
 }
 
 .olympus-floor-sat-done,
+.olympus-floor-sat-ended,
 .olympus-floor-sat-failed {
   opacity: 0.72;
 }

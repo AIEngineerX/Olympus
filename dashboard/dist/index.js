@@ -1431,7 +1431,7 @@
   const LIVE_STRIP_WIDTH = 120;
   const LIVE_STRIP_HEIGHT = 14;
   const SOURCE_TEXT = { cli: "CLI", oneshot: "CLI", cron: "Cron", kanban: "Kanban", subagent: "Subagent", api_server: "API", acp: "ACP" };
-  const CHILD_STATUS_TEXT = { running: "Running", done: "Done", failed: "Failed" };
+  const CHILD_STATUS_TEXT = { running: "Running", done: "Done", failed: "Failed", ended: "Ended" };
 
   function sourceText(source) {
     const key = String(source || "session");
@@ -1520,8 +1520,10 @@
     const failed = batch ? batch.failed : finished.filter((child) => child.status === "failed").length;
     const failedText = failed ? el("span", { key: "failed", className: "olympus-lane-fold-failed" }, plural(failed, "failed")) : null;
     if (batch) return ["Tasks done " + batch.done + " of " + batch.total, failedText ? ", " : null, failedText];
-    const done = finished.length - failed;
-    return [done ? plural(done, "done") : null, done && failedText ? ", " : null, failedText];
+    const done = finished.filter((child) => child.status === "done").length;
+    const ended = finished.length - failed - done;
+    const parts = [done ? plural(done, "done") : null, failedText, ended ? plural(ended, "ended") : null].filter(Boolean);
+    return parts.flatMap((part, i) => (i ? [", ", part] : [part]));
   }
 
   // Every label is a session, so each opens that session's steps in the run
@@ -1919,7 +1921,7 @@
   const FLOOR_PULSE_STEP_MS = 90;
   const FLOOR_PULSE_FALLBACK_MS = 1600;
   const FLOOR_COMPACT_SATS = 3;
-  const SAT_STATE_TEXT = { done: "Done", failed: "Failed" };
+  const SAT_STATE_TEXT = { done: "Done", failed: "Failed", ended: "Ended" };
 
   function tickKey(tick) {
     return String(tick.at) + (tick.error ? "!" : "");
@@ -2263,7 +2265,9 @@
     const opts = { onOpenAgent: ctx.openAgent, onOpenRun: ctx.openRun, compact: false };
     useEffect(() => { renderFloor(host.current, floorModel(data, live.live, ctx.now, false), opts); }, [data, live.live]);
     useEffect(() => { tickFloor(host.current, floorModel(data, live.live, ctx.now, false)); }, [ctx.now]);
-    useEffect(() => () => destroyFloor(host.current), []);
+    // React clears the ref before this cleanup runs, so the node is taken
+    // while it is still mounted.
+    useEffect(() => { const node = host.current; return () => destroyFloor(node); }, []);
     return el("div", { className: "olympus-floor-view" },
       live.error ? el("p", { className: "olympus-error-text", role: "alert" }, "Could not read live runs: " + live.error) : null,
       el("div", { className: "olympus-floor-host", ref: host })
@@ -2470,21 +2474,24 @@
       const model = glanceModel(data, now);
       pending.current = true;
       window.documentPictureInPicture.requestWindow({ width: GLANCE_WIDTH, height: glanceHeight(model) }).then((pip) => {
-        adoptStyles(pip.document);
-        pip.document.title = "Olympus";
-        const page = pip.document.createElement("div");
-        page.className = "olympus-page olympus-glance-page";
-        pip.document.body.appendChild(page);
+        // The window is tracked before anything is drawn in it, so a failure
+        // while filling it still leaves a window the header can close.
         pip.addEventListener("pagehide", () => {
           win.current = null;
           setOpenState(false);
         });
         win.current = pip;
         setOpenState(true);
+        adoptStyles(pip.document);
+        pip.document.title = "Olympus";
+        const page = pip.document.createElement("div");
+        page.className = "olympus-page olympus-glance-page";
+        pip.document.body.appendChild(page);
         renderGlance(page, model, onOpen, glance, floor());
       // The browser can refuse the window (no user gesture left, a policy);
-      // then the plain popup carries the same list.
-      }).catch(openPopup).finally(() => { pending.current = false; });
+      // then the plain popup carries the same list. Only the refusal falls
+      // back: a window that opened is never doubled by a popup.
+      }, openPopup).finally(() => { pending.current = false; });
     }
     return { open, toggle };
   }
@@ -2494,9 +2501,12 @@
     const floor = () => ({ model: floorModel(data, glance.live, now, true), onOpenRun });
     useEffect(() => { renderGlance(host.current, glanceModel(data, now), onOpen, glance, floor()); }, [data, glance.live, glance.mode]);
     useEffect(() => { tickGlance(host.current, glanceModel(data, now), floor()); }, [now]);
-    useEffect(() => () => {
-      const section = host.current && host.current.querySelector(".olympus-glance");
-      if (section && section.dataset.mode === "floor") destroyFloor(section.lastChild);
+    useEffect(() => {
+      const node = host.current;
+      return () => {
+        const section = node && node.querySelector(".olympus-glance");
+        if (section && section.dataset.mode === "floor") destroyFloor(section.lastChild);
+      };
     }, []);
     return el("div", { className: "olympus-glance-host", ref: host });
   }

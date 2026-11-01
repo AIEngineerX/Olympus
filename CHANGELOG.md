@@ -6,6 +6,30 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-11-01
+
+### Fixed
+
+- Two runs of one profile that delegate the same task goal no longer take each
+  other's batch: a subagent links to the manifest written just before it
+  started, never to one written after it. Hermes' manifest carries no session
+  id, so goal text and time are all there is to go on.
+- A subagent still running after its parent run ended (a background
+  delegation) now shows under that parent, not as a run of its own.
+- An ended subagent with no manifest task and no end line reads "Ended", not
+  "Done": Hermes ends every subagent session with the same reason, so the
+  outcome is unknown.
+- "Tasks done N of M" counts a batch whose finished subagents are no longer
+  among the rows shown.
+- Live reads every running subagent and the newest 48 finished ones per run,
+  not every child a days-old session ever delegated, and looks up tools only
+  for the rows it shows.
+- The day panel reads one day of sessions, not from that day to now.
+- Leaving Floor, or the popout in floor mode, removes its resize listener;
+  the ref was read after React had cleared it.
+- If the browser opens the popout window but drawing in it fails, the window
+  stays tracked and closable, and no second popup opens beside it.
+
 ## [2.1.0] - 2026-11-01
 
 ### Added
@@ -357,6 +381,7 @@ credentials, or config.
 - `verify` workflow runs backend compile, backend unit tests, frontend parse,
   whitespace check, and the visual smoke on push and pull request.
 
+[2.1.1]: https://github.com/AIEngineerX/Olympus/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/AIEngineerX/Olympus/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/AIEngineerX/Olympus/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/AIEngineerX/Olympus/compare/v1.0.3...v2.0.0
