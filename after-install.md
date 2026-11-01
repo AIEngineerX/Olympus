@@ -16,9 +16,12 @@
    does not appear, restart `hermes dashboard` once.
 
 3. Start with **Agents**: your agents, what each is doing, and Needs you,
-   everything waiting on a person. **Performance** shows how reliably each
-   agent's runs succeed; **Checks** holds findings, backlog, skills, policy and
-   spend.
+   everything waiting on a person. **Live** shows every open run with its
+   subagents as it happens; **Floor** puts every agent at a fixed place in one
+   frame; **Pop out** keeps the roster in a small window on top of your other
+   work. **Performance** shows how reliably each agent's runs succeed, with the
+   runs behind any day a click away; **Checks** holds findings, backlog,
+   skills, policy and spend.
 
 4. Optional alerts for tasks waiting on your answer, failed or stalled cron
    jobs, stalled workers, gateways down while work waits, looping sessions

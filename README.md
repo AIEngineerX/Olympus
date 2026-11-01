@@ -209,7 +209,7 @@ Seen on the test install; not yet fixed.
 
 - A Kanban worker that has finished can read as **Working** for up to ten
   minutes, because Hermes leaves the worker's session open after the task run
-  ends. The next release will end the agent's status with the run.
+  ends and Olympus does not yet end the status with the run.
 - While a worker runs, "Now" shows its task but not the tool it is using.
 - At 390 px the confirm popup for a control can overflow its row by a pixel.
 

@@ -852,6 +852,21 @@
     });
   }
 
+  // The head every side panel shares: a back control for the narrow layout,
+  // the avatar, the title with its lines of detail, and the controls with
+  // the close button last.
+  function InspectorHead({ backLabel, agent, title, details, controls, closeLabel, onClose }) {
+    return el("div", { className: "olympus-inspector-head" },
+      el("button", { type: "button", className: "olympus-back", onClick: onClose }, backLabel),
+      agent ? el(Avatar, { agent, size: "large" }) : null,
+      el("div", { className: "olympus-inspector-title" }, el("h2", null, title), details),
+      el("div", { className: "olympus-inspector-controls" },
+        controls,
+        el("button", { type: "button", className: "olympus-close", "aria-label": closeLabel, onClick: onClose }, "×")
+      )
+    );
+  }
+
   function Inspector({ agentId, detail, error, ctx, onClose }) {
     const panel = useRef(null);
     useEffect(() => {
@@ -871,25 +886,22 @@
         if (event.key === "Escape") { event.stopPropagation(); onClose(); }
       }
     },
-      el("div", { className: "olympus-inspector-head" },
-        el("button", { type: "button", className: "olympus-back", onClick: onClose }, "Back to agents"),
-        el(Avatar, { agent, size: "large" }),
-        el("div", { className: "olympus-inspector-title" },
-          el("h2", null, agent.label),
-          el("p", null, agent.role || ROLE_TEXT[agent.role_state] || ""),
-          agent.setup ? el("p", { className: "olympus-setup" }, setupLine(agent.setup)) : null,
-          el("div", { className: "olympus-inspector-status" },
+      el(InspectorHead, {
+        backLabel: "Back to agents", agent, title: agent.label, closeLabel: "Close inspector", onClose,
+        details: [
+          el("p", { key: "role" }, agent.role || ROLE_TEXT[agent.role_state] || ""),
+          agent.setup ? el("p", { key: "setup", className: "olympus-setup" }, setupLine(agent.setup)) : null,
+          el("div", { key: "status", className: "olympus-inspector-status" },
             el(StatusPill, { status: agent.status, label: agent.status_label }),
             agent.last_active_at ? el("span", { className: "olympus-muted" }, "last active " + ago(agent.last_active_at, ctx.now)) : null
           )
-        ),
-        el("div", { className: "olympus-inspector-controls" },
-          detail ? el(PauseAll, { detail, ctx }) : null,
-          agent.current && agent.current.kind === "session" && agent.current.ref ? el(SessionLink, { target: { kind: "session", ref: agent.current.ref, label: "current" } }) : null,
-          el("a", { className: "olympus-link", href: routeLink("/profiles") }, "Open in Hermes"),
-          el("button", { type: "button", className: "olympus-close", "aria-label": "Close inspector", onClick: onClose }, "×")
-        )
-      ),
+        ],
+        controls: [
+          detail ? el(PauseAll, { key: "pause", detail, ctx }) : null,
+          agent.current && agent.current.kind === "session" && agent.current.ref ? el(SessionLink, { key: "current", target: { kind: "session", ref: agent.current.ref, label: "current" } }) : null,
+          el("a", { key: "open", className: "olympus-link", href: routeLink("/profiles") }, "Open in Hermes")
+        ]
+      }),
       error ? el("p", { className: "olympus-error-text", role: "alert" }, "Could not load this agent: " + error) : null,
       !detail && !error ? el(RosterSkeleton) : null,
       detail && detail.start_gateway ? el("p", { className: "olympus-note" }, "Its gateway is not running, so scheduled jobs and Kanban work wait. Start it with ", el("code", null, detail.start_gateway), ".") : null,
@@ -1198,18 +1210,11 @@
       "aria-label": "Performance of " + row.label,
       onKeyDown: (event) => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } }
     },
-      el("div", { className: "olympus-inspector-head" },
-        el("button", { type: "button", className: "olympus-back", onClick: onClose }, "Back to performance"),
-        el(Avatar, { agent: row, size: "large" }),
-        el("div", { className: "olympus-inspector-title" },
-          el("h2", null, row.label),
-          el("p", null, "Last " + days + " days")
-        ),
-        el("div", { className: "olympus-inspector-controls" },
-          el("button", { type: "button", className: "olympus-link-button", onClick: () => ctx.openAgent(row.id) }, "Open in Agents"),
-          el("button", { type: "button", className: "olympus-close", "aria-label": "Close performance panel", onClick: onClose }, "×")
-        )
-      ),
+      el(InspectorHead, {
+        backLabel: "Back to performance", agent: row, title: row.label, closeLabel: "Close performance panel", onClose,
+        details: [el("p", { key: "window" }, "Last " + days + " days")],
+        controls: [el("button", { key: "open", type: "button", className: "olympus-link-button", onClick: () => ctx.openAgent(row.id) }, "Open in Agents")]
+      }),
       el("dl", { className: "olympus-facts" },
         el("div", null, el("dt", null, "Runs"), el("dd", null, formatCount(row.runs) + (row.open ? " (" + row.open + " running)" : ""))),
         el("div", null, el("dt", null, "Succeeded"), el("dd", { className: rateClass(row.success_rate) }, row.success_rate == null ? "None finished" : percent(row.success_rate) + " of " + formatCount(row.succeeded + row.failed + row.cut_off),
@@ -1263,17 +1268,10 @@
       "aria-label": "Runs on " + dayTitle(day),
       onKeyDown: (event) => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } }
     },
-      el("div", { className: "olympus-inspector-head" },
-        el("button", { type: "button", className: "olympus-back", onClick: onClose }, agent ? "Back to " + agent.label : "Back to performance"),
-        agent ? el(Avatar, { agent, size: "large" }) : null,
-        el("div", { className: "olympus-inspector-title" },
-          el("h2", null, dayTitle(day)),
-          el("p", null, agent ? agent.label : "All agents")
-        ),
-        el("div", { className: "olympus-inspector-controls" },
-          el("button", { type: "button", className: "olympus-close", "aria-label": "Close the day", onClick: onClose }, "×")
-        )
-      ),
+      el(InspectorHead, {
+        backLabel: agent ? "Back to " + agent.label : "Back to performance", agent, title: dayTitle(day), closeLabel: "Close the day", onClose,
+        details: [el("p", { key: "who" }, agent ? agent.label : "All agents")]
+      }),
       error ? el("p", { className: "olympus-error-text", role: "alert" }, "Could not read the day: " + error) : null,
       !report && !error ? el(RosterSkeleton) : null,
       summary ? el("p", { className: "olympus-census" }, [

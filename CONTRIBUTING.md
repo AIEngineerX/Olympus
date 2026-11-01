@@ -139,7 +139,9 @@ Mounted at `/api/plugins/olympus/` behind the Hermes dashboard session token:
 | --- | --- |
 | `GET /overview` | Roster, Needs you, findings, backlog, skills, policy, spend |
 | `GET /agent?ref=` | One agent's inspector |
-| `GET /performance?days=7\|30` | Run success, run time, tool failures and cost per agent |
+| `GET /performance?days=7\|30` | Run success, run time, tool failures and cost per agent, each against the window before |
+| `GET /performance/day?day=YYYY-MM-DD&agent=` | The runs started on one UTC day, newest 200, for the fleet or one agent |
+| `GET /live` | Every open run with its subagents, batch progress and the last minute of tool calls |
 | `GET /run?ref=` | One run, step by step |
 | `GET /resolve?kind=&ref=` | The id a control needs, looked up at click time; refused when controls are off |
 | `POST /actions` | Record a control in the action log |
