@@ -4191,6 +4191,7 @@ TOOL_RESULT_SCAN_LIMIT = 20000
 TOOL_RESULT_FULL_CHARS = 20000
 PERFORMANCE_TOOLS_SHOWN = 10
 PERFORMANCE_RUNS_SHOWN = 6
+PERFORMANCE_DAY_RUNS_SHOWN = 200
 RUN_STEP_LIMIT = 400
 FAILURE_MARKER_RE = re.compile(r'"(?:error|failed)"(?!\s*:\s*(?:null|false|0|""|\[\]|\{\})\s*(?:[,}\]]|$))', re.IGNORECASE)
 EXIT_CODE_RE = re.compile(r'"exit_code"\s*:\s*(-?\d+)')
@@ -4550,6 +4551,37 @@ def build_performance(profiles: List[Dict[str, Any]], days: int, now: Optional[f
             "Tool failures use the rule Hermes uses to mark failed tool calls. "
             f"The trend compares these {days} days with the {days} days before them."
         ),
+    }
+
+
+def build_day_runs(profiles: List[Dict[str, Any]], day: str, agent: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Every top-level run started on one UTC day, newest first, for the fleet or one agent.
+
+    This is the list behind a bar of the runs-per-day chart. None when ``day``
+    is not a plain date.
+    """
+    try:
+        start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    since = start.timestamp()
+    until = since + 86400
+    runs: List[Dict[str, Any]] = []
+    for profile in profiles:
+        if agent is not None and profile["id"] != agent:
+            continue
+        who = {"id": profile["id"], "label": profile["label"], "avatar": agent_avatar(str(profile["label"]))}
+        for run in _store_runs(Path(str(profile["_path"])) / "state.db", since):
+            if run["started"] < until and not run["subagent"] and not run["rotated"]:
+                runs.append({**run, "_agent": who})
+    runs.sort(key=lambda r: -r["started"])
+    return {
+        "day": start.date().isoformat(),
+        "generated_at": now_iso(),
+        "agent": agent,
+        "summary": window_summary(runs),
+        "runs": [{**_public_run(r), "agent": r["_agent"]} for r in runs[:PERFORMANCE_DAY_RUNS_SHOWN]],
+        "total": len(runs),
     }
 
 
@@ -5015,6 +5047,14 @@ def performance(days: int = 7) -> Dict[str, Any]:
     if days not in PERFORMANCE_DAYS:
         return {"error": f"days must be one of {', '.join(str(d) for d in PERFORMANCE_DAYS)}"}
     return build_performance(collect_profiles(), days)
+
+
+@router.get("/performance/day")
+def performance_day(day: str, agent: Optional[str] = None) -> Dict[str, Any]:
+    """The runs started on one UTC day (``day`` as 2026-10-31), for every agent or one ``agent`` id."""
+    refresh_expose_local_labels()
+    report = build_day_runs(collect_profiles(), day, agent)
+    return {"error": "day must be a date like 2026-10-31"} if report is None else report
 
 
 # ---------------------------------------------------------------------------

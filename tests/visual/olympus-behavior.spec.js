@@ -233,6 +233,55 @@ test.describe("Olympus behaviour", () => {
     await page.keyboard.press("Escape");
     await expect(panel).toHaveCount(0);
 
+    // The fleet line says how this week compares with the week before.
+    await expect(perf.locator(".olympus-census")).toContainText(/% succeeded, (was \d+% the 7 days before|same as the 7 days before)/);
+
+    // The chart has a value axis, and every bar tells its day's numbers on hover.
+    const fleetChart = perf.locator(".olympus-token-chart").first();
+    const peak = Number((await fleetChart.locator(".olympus-chart-scale").textContent()).match(/Peak (\d+) runs/)[1]);
+    const ticks = (await fleetChart.locator(".olympus-chart-axis span:not(.olympus-chart-axis-size)").allTextContents()).map(Number);
+    expect(ticks.length).toBeGreaterThanOrEqual(2);
+    expect(ticks.every((tick, idx) => Number.isInteger(tick) && tick <= peak && (idx === 0 || tick > ticks[idx - 1]))).toBe(true);
+    await expect(fleetChart.locator(".olympus-chart-grid i")).toHaveCount(ticks.length);
+    const bars = fleetChart.locator("button.olympus-token-day");
+    await expect(bars).toHaveCount(7);
+    const busiest = fleetChart.locator('button.olympus-token-day[aria-label*=": ' + peak + ' runs"]').first();
+    await expect(fleetChart.locator(".olympus-chart-value")).toHaveCount(0);
+    await busiest.hover();
+    await expect(fleetChart.locator(".olympus-chart-value")).toBeVisible();
+    await expect(fleetChart.locator(".olympus-chart-value")).toHaveText(new RegExp("^\\w{3}, \\w{3} \\d{1,2}: " + peak + " runs \\(\\d+ succeeded"));
+    await page.mouse.move(0, 0);
+    await expect(fleetChart.locator(".olympus-chart-value")).toHaveCount(0);
+
+    // A bar opens that day's runs, each naming its agent; the same bar closes them.
+    await busiest.click();
+    const dayPanel = page.getByRole("complementary", { name: /^Runs on / });
+    await expect(dayPanel.locator(".olympus-census")).toContainText(peak + " runs");
+    await expect(dayPanel.locator(".olympus-work-row")).toHaveCount(peak);
+    await expect(dayPanel.locator(".olympus-work-row small").first()).toContainText(/^(Analyst|Coder|Default|Ops|Researcher|Reviewer|Writer) · /);
+    await expect(busiest).toHaveAttribute("aria-pressed", "true");
+    expect(new URL(page.url()).searchParams.get("day")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    await dayPanel.locator(".olympus-work-row").first().getByRole("button", { name: "Inspect run" }).click();
+    await expect(page.getByRole("complementary", { name: "Run detail" }).locator("h2")).toBeVisible();
+    await page.getByRole("complementary", { name: "Run detail" }).getByRole("button", { name: /^← Back to / }).click();
+    await expect(dayPanel).toBeVisible();
+    await busiest.click();
+    await expect(dayPanel).toHaveCount(0);
+    expect(new URL(page.url()).searchParams.get("day")).toBeNull();
+
+    // From an agent's panel, its chart opens that agent's day, and Back returns to the agent.
+    await perf.locator('tr[data-agent="profile:coder"]').click();
+    const coderBar = panel.locator("button.olympus-token-day").filter({ hasNot: page.locator('[aria-label*=": 0 runs"]') }).first();
+    await coderBar.click();
+    const coderDay = page.getByRole("complementary", { name: /^Runs on / });
+    await expect(coderDay.locator(".olympus-inspector-title p")).toHaveText("Coder");
+    await expect(coderDay.locator(".olympus-work-row").first()).toBeVisible();
+    await expect(coderDay.locator(".olympus-work-row small").first()).not.toContainText("Coder ·");
+    await coderDay.getByRole("button", { name: "Close the day" }).click(); // "Back to Coder" is the 390 px control
+    await expect(panel).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(panel).toHaveCount(0);
+
     await perf.getByRole("button", { name: "30 days" }).click();
     await expect(perf.getByRole("button", { name: "30 days" })).toHaveAttribute("aria-pressed", "true");
     expect(new URL(page.url()).searchParams.get("days")).toBe("30");

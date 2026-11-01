@@ -234,6 +234,30 @@ class PerformanceTest(unittest.TestCase):
         self.assertEqual((runs["cron-all"], runs["cron-some"], runs["cli-all"]), ("failed", "succeeded", "succeeded"))
         self.assertIn("every tool call", plugin_api.performance(7)["basis"])
 
+    def test_the_runs_of_one_day_behind_a_bar(self):
+        # cut-1 started exactly two days ago, alone on its UTC day; bad-1 one
+        # day ago. Subagents, rolled-over sessions and other days stay out.
+        two_days_ago = datetime.fromtimestamp(self.now - 2 * 86400, tz=timezone.utc).date().isoformat()
+        day = plugin_api.performance_day(two_days_ago)
+        self.assertEqual(day["day"], two_days_ago)
+        self.assertEqual([r["ref"] for r in day["runs"]], ["cut-1"])
+        self.assertEqual(day["runs"][0]["outcome"], "cut_off")
+        self.assertEqual(day["runs"][0]["agent"]["label"], plugin_api.performance(7)["agents"][0]["label"])
+        self.assertEqual({k: day["summary"][k] for k in ("runs", "cut_off", "success_rate", "cost_usd")},
+                         {"runs": 1, "cut_off": 1, "success_rate": 0.0, "cost_usd": 0.08})
+        self.assertEqual(day["total"], 1)
+
+        yesterday = datetime.fromtimestamp(self.now - 86400, tz=timezone.utc).date().isoformat()
+        refs = {r["ref"] for r in plugin_api.performance_day(yesterday)["runs"]}
+        self.assertIn("bad-1", refs)
+        self.assertTrue(refs.isdisjoint({"cut-1", "old-1", "sub-1", "rot-1"}))
+
+        agent_id = plugin_api.performance(7)["agents"][0]["id"]
+        self.assertEqual([r["ref"] for r in plugin_api.performance_day(two_days_ago, agent=agent_id)["runs"]], ["cut-1"])
+        self.assertEqual(plugin_api.performance_day(two_days_ago, agent="profile:nobody")["runs"], [])
+        self.assertEqual(plugin_api.performance_day("yesterday"), {"error": "day must be a date like 2026-10-31"})
+        self.assertEqual(plugin_api.performance_day("2026-10-31T10:00"), {"error": "day must be a date like 2026-10-31"})
+
     def test_thirty_days_include_last_month_and_bad_ranges_are_refused(self):
         self.assertEqual(plugin_api.performance(30)["agents"][0]["runs"], 6)
         self.assertEqual(plugin_api.performance(14), {"error": "days must be one of 7, 30"})

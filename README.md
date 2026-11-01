@@ -57,8 +57,10 @@ problems it targets, and the Hermes issues that show people have them, are in
   run time, tool calls that failed, and cost, per agent and across all of them,
   each compared with the same number of days before ("96% of 25, was 100% the
   7 days before", "7% faster than before") beside a success-rate-per-day line.
-  Outcomes follow Hermes' own session status, except that a scheduled run in
-  which every tool call failed counts as failed. Any run opens step by step.
+  The runs-per-day chart has a value axis, every bar tells its numbers on
+  hover, and a click on a bar lists the runs of that day. Outcomes follow
+  Hermes' own session status, except that a scheduled run in which every tool
+  call failed counts as failed. Any run opens step by step.
 - **Checks.** Findings across your agents, Kanban backlog grouped by who has to
   act, skill hygiene, configuration risks, and where spend goes.
 

@@ -97,8 +97,15 @@ the inspector sitting beside the roster.
 - **Inspector:** side panel with title row, setup line and controls; Needs
   you, Now (timeline), Scheduled, Kanban, How it's working; a footer of tokens
   per day, Kanban worker success and your fixes.
-- **Performance:** a fleet line, runs per day by outcome, one row per agent
-  (worst success first), and a run view that lists every step.
+- **Performance:** a fleet line with its comparison to the window before,
+  runs per day by outcome, one row per agent (worst success first), a day
+  panel listing the runs behind a clicked bar, and a run view that lists
+  every step.
+- **Day chart:** stacked bars per UTC day on a value axis of two to four
+  hairlines at round values; the day labels under the bars; the bar's numbers
+  in a small card on hover or focus, pinned to the chart's edge for the outer
+  bars. When the bars are buttons the picked one gets the focus outline.
+  The same component draws tokens, runs, run time and cost.
 - **Confirmation popover:** anchored to the button, states the exact effect,
   Confirm and Cancel. Never a modal.
 - **Pop out:** the roster in a 340 px window that stays on top (Document

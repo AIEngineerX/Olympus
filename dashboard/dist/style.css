@@ -1204,39 +1204,129 @@
   background: var(--color-primary);
 }
 
+/* The plot: a value axis on the left, the bars with their hairlines, the day
+   labels under them. Every bar reads from the axis or from its label on hover. */
+.olympus-chart-plot {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+}
+
+.olympus-chart-axis {
+  position: relative;
+  min-width: 2.5em;
+  color: var(--olympus-muted);
+  font-size: 11px;
+  text-align: right;
+}
+
+.olympus-chart-axis span {
+  position: absolute;
+  right: 0;
+  transform: translateY(50%);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* The longest tick, in flow but unseen, gives the axis column its width. */
+.olympus-chart-axis .olympus-chart-axis-size {
+  position: static;
+  display: block;
+  height: 0;
+  overflow: hidden;
+  transform: none;
+}
+
 .olympus-token-bars {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 6px;
-  height: 112px;
-  padding-bottom: 2px;
+  height: 96px;
   border-bottom: 1px solid var(--olympus-hairline);
 }
 
-.olympus-token-day {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: 4px;
-  min-width: 0;
+.olympus-chart-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
-.olympus-token-day small {
+.olympus-chart-grid i {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--olympus-hairline);
+}
+
+.olympus-chart-days {
+  display: grid;
+  grid-column: 2;
+  gap: 6px;
+}
+
+/* A month's labels sit on every fifth day and spill over the empty cells beside them. */
+.olympus-chart-days small {
+  min-width: 0;
   color: var(--olympus-muted);
   font-size: 11px;
   text-align: center;
+  white-space: nowrap;
+}
+
+.olympus-token-day {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+}
+
+button.olympus-token-day {
+  cursor: pointer;
 }
 
 .olympus-token-stack {
   display: flex;
   flex-direction: column-reverse;
-  align-self: end;
   min-height: 0;
   overflow: hidden;
   border-radius: 2px 2px 0 0;
 }
 
+.olympus-token-day-picked .olympus-token-stack {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
 .olympus-token-stack span {
   min-height: 0;
+}
+
+/* The hovered or focused bar's values, over the plot (placed inline: near
+   the bar, or pinned to the edge for the outer bars). */
+.olympus-chart-value {
+  position: absolute;
+  top: 0;
+  z-index: 1;
+  width: max-content;
+  max-width: 220px;
+  padding: 3px 6px;
+  border: 1px solid var(--olympus-hairline);
+  border-radius: var(--olympus-radius-sm);
+  background: var(--color-card);
+  color: var(--olympus-fg);
+  font-size: 12px;
+  line-height: 1.3;
+  pointer-events: none;
 }
 
 .olympus-chart-scale {

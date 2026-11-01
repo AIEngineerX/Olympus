@@ -38,6 +38,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   change. The popout gets a List / Floor switch (`?mode=floor`). Joins the
   roster's poll with the Live view's; the live poll is now one hook shared by
   Live, Floor and the popout. A bet with no issue behind it, like Pop out.
+- Performance charts read without a hover and lead to the runs behind them:
+  every per-day chart has a value axis with two to four hairlines on round
+  values (whole minutes for run time), each bar shows its day's numbers on
+  hover or keyboard focus, and a click on a bar of a runs-per-day chart opens
+  that day's runs, for the fleet or for the agent whose panel it is in
+  (`?day=YYYY-MM-DD`; new endpoint `GET /api/plugins/olympus/performance/day`
+  with the same public run shape as the panel lists). The fleet line now says
+  how the window compares with the one before it ("96% succeeded, was 99% the
+  7 days before", "7% faster than before"), as the per-agent rows already
+  did. The Agents inspector's tokens chart is the same chart.
   A bet: no Hermes user has asked for it (#58725 has no reactions); it
   follows what people have adopted for other agent tools, an always-visible
   view of every agent keyed to real activity.

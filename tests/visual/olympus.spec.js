@@ -200,6 +200,17 @@ for (const size of [DESKTOP, MOBILE]) {
     await expect(page.getByRole("complementary", { name: "Run detail" }).locator(".olympus-step")).toHaveCount(27);
     await page.screenshot({ path: testInfo.outputPath(`olympus-run-${size.width}.png`) });
     expectClean(await collectVisualMetrics(page, size === MOBILE ? 32 : 24), messages, { name: "run" });
+
+    // A day's runs, opened from the fleet chart: the axis, the bars and the panel all fit.
+    await page.goto(fixtureUrl({ state: "noisy", view: "performance" }));
+    const chart = page.locator(".olympus-token-chart").first();
+    await expect(chart.locator(".olympus-chart-axis span:not(.olympus-chart-axis-size)").first()).toBeVisible();
+    await chart.locator("button.olympus-token-day").last().hover();
+    await expect(chart.locator(".olympus-chart-value")).toBeVisible();
+    await chart.locator('button.olympus-token-day:not([aria-label*=": 0 runs"])').first().click();
+    await expect(page.getByRole("complementary", { name: /^Runs on / }).locator(".olympus-work-row").first()).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`olympus-day-${size.width}.png`) });
+    expectClean(await collectVisualMetrics(page, size === MOBILE ? 32 : 24), messages, { name: "day" });
   });
 }
 

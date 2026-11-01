@@ -264,38 +264,12 @@
     { key: "output_tokens", label: "Output", className: "olympus-series-output" }
   ];
 
-  function dayName(day) {
-    const ts = Date.parse(day + "T12:00:00Z");
-    return Number.isFinite(ts) ? new Date(ts).toLocaleDateString([], { weekday: "short", timeZone: "UTC" }) : day;
-  }
-
   // Stacked bars: tokens per UTC day, input / cache / output.
   function TokenChart({ days }) {
-    const rows = asList(days);
-    const totals = rows.map((day) => TOKEN_SERIES.reduce((sum, series) => sum + Number(day[series.key] || 0), 0));
-    const max = Math.max(...totals, 0);
-    const summary = rows.map((day, idx) => dayName(day.day) + " " + formatTokens(totals[idx])).join(", ");
-    return el("figure", { className: "olympus-token-chart" },
-      el("figcaption", null,
-        el("span", null, "Tokens per day"),
-        el("span", { className: "olympus-legend" },
-          TOKEN_SERIES.map((series) => el("span", { key: series.key }, el("i", { className: series.className, "aria-hidden": "true" }), series.label))
-        )
-      ),
-      max ? el("div", { className: "olympus-token-bars", role: "img", "aria-label": "Tokens per day, last 7 days: " + summary },
-        rows.map((day, idx) => el("div", { key: day.day, className: "olympus-token-day", title: dayName(day.day) + ": " + formatCount(totals[idx]) + " tokens" },
-          el("div", { className: "olympus-token-stack", style: { height: Math.round((totals[idx] / max) * 100) + "%" } },
-            TOKEN_SERIES.map((series) => totals[idx] ? el("span", {
-              key: series.key,
-              className: series.className,
-              style: { flexGrow: Number(day[series.key] || 0) }
-            }) : null)
-          ),
-          el("small", null, dayName(day.day))
-        ))
-      ) : el("p", { className: "olympus-muted" }, "No tokens recorded in the last 7 days."),
-      max ? el("small", { className: "olympus-chart-scale" }, "Peak " + formatTokens(max) + " tokens") : null
-    );
+    return el(DayBars, {
+      rows: days, series: TOKEN_SERIES, caption: "Tokens per day", format: formatTokens, peakUnit: "tokens", whole: true,
+      empty: "No tokens recorded in the last 7 days."
+    });
   }
 
   // ---------------------------------------------------------------------
@@ -971,11 +945,54 @@
     return idx % 5 === 0 || idx === count - 1 ? new Date(ts).toLocaleDateString([], { month: "short", day: "numeric", timeZone: "UTC" }) : "";
   }
 
-  // Bars per UTC day; several series stack, one series is a plain bar.
-  function DayBars({ rows, series, caption, format, peakUnit }) {
+  // The full date for a bar's hover text and the day panel ("Wed, Oct 29").
+  function dayTitle(day) {
+    const ts = Date.parse(day + "T12:00:00Z");
+    return Number.isFinite(ts) ? new Date(ts).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }) : day;
+  }
+
+  // Value-axis ticks under the peak: multiples of 1, 2 or 5 times a power of
+  // ten, the largest step that still gives two lines (four at most); counts
+  // get whole numbers only.
+  function axisTicks(max, whole) {
+    if (!(max > 0)) return [];
+    const power = Math.pow(10, Math.floor(Math.log10(max)));
+    const steps = [5, 2, 1, 0.5, 0.2].map((n) => n * power).filter((step) => !whole || Number.isInteger(step));
+    const step = steps.find((candidate) => max / candidate >= 2) || steps[steps.length - 1];
+    if (!step) return [max];
+    const ticks = [];
+    for (let value = step; value <= max * 1.000001 && ticks.length < 4; value += step) ticks.push(Number(value.toFixed(6)));
+    return ticks;
+  }
+
+  // Bars per UTC day; several series stack, one series is a plain bar. The
+  // value axis and a label on hover or focus make every bar readable; with
+  // onPick each bar is a button that opens that day's runs.
+  function DayBars({ rows, series, caption, format, peakUnit, whole, tickUnit, empty, onPick, picked }) {
     const list = asList(rows);
     const totals = list.map((row) => series.reduce((sum, item) => sum + Number(row[item.key] || 0), 0));
     const max = Math.max(...totals, 0);
+    // Ticks fall on round values of the unit read (whole minutes for seconds).
+    const ticks = axisTicks(max / (tickUnit || 1), whole).map((value) => value * (tickUnit || 1));
+    const unit = peakUnit ? " " + peakUnit : "";
+    const columns = { gridTemplateColumns: "repeat(" + list.length + ", minmax(0, 1fr))" };
+    const pct = (value) => (value / max) * 100 + "%";
+    // One label for the hovered or focused bar, placed over the plot: near
+    // its bar in the middle, pinned to the edge for the outer quarter.
+    const [shown, setShown] = useState(null);
+    function detail(row, idx) {
+      const parts = series.length > 1
+        ? series.filter((item) => Number(row[item.key] || 0) > 0).map((item) => format(row[item.key]) + " " + item.label.toLowerCase())
+        : [];
+      return dayTitle(row.day) + ": " + format(totals[idx]) + unit + (parts.length ? " (" + parts.join(", ") + ")" : "");
+    }
+    function labelPlace(idx) {
+      const centre = (idx + 0.5) / list.length;
+      if (centre < 0.25) return { left: 0 };
+      if (centre > 0.75) return { right: 0 };
+      return { left: centre * 100 + "%", transform: "translateX(-50%)" };
+    }
+    const longest = ticks.map(format).reduce((a, b) => (b.length > a.length ? b : a), "");
     const summary = list.map((row, idx) => row.day + " " + format(totals[idx])).join(", ");
     return el("figure", { className: "olympus-token-chart" },
       el("figcaption", null,
@@ -984,15 +1001,39 @@
           series.map((item) => el("span", { key: item.key }, el("i", { className: item.className, "aria-hidden": "true" }), item.label))
         ) : null
       ),
-      max ? el("div", { className: "olympus-token-bars", style: { gridTemplateColumns: "repeat(" + list.length + ", minmax(0, 1fr))" }, role: "img", "aria-label": caption + ": " + summary },
-        list.map((row, idx) => el("div", { key: row.day, className: "olympus-token-day", title: row.day + ": " + format(totals[idx]) },
-          el("div", { className: "olympus-token-stack", style: { height: Math.round((totals[idx] / max) * 100) + "%" } },
-            series.map((item) => totals[idx] ? el("span", { key: item.key, className: item.className, style: { flexGrow: Number(row[item.key] || 0) } }) : null)
+      max ? el("div", { className: "olympus-chart-plot" },
+        el("div", { className: "olympus-chart-axis", "aria-hidden": "true" },
+          el("span", { className: "olympus-chart-axis-size" }, longest),
+          ticks.map((value) => el("span", { key: value, style: { bottom: pct(value) } }, format(value)))
+        ),
+        el("div", { className: "olympus-token-bars", style: columns, role: onPick ? "group" : "img", "aria-label": caption + ": " + summary },
+          el("div", { className: "olympus-chart-grid", "aria-hidden": "true" },
+            ticks.map((value) => el("i", { key: value, style: { bottom: pct(value) } }))
           ),
-          el("small", null, dayLabel(row.day, idx, list.length))
-        ))
-      ) : el("p", { className: "olympus-muted" }, "Nothing recorded in this range."),
-      max ? el("small", { className: "olympus-chart-scale" }, "Peak " + format(max) + (peakUnit ? " " + peakUnit : "")) : null
+          list.map((row, idx) => el(onPick ? "button" : "div", {
+            key: row.day,
+            type: onPick ? "button" : undefined,
+            className: cx("olympus-token-day", picked === row.day && "olympus-token-day-picked"),
+            "data-day": row.day,
+            "aria-label": onPick ? detail(row, idx) + ". Show these runs" : undefined,
+            "aria-pressed": onPick ? (picked === row.day ? "true" : "false") : undefined,
+            onClick: onPick ? () => onPick(row.day) : undefined,
+            onMouseEnter: () => setShown(idx),
+            onMouseLeave: () => setShown((current) => (current === idx ? null : current)),
+            onFocus: () => setShown(idx),
+            onBlur: () => setShown((current) => (current === idx ? null : current))
+          },
+            el("span", { className: "olympus-token-stack", style: { height: pct(totals[idx]) } },
+              series.map((item) => totals[idx] ? el("span", { key: item.key, className: item.className, style: { flexGrow: Number(row[item.key] || 0) } }) : null)
+            )
+          )),
+          shown != null && list[shown] ? el("span", { className: "olympus-chart-value", "aria-hidden": "true", style: labelPlace(shown) }, detail(list[shown], shown)) : null
+        ),
+        el("div", { className: "olympus-chart-days", style: columns, "aria-hidden": "true" },
+          list.map((row, idx) => el("small", { key: row.day }, dayLabel(row.day, idx, list.length)))
+        )
+      ) : el("p", { className: "olympus-muted" }, empty || "Nothing recorded in this range."),
+      max ? el("small", { className: "olympus-chart-scale" }, "Peak " + format(max) + unit) : null
     );
   }
 
@@ -1124,7 +1165,7 @@
     );
   }
 
-  function RunList({ title, runs, onInspect, now }) {
+  function RunList({ title, runs, onInspect, now, showAgent }) {
     const list = asList(runs);
     if (!list.length) return null;
     return el(InspectorSection, { title },
@@ -1132,6 +1173,7 @@
         el("div", null,
           el("strong", null, run.label),
           el("small", { className: run.outcome === "failed" ? "olympus-error-text" : run.outcome === "cut_off" ? "olympus-attention-text" : null }, [
+            showAgent && run.agent ? run.agent.label : null,
             OUTCOME_TEXT[run.outcome],
             run.duration_seconds != null ? formatDuration(run.duration_seconds) : null,
             plural(run.tool_calls, "tool call"),
@@ -1145,7 +1187,7 @@
     );
   }
 
-  function PerformancePanel({ row, days, ctx, onClose, onInspect }) {
+  function PerformancePanel({ row, days, ctx, onClose, onInspect, onDay }) {
     const panel = useRef(null);
     useEffect(() => { if (panel.current) panel.current.focus({ preventScroll: true }); }, [row.id]);
     const tools = asList(row.tools);
@@ -1176,9 +1218,9 @@
           row.trend && row.trend.median_change != null && Math.abs(row.trend.median_change) >= 0.05 ? el("small", { className: row.trend.median_change >= SLOWER_SHARE ? "olympus-attention-text" : null }, speedText(row.trend.median_change)) : null)),
         el("div", null, el("dt", null, "Cost"), el("dd", null, formatMoney(row.cost_usd)))
       ),
-      el(DayBars, { rows: row.daily, series: OUTCOME_SERIES, caption: "Runs per day", format: (n) => formatCount(n), peakUnit: "runs" }),
-      el(DayBars, { rows: row.daily, series: [{ key: "median_seconds", label: "Typical run", className: "olympus-series-input" }], caption: "Typical run time per day", format: (n) => formatDuration(n) }),
-      el(DayBars, { rows: row.daily, series: [{ key: "cost_usd", label: "Cost", className: "olympus-series-input" }], caption: "Cost per day", format: (n) => formatMoney(n) }),
+      el(DayBars, { rows: row.daily, series: OUTCOME_SERIES, caption: "Runs per day", format: formatCount, peakUnit: "runs", whole: true, onPick: onDay }),
+      el(DayBars, { rows: row.daily, series: [{ key: "median_seconds", label: "Typical run", className: "olympus-series-input" }], caption: "Typical run time per day", format: formatDuration, tickUnit: 60 }),
+      el(DayBars, { rows: row.daily, series: [{ key: "cost_usd", label: "Cost", className: "olympus-series-input" }], caption: "Cost per day", format: formatMoney }),
       tools.length ? el(InspectorSection, { title: "Tools" },
         el("table", { className: "olympus-table" },
           el("caption", { className: "olympus-sr-only" }, "Tool calls and failures"),
@@ -1193,6 +1235,59 @@
       ) : null,
       el(RunList, { title: "Failed or cut off", runs: row.failed_runs, onInspect, now: ctx.now }),
       el(RunList, { title: "Slowest runs", runs: row.slowest, onInspect, now: ctx.now })
+    );
+  }
+
+  // The runs behind one bar of a runs-per-day chart: the fleet's, or one
+  // agent's when its panel's chart was clicked.
+  function DayPanel({ day, agent, ctx, onClose, onInspect }) {
+    const [report, setReport] = useState(null);
+    const [error, setError] = useState(null);
+    const panel = useRef(null);
+    const agentId = agent ? agent.id : null;
+    useEffect(() => {
+      let live = true;
+      setReport(null);
+      setError(null);
+      SDK.fetchJSON(API + "/performance/day?day=" + encodeURIComponent(day) + (agentId ? "&agent=" + encodeURIComponent(agentId) : ""))
+        .then((next) => { if (live) { if (next.error) setError(next.error); else setReport(next); } })
+        .catch((err) => { if (live) setError(toErrorMessage(err)); });
+      if (panel.current) panel.current.focus({ preventScroll: true });
+      return () => { live = false; };
+    }, [day, agentId]);
+    const summary = report && report.summary;
+    return el("aside", {
+      ref: panel,
+      tabIndex: -1,
+      className: "olympus-inspector",
+      "aria-label": "Runs on " + dayTitle(day),
+      onKeyDown: (event) => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } }
+    },
+      el("div", { className: "olympus-inspector-head" },
+        el("button", { type: "button", className: "olympus-back", onClick: onClose }, agent ? "Back to " + agent.label : "Back to performance"),
+        agent ? el(Avatar, { agent, size: "large" }) : null,
+        el("div", { className: "olympus-inspector-title" },
+          el("h2", null, dayTitle(day)),
+          el("p", null, agent ? agent.label : "All agents")
+        ),
+        el("div", { className: "olympus-inspector-controls" },
+          el("button", { type: "button", className: "olympus-close", "aria-label": "Close the day", onClick: onClose }, "×")
+        )
+      ),
+      error ? el("p", { className: "olympus-error-text", role: "alert" }, "Could not read the day: " + error) : null,
+      !report && !error ? el(RosterSkeleton) : null,
+      summary ? el("p", { className: "olympus-census" }, [
+        plural(summary.runs, "run"),
+        summary.succeeded ? summary.succeeded + " succeeded" : null,
+        summary.failed ? summary.failed + " failed" : null,
+        summary.cut_off ? summary.cut_off + " cut off" : null,
+        summary.median_seconds == null ? null : "typical run " + formatDuration(summary.median_seconds),
+        formatMoney(summary.cost_usd)
+      ].filter(Boolean).join(" · ")) : null,
+      report ? (report.runs.length
+        ? el(RunList, { title: "Runs", runs: report.runs, onInspect, now: ctx.now, showAgent: !agent })
+        : el("p", { className: "olympus-muted" }, "No runs started that day.")) : null,
+      report && report.total > report.runs.length ? el("small", { className: "olympus-muted" }, "Showing the newest " + report.runs.length + " of " + report.total + " runs.") : null
     );
   }
 
@@ -1255,7 +1350,24 @@
     );
   }
 
-  function PerformanceView({ ctx, days, onDays, selected, onSelect, runRef, onRun }) {
+  // The fleet line, with how this window compares to the one before it.
+  function fleetCensus(fleet, days) {
+    const trend = fleet.trend || {};
+    const before = beforeText(fleet, days);
+    const speed = trend.median_change != null && Math.abs(trend.median_change) >= 0.05 ? speedText(trend.median_change) : null;
+    const parts = [
+      plural(fleet.runs, "run"),
+      fleet.success_rate == null ? null : el("span", { key: "ok" }, percent(fleet.success_rate) + " succeeded",
+        before ? el("span", { className: trend.success_rate_points <= WORSE_POINTS ? "olympus-attention-text" : "olympus-muted" }, ", " + before.charAt(0).toLowerCase() + before.slice(1)) : null),
+      fleet.median_seconds == null ? null : el("span", { key: "time" }, "typical run " + formatDuration(fleet.median_seconds) + " (slow " + formatDuration(fleet.p90_seconds) + ")",
+        speed ? el("span", { className: trend.median_change >= SLOWER_SHARE ? "olympus-attention-text" : "olympus-muted" }, ", " + speed) : null),
+      fleet.tool_error_rate == null ? null : percent(fleet.tool_error_rate) + " of tool calls failed",
+      formatMoney(fleet.cost_usd)
+    ].filter(Boolean);
+    return parts.flatMap((part, idx) => idx ? [" · ", part] : [part]);
+  }
+
+  function PerformanceView({ ctx, days, onDays, selected, onSelect, runRef, onRun, day, onDay }) {
     const [report, setReport] = useState(null);
     const [error, setError] = useState(null);
     const [sort, setSort] = useState("success");
@@ -1285,24 +1397,22 @@
             onClick: () => onDays(n)
           }, n + " days"))
         ),
-        fleet ? el("p", { className: "olympus-census" }, [
-          plural(fleet.runs, "run"),
-          fleet.success_rate == null ? null : percent(fleet.success_rate) + " succeeded",
-          fleet.median_seconds == null ? null : "typical run " + formatDuration(fleet.median_seconds) + " (slow " + formatDuration(fleet.p90_seconds) + ")",
-          fleet.tool_error_rate == null ? null : percent(fleet.tool_error_rate) + " of tool calls failed",
-          formatMoney(fleet.cost_usd)
-        ].filter(Boolean).join(" · ")) : null
+        fleet ? el("p", { className: "olympus-census" }, fleetCensus(fleet, days)) : null
       ),
       error ? el("p", { className: "olympus-error-text", role: "alert" }, "Could not read performance: " + error) : null,
       !report && !error ? el(RosterSkeleton) : null,
-      fleet ? el(DayBars, { rows: fleet.daily, series: OUTCOME_SERIES, caption: "Runs per day, all agents", format: (n) => formatCount(n), peakUnit: "runs" }) : null,
-      report ? el("div", { className: cx("olympus-workspace", (row || runRef) && "olympus-workspace-split") },
+      fleet ? el(DayBars, {
+        rows: fleet.daily, series: OUTCOME_SERIES, caption: "Runs per day, all agents", format: formatCount, peakUnit: "runs", whole: true,
+        onPick: (picked) => onDay(picked, null), picked: row ? null : day
+      }) : null,
+      report ? el("div", { className: cx("olympus-workspace", (row || runRef || day) && "olympus-workspace-split") },
         el("div", { className: "olympus-roster-wrap" },
           el(PerformanceTable, { agents: report.agents, selected, onSelect, sort, onSort: setSort, days }),
           el("small", { className: "olympus-muted olympus-perf-basis" }, report.basis)
         ),
         runRef ? el(RunView, { runRef, onBack: () => onRun(null) })
-          : row ? el(PerformancePanel, { row, days, ctx, onClose: () => onSelect(null), onInspect: onRun }) : null
+          : day ? el(DayPanel, { day, agent: row, ctx, onClose: () => onDay(null, row ? row.id : null), onInspect: onRun })
+          : row ? el(PerformancePanel, { row, days, ctx, onClose: () => onSelect(null), onInspect: onRun, onDay: (picked) => onDay(picked, row.id) }) : null
       ) : null
     );
   }
@@ -2406,6 +2516,7 @@
     const [popoutOpen, setPopoutOpen] = useState(false);
     const [days, setDays] = useState(readParam("days") === "30" ? 30 : 7);
     const [runRef, setRunRef] = useState(readParam("run"));
+    const [day, setDay] = useState(readParam("day"));
     const [selected, setSelected] = useState(readParam("agent"));
     const [detail, setDetail] = useState(null);
     const [detailError, setDetailError] = useState(null);
@@ -2513,6 +2624,23 @@
       selectedRef.current = agentId;
       setSelected(agentId);
       writeParam("agent", agentId);
+      setDay(null);
+      writeParam("day", null);
+      showRun(null);
+    }
+
+    // A bar of a runs-per-day chart opens that day's runs: the fleet's (which
+    // drops the agent selection) or the selected agent's. The same bar again
+    // closes them.
+    function pickDay(next, agentId) {
+      const value = next === day ? null : next;
+      setDay(value);
+      writeParam("day", value);
+      if (value && !agentId && selectedRef.current) {
+        selectedRef.current = null;
+        setSelected(null);
+        writeParam("agent", null);
+      }
       showRun(null);
     }
 
@@ -2527,6 +2655,8 @@
       setSelected(null);
       setDetail(null);
       writeParam("agent", null);
+      setDay(null);
+      writeParam("day", null);
       showRun(null);
       window.requestAnimationFrame(() => {
         const row = back && document.querySelector('tr[data-agent="' + CSS.escape(back) + '"]');
@@ -2650,7 +2780,7 @@
     else if (view === "live") body = el(LiveView, { ctx, poll: livePoll });
     else if (view === "floor") body = el(FloorView, { ctx, data, live: livePoll });
     else if (view === "glance") body = el(GlanceView, { data, now, onOpen: openFromGlance, glance, onOpenRun: openRunFromGlance });
-    else if (view === "performance") body = el(PerformanceView, { ctx, days, onDays: changeDays, selected, onSelect: selectPerformance, runRef, onRun: showRun });
+    else if (view === "performance") body = el(PerformanceView, { ctx, days, onDays: changeDays, selected, onSelect: selectPerformance, runRef, onRun: showRun, day, onDay: pickDay });
     else body = el(React.Fragment, null,
       el(NeedsYouBanner, { queue: data.needs_you, ctx }),
       el("div", { className: cx("olympus-workspace", open && "olympus-workspace-split") },

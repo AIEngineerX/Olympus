@@ -305,12 +305,23 @@ def scan(home: Path) -> dict:
     plugin_api.refresh_expose_local_labels()
     overview = plugin_api.overview_payload(plugin_api.scan_hermes())
     performance = {str(days): plugin_api.performance(days) for days in plugin_api.PERFORMANCE_DAYS}
+    # The runs behind every bar of the month's chart; run details only for
+    # the week's, to keep the fixture small.
+    performance_days = {
+        day["day"]: plugin_api.performance_day(day["day"])
+        for day in performance["30"]["fleet"]["daily"] if day["runs"]
+    }
+    week = {day["day"] for day in performance["7"]["fleet"]["daily"]}
     live = plugin_api.live()
     refs = {
         run["ref"]
         for report in performance.values()
         for agent in report["agents"]
         for run in agent["failed_runs"] + agent["slowest"]
+    } | {
+        run["ref"]
+        for day, report in performance_days.items() if day in week
+        for run in report["runs"]
     } | {
         session["ref"]
         for lane in live["lanes"]
@@ -324,6 +335,7 @@ def scan(home: Path) -> dict:
         "needs_you": overview["needs_you"],
         "details": {row["id"]: plugin_api.agent(row["id"]) for row in overview["agents"]["agents"]},
         "performance": performance,
+        "performance_days": performance_days,
         "runs": {ref: plugin_api.run_detail(ref) for ref in sorted(refs)},
         "live": live,
     }

@@ -252,6 +252,16 @@
         if (path === "/api/plugins/olympus/performance") {
           return agentData.performance[query(url).get("days")] || { error: "days must be one of 7, 30" };
         }
+        if (path === "/api/plugins/olympus/performance/day") {
+          // The generated data holds every day's runs for the fleet; one
+          // agent's day is the same list narrowed, as the backend would.
+          const dayRuns = agentData.performance_days[query(url).get("day")];
+          const agent = query(url).get("agent");
+          if (!dayRuns) return { error: "day must be a date like 2026-10-31" };
+          if (!agent) return dayRuns;
+          const runs = dayRuns.runs.filter((run) => run.agent.id === agent);
+          return Object.assign({}, dayRuns, { agent, runs, total: runs.length, summary: Object.assign({}, dayRuns.summary, { runs: runs.length }) });
+        }
         if (path === "/api/plugins/olympus/run") {
           return agentData.runs[query(url).get("ref")] || { found: false };
         }
